@@ -304,5 +304,4 @@ A practical way to use this repository is:
 
 ## License
 
-No license file is included in this repository at the moment.
-Add your preferred license before publishing if needed.
+This project is licensed under the MIT License. See the LICENSE file for details.
