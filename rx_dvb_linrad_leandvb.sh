@@ -1,0 +1,150 @@
+#!/bin/bash
+
+PROFILE=1
+PROFILETEXT1="DVB-S 125k fec 1/2 met u8"
+PROFILETEXT2="DVB-S2 125k QPSK FEC 1/2 met u8"
+PROFILETEXT3="DVB-S 125k fec 1/2 met s16"
+PROFILETEXT4="DVB-S2 125k FEC 1/2 met s16 modcod QPSK FEC 1/2. LDPC bitflips op 100"
+PROFILETEXT5="DVB-S2 125k FEC 1/2 met s16 modcod QPSK FEC 1/4, 1/3, 2/5, 1/2, 3/5, 2/3, 3/4 LDPC bitflips op 400"
+PROFILETEXT6="DVB-S2 66k FEC 2/3 met s16 modcod QPSK FEC 2/3 LDPC bitflips op 50"
+PROFILETEXT7="Meet s16 input levels"
+PROFILETEXT8="Meet s16 input SNR voor opgegeven BW en sampelrate"
+PROFILETEXT9="Direct van Afedri"
+PROFILETEXT10="Direct van Afedri dvb"
+PROFILETEXT11="Direct van Afedri dvb"
+PROFILETEXT12="Direct van Afedri dvb"
+
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      PROFILE="$2"
+      shift 2
+      ;;
+    --info)
+      echo "usage option: --profile"
+      echo "1: " $PROFILETEXT1
+      echo "2: " $PROFILETEXT2
+      echo "3: " $PROFILETEXT3
+      echo "4: " $PROFILETEXT4
+      echo "5: " $PROFILETEXT5
+      echo "6: " $PROFILETEXT6
+      echo "7: " $PROFILETEXT7
+      echo "8: " $PROFILETEXT8
+      echo "9: " $PROFILETEXT9
+      echo "10: " $PROFILETEXT10
+      echo "11: " $PROFILETEXT11
+      echo "12: " $PROFILETEXT12
+      exit
+      ;;
+    *)
+      echo "Onbekende optie: $1"
+      echo "gebruik optie --info om het gebruik te zien"
+      exit 1
+      ;;
+  esac
+done
+
+case "$PROFILE" in
+  1|2|3|4|5|6|7|8|9|10|11|12) ;;
+  *)
+    echo "Ongeldige --profile: $PROFILE"
+    exit 1
+    ;;
+esac
+
+
+case "$PROFILE" in
+  1)
+    echo $PROFILETEXT1
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py --u8 --scale 256 \
+    | .././leansdr/src/apps/leandvb -f $SAMPLERATE --standard DVB-S --sr $SYMBOLRATE --cr 1/2 --inbuf 262144 --sampler rrc --rrc-steps 8 --fastlock --hq -v --gui  \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+  2)
+    echo $PROFILETEXT2
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py --u8 --scale 128 \
+    | .././leansdr/src/apps/leandvb -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 20 --modcods 0xFE --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+  3)
+    echo $PROFILETEXT3
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S --sr $SYMBOLRATE --cr 1/2 --inbuf 262144 --sampler rrc --rrc-steps 8 --fastlock --hq -v --gui  \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+  4)
+    echo $PROFILETEXT4
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 100 --modcods 0x10 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   5)
+    echo $PROFILETEXT5
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 400 --modcods 0xFE --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   6)
+    echo $PROFILETEXT6
+    SAMPLERATE=1010526
+    SYMBOLRATE=66000
+    ./linrad_udp_to_stdout_v2.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 --modcods 0x40 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   7)
+    echo $PROFILETEXT7
+    ./linrad_udp_to_stdout_v2.py --measure 3200000 > /dev/null
+    ;;
+   8)
+    echo $PROFILETEXT8
+    ./linrad_udp_to_stdout_v2.py \
+    | python3 ./iq_band_snr_meter.py --fs 1010526 --signal-bw 170000 --exclude-bw 300000 --raw-power --avg-blocks 256 --ref-bw 2500
+    ;;
+   9)
+    echo $PROFILETEXT9    
+    python3 afedri-udp.py \
+    | python3 iq_band_snr_meter.py --fs 1010526 --signal-bw 170000 --exclude-bw 300000 --raw-power --avg-blocks 256 --ref-bw 2500
+    ;;
+   10)
+    echo $PROFILETEXT10
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000    
+    python3 afedri-udp.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 100 --modcods 0xFE --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   11)
+    echo $PROFILETEXT11
+    SAMPLERATE=249351
+    SYMBOLRATE=125000    
+    python3 afedri-udp.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 100 --modcods 0xFE --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   12)
+    echo $PROFILETEXT12
+    SAMPLERATE=249351
+    SYMBOLRATE=125000    
+    python3 afedri-udp.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 100 --modcods 0xFE --framesizes 1 \
+    | tee >(cvlc - --avcodec-hw=none --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3) \
+    | tsp -I file - -P analyze --interval 5 -O drop \
+    | python3 tsp_monitor.py
+    ;;    
+  *)
+    echo "default"
+    ;;
+esac
+
