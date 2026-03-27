@@ -13,6 +13,10 @@ PROFILETEXT9="Direct van Afedri"
 PROFILETEXT10="Direct van Afedri dvb"
 PROFILETEXT11="Direct van Afedri dvb"
 PROFILETEXT12="Direct van Afedri dvb"
+PROFILETEXT13="RTL_SDR DVB-S2 SR 125k"
+PROFILETEXT14="HackRF 436 DVB-S2 SR 125k"
+PROFILETEXT14="HackRF 437 DVB-S2 SR 333k"
+PROFILETEXT16="HackRF PI6EHV DVB-S2 8PSK SR 5M FEC 3/4 - WERKT NIET!!"
 
 
 while [[ $# -gt 0 ]]; do
@@ -35,6 +39,10 @@ while [[ $# -gt 0 ]]; do
       echo "10: " $PROFILETEXT10
       echo "11: " $PROFILETEXT11
       echo "12: " $PROFILETEXT12
+      echo "13: " $PROFILETEXT13
+      echo "14: " $PROFILETEXT14
+      echo "15: " $PROFILETEXT15
+      echo "16: " $PROFILETEXT16
       exit
       ;;
     *)
@@ -46,7 +54,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  1|2|3|4|5|6|7|8|9|10|11|12) ;;
+  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16) ;;
   *)
     echo "Ongeldige --profile: $PROFILE"
     exit 1
@@ -142,7 +150,52 @@ case "$PROFILE" in
     | tee >(cvlc - --avcodec-hw=none --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3) \
     | tsp -I file - -P analyze --interval 5 -O drop \
     | python3 tsp_monitor.py
-    ;;    
+    ;;
+   13)
+    echo "$PROFILETEXT13"
+    FREQ=436000000
+    SAMPLERATE=2400000
+    SYMBOLRATE=125000
+    rtl_sdr -f $FREQ -s $SAMPLERATE -g 20 - \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;  
+   14)
+    echo $PROFILETEXT14
+    FREQ=436000000
+    SAMPLERATE=2400000
+    SYMBOLRATE=125000
+    FREQSHIFT=500000
+    FREQDIAL=$((FREQ + FREQSHIFT))
+    hackrf_transfer -r - -f $FREQDIAL -s $SAMPLERATE -l 16 -g 40 \
+    | ./hackrf_s8_to_u8.py \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --tune "$((-FREQSHIFT))" --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;
+   15)
+    echo $PROFILETEXT15
+    FREQ=437000000
+    SAMPLERATE=2400000
+    SYMBOLRATE=333000
+    FREQSHIFT=500000
+    FREQDIAL=$((FREQ + FREQSHIFT))
+    hackrf_transfer -r - -f $FREQDIAL -s $SAMPLERATE -l 16 -g 40 \
+    | ./hackrf_s8_to_u8.py \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --tune "$((-FREQSHIFT))" --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;        
+   16)
+    echo $PROFILETEXT16
+    FREQ=1291000000
+    SAMPLERATE=10000000
+    SYMBOLRATE=5000000
+    FREQSHIFT=0
+    FREQDIAL=$((FREQ + FREQSHIFT))
+    hackrf_transfer -r - -f $FREQDIAL -s $SAMPLERATE -l 16 -g 40 \
+    | ./hackrf_s8_to_u8.py \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --tune "$((-FREQSHIFT))" --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 0 --modcods 16384 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;           
   *)
     echo "default"
     ;;
