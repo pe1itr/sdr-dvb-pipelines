@@ -9,16 +9,17 @@ PROFILETEXT5="DVB-S2 125k FEC 1/2 met s16 modcod QPSK FEC 1/4, 1/3, 2/5, 1/2, 3/
 PROFILETEXT6="DVB-S2 66k FEC 2/3 met s16 modcod QPSK FEC 2/3 LDPC bitflips op 50"
 PROFILETEXT7="Meet s16 input levels"
 PROFILETEXT8="Meet s16 input SNR voor opgegeven BW en sampelrate"
-PROFILETEXT9="Direct van Afedri"
-PROFILETEXT10="Direct van Afedri dvb"
-PROFILETEXT11="Direct van Afedri dvb"
-PROFILETEXT12="Direct van Afedri dvb"
+PROFILETEXT9="Direct van Afedri SNR measurement of 125 ks (170khz BW) signal"
+PROFILETEXT10="Direct van Afedri DVB-S2 125k "
+PROFILETEXT11="Direct van Afedri DVB-S2 125k (low sdr samplerate)"
+PROFILETEXT12="Direct van Afedri DVB-S2 125k (low sdr samplerate) with TS info test"
 PROFILETEXT13="RTL_SDR DVB-S2 SR 125k"
 PROFILETEXT14="HackRF 436 DVB-S2 SR 125k"
 PROFILETEXT14="HackRF 437 DVB-S2 SR 333k"
 PROFILETEXT16="HackRF PI6EHV DVB-S2 8PSK SR 5M FEC 3/4 - WERKT NIET!!"
 PROFILETEXT17="SDR-IQ 436 DVB-S2 SR 125k FEC 1/2"
 PROFILETEXT18="SDR-IQ 436 DVB-S2 SR 66k FEC 2/3"
+PROFILETEXT19="SDR-IQ 436 DVB-S2 SR 35k FEC 2/3 (very low sdr samplerate)"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
       echo "16: " $PROFILETEXT16
       echo "17: " $PROFILETEXT17
       echo "18: " $PROFILETEXT18
+      echo "19: " $PROFILETEXT19
       exit
       ;;
     *)
@@ -57,7 +59,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18) ;;
+  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19) ;;
   *)
     echo "Ongeldige --profile: $PROFILE"
     exit 1
@@ -215,8 +217,17 @@ case "$PROFILE" in
     SYMBOLRATE=66000
     ./soapy_sdriq_to_stdout_v2.py -f $FREQ -r $SAMPLERATE -g 10 --u8 --scale 128 \
     | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 10 --modcods 0x40 --framesizes 1 \
-    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
-    ;;             
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=600 --live-caching=600 --network-caching=600 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;   
+   19)
+    echo $PROFILETEXT19
+    FREQ=28000000
+    SAMPLERATE=111111
+    SYMBOLRATE=35000
+    ./soapy_sdriq_to_stdout_v2.py -f $FREQ -r $SAMPLERATE -g 10 --u8 --scale 128 \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 3 --modcods 0x40 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=1500 --live-caching=1500 --network-caching=1500 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;              
   *)
     echo "default"
     ;;
