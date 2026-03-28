@@ -17,7 +17,8 @@ PROFILETEXT13="RTL_SDR DVB-S2 SR 125k"
 PROFILETEXT14="HackRF 436 DVB-S2 SR 125k"
 PROFILETEXT14="HackRF 437 DVB-S2 SR 333k"
 PROFILETEXT16="HackRF PI6EHV DVB-S2 8PSK SR 5M FEC 3/4 - WERKT NIET!!"
-
+PROFILETEXT17="SDR-IQ 436 DVB-S2 SR 125k FEC 1/2"
+PROFILETEXT18="SDR-IQ 436 DVB-S2 SR 66k FEC 2/3"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,6 +44,8 @@ while [[ $# -gt 0 ]]; do
       echo "14: " $PROFILETEXT14
       echo "15: " $PROFILETEXT15
       echo "16: " $PROFILETEXT16
+      echo "17: " $PROFILETEXT17
+      echo "18: " $PROFILETEXT18
       exit
       ;;
     *)
@@ -54,7 +57,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16) ;;
+  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18) ;;
   *)
     echo "Ongeldige --profile: $PROFILE"
     exit 1
@@ -195,7 +198,25 @@ case "$PROFILE" in
     | ./hackrf_s8_to_u8.py \
     | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --tune "$((-FREQSHIFT))" --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 0 --modcods 16384 --framesizes 1 \
     | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
-    ;;           
+    ;;
+   17)
+    echo $PROFILETEXT17
+    FREQ=28000000
+    SAMPLERATE=196078
+    SYMBOLRATE=125000
+    ./soapy_sdriq_to_stdout_v2.py -f $FREQ -r $SAMPLERATE -g 10 --u8 --scale 128 \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 --modcods 0x10 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;; 
+   18)
+    echo $PROFILETEXT18
+    FREQ=28000000
+    SAMPLERATE=196078
+    SYMBOLRATE=66000
+    ./soapy_sdriq_to_stdout_v2.py -f $FREQ -r $SAMPLERATE -g 10 --u8 --scale 128 \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 10 --modcods 0x40 --framesizes 1 \
+    | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
+    ;;             
   *)
     echo "default"
     ;;
