@@ -430,4 +430,12 @@ python3 -m pip install numpy
 
 ## License
 
-No license is stated in the scripts themselves beyond the upstream tools they interface with. Add a project license if you want to publish or share the repository more broadly.
+This repository is licensed under the MIT License. See the `LICENSE` file for the full text.
+
+Copyright (c) 2026 Rob Hardenberg / PE1ITR
+
+This applies to the helper scripts and repository content in this project.
+
+External / upstream software used by this project, including LeanDVB / LeanSDR, VLC, Linrad, TSDuck, SoapySDR, rtl-sdr, and HackRF tools, remains subject to its own license terms.
+
+Many thanks to the authors and maintainers of these excellent tools, and especially to the LeanDVB / LeanSDR and Linrad authors, for making this kind of experimentation possible.
