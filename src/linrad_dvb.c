@@ -16,6 +16,8 @@
 #include <unistd.h>
 
 #include "iq_view.h"
+#include "decoder_view.h"
+#include "dvbt_backend.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -42,19 +44,23 @@ typedef struct {
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
     GMainLoop *loop;
     IQView iq_view;
+    DecoderView decoder_view;
 } App;
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
 static const char *constellations[] = {"QPSK", "8PSK"};
-static const char *fecs[] = {"1/2", "2/3", "3/4", "1/4", "1/3", "2/5", "3/5", "4/5", "5/6", "8/9", "9/10"};
+static const char *fecs[] = {"1/2", "2/3", "3/4", "1/4", "1/3", "2/5", "3/5", "4/5", "5/6", "8/9", "9/10", "7/8"};
 /* DVB-S2 MODCOD numbers, indexed by constellation and the FEC list above.
  * Zero denotes an unsupported combination. */
-static const unsigned modcods[2][11] = {
+static const unsigned modcods[2][G_N_ELEMENTS(fecs)] = {
     {4, 6, 7, 1, 2, 3, 5, 8, 9, 10, 11},
     {0, 13, 14, 0, 0, 0, 12, 0, 15, 16, 17}
 };
 static gboolean valid_fec(App *a, int fec) {
-    return a->standard == 1 ? modcods[a->constellation][fec] != 0 : fec < 3;
+    if (fec < 0 || fec >= (int)G_N_ELEMENTS(fecs)) return FALSE;
+    if (a->standard == 1) return modcods[a->constellation][fec] != 0;
+    if (a->standard == 2) return fec < 3 || !strcmp(fecs[fec], "5/6") || !strcmp(fecs[fec], "7/8");
+    return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
 enum { SOURCE_FILE = 4 };
@@ -66,7 +72,7 @@ enum { RENDER_CVLC, RENDER_VLC, RENDER_CUSTOM, RENDER_FILE };
 static const char *renderers[] = {"cvlc", "vlc", "custom", "mpegts"};
 static gboolean use_scatter(App *a) { return a->scatter && a->renderer != RENDER_FILE; }
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
-static const int terrestrial_rates[] = {150000, 250000, 40000, 35000};
+static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
 static void fatal(const char *fmt, ...) G_GNUC_PRINTF(1, 2) G_GNUC_NORETURN;
 static void fatal(const char *fmt, ...) {
@@ -189,8 +195,15 @@ static void build_pipeline(App *a) {
         add_number(s, "--filter-bandwidth", width);
     }
     if (a->standard == 2) {
-        s = new_stage(a, "rbdvbt_rx");
-        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out");
+        s = &a->stages[a->stage_count++];
+        s->args = g_ptr_array_new_with_free_func(g_free);
+        char *self = g_file_read_link("/proc/self/exe", NULL);
+        if (!self) fatal("Kan de ingebouwde DVB-T-decoder niet vinden");
+        add(s, self); g_free(self); add(s, "--decoder-worker=dvbt");
+        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp");
+        /* These are essential for the integrated live decode path, even when
+         * an older/empty config does not supply them. */
+        add(s, "--live"); add(s, "--resample-to-dvbt-rate");
         add(s, "--stdin"); add(s, "--input-format"); add(s, format);
         add_number(s, "--sample-rate", sample_rate); add_number(s, "--sr", a->sr);
         add(s, "--gi"); add(s, guards[a->gi]); add(s, "--fec"); add(s, fecs[a->fec]); add(s, "--stdout-ts");
@@ -342,6 +355,8 @@ static gboolean force_stop(gpointer data) {
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
     a->stopping = TRUE;
+    decoder_view_stop(&a->decoder_view);
+    decoder_view_tick(&a->decoder_view, FALSE, standards[a->standard]);
     if (a->drain_timer) { g_source_remove(a->drain_timer); a->drain_timer=0; }
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     if (!a->exit_code) status(a, "Pipeline stoppen...");
@@ -442,6 +457,8 @@ static void start_pipeline(App *a) {
         if (!g_unix_open_pipe(log_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(log_pipe[0], TRUE, NULL)) goto pipe_error;
     }
+    if (a->window && a->standard == 2 && !decoder_view_start(&a->decoder_view))
+        log_text(a, "Decodertelemetrie niet beschikbaar; ontvangst gaat door.\n");
     a->running = TRUE;
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, FALSE);
@@ -457,6 +474,11 @@ static void start_pipeline(App *a) {
         GError *error = NULL; Stage *s = &a->stages[i];
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
+        env = g_environ_unsetenv(env, "LINRAD_DECODER_MONITOR_PORT");
+        if (i == 1 && a->standard == 2 && a->decoder_view.port) {
+            char port[16]; g_snprintf(port, sizeof(port), "%d", a->decoder_view.port);
+            env = g_environ_setenv(env, "LINRAD_DECODER_MONITOR_PORT", port, TRUE);
+        }
         if (i == 0 && a->window && a->iq_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->iq_view.port);
             env = g_environ_setenv(env, "LINRAD_IQ_MONITOR_PORT", port, TRUE);
@@ -492,7 +514,7 @@ pipe_error:
 
 static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
-    char *text = g_strdup_printf("%s\n%s: %d %s\nFEC: %s\n%s: %s",
+    char *text = g_strdup_printf("%s · %s: %d %s\nFEC: %s · %s: %s",
         standards[a->standard], a->standard == 2 ? "Bandbreedte" : "Symbolrate", a->sr,
         a->standard == 2 ? "Hz" : "sym/s", fecs[a->fec],
         a->standard == 2 ? "Guard interval" : "Constellatie",
@@ -500,7 +522,7 @@ static void refresh_summaries(App *a) {
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
     char *target = a->renderer == RENDER_FILE ? setting(a, "renderer", "output_file") :
         setting(a, "paths", a->renderer == RENDER_CUSTOM ? "custom_renderer" : renderers[a->renderer]);
-    text = g_strdup_printf("%s\n%s\n\nScatterfix: %s", a->renderer == RENDER_FILE ? "MPEG-TS-bestand" : "Programma",
+    text = g_strdup_printf("%s: %s\nScatterfix: %s", a->renderer == RENDER_FILE ? "MPEG-TS-bestand" : "Programma",
         target, use_scatter(a) ? "aan" : "uit");
     gtk_label_set_text(GTK_LABEL(a->renderer_summary), text);
     gtk_widget_set_tooltip_text(a->renderer_summary, target);
@@ -859,6 +881,7 @@ static gboolean monitor_tick(gpointer data) {
     }
     a->iq_view.center = center; a->iq_view.rate = rate;
     iq_view_receive(&a->iq_view);
+    decoder_view_tick(&a->decoder_view, a->running && !a->stopping && a->standard == 2, standards[a->standard]);
     return G_SOURCE_CONTINUE;
 }
 
@@ -1237,7 +1260,7 @@ static GtkWidget *summary_label(GtkWidget *grid) {
     gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
     gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
     gtk_label_set_width_chars(GTK_LABEL(label), 20);
-    gtk_label_set_max_width_chars(GTK_LABEL(label), 26);
+    gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
     gtk_widget_set_valign(label, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), label, 0, 0, 1, 1);
     return label;
@@ -1420,20 +1443,28 @@ static void gui(App *a) {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(lower_scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_container_add(GTK_CONTAINER(lower_scroll), a->lower);
     gtk_grid_attach(GTK_GRID(a->dashboard), lower_scroll, 0, 1, 1, 1);
+    gtk_box_pack_start(GTK_BOX(a->lower), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
     GtkWidget *panels = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     /* The lower viewport scrolls only when the monitor cannot fit its content. */
     gtk_box_pack_start(GTK_BOX(a->lower), panels, FALSE, TRUE, 0);
-    GtkWidget *mode_panel = panel(panels, "Mode"), *renderer_summary_panel = panel(panels, "Renderer");
-    a->mode_summary = summary_label(mode_panel);
-    a->renderer_summary = summary_label(renderer_summary_panel);
+    GtkWidget *session_panel = panel(panels, "Mode / Renderer");
+    a->mode_summary = summary_label(session_panel);
+    a->renderer_summary = summary_label(session_panel);
+    gtk_container_child_set(GTK_CONTAINER(session_panel), a->renderer_summary, "left-attach", 1, NULL);
+    gtk_widget_set_hexpand(a->mode_summary, TRUE);
+    gtk_widget_set_hexpand(a->renderer_summary, TRUE);
     create_mode_renderer(a);
     populate_rates(a); populate_fecs(a);
     a->status = gtk_label_new("←/→ frequentie · ↑/↓ gain · [ / ] bandbreedte · W opslaan");
     gtk_label_set_xalign(GTK_LABEL(a->status), 0);
     gtk_label_set_ellipsize(GTK_LABEL(a->status), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(a->lower), a->status, FALSE, FALSE, 0);
-    a->preview = text_panel(a->lower, "Opstartcommando", 55);
-    a->log = text_panel(a->lower, "Log", 55);
+    GtkWidget *diagnostics = gtk_expander_new("Opstartcommando / Log");
+    GtkWidget *diagnostic_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
+    gtk_container_add(GTK_CONTAINER(diagnostics), diagnostic_box);
+    gtk_box_pack_start(GTK_BOX(a->lower), diagnostics, FALSE, FALSE, 0);
+    a->preview = text_panel(diagnostic_box, "Opstartcommando", 55);
+    a->log = text_panel(diagnostic_box, "Log", 80);
     create_config(a);
     source_changed(a->source_box, a);
     g_signal_connect(a->offset_box, "value-changed", G_CALLBACK(tuning_changed), a);
@@ -1457,6 +1488,7 @@ static void gui(App *a) {
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
     monitor_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); gtk_main();
     g_source_remove(a->iq_view.timer);
+    decoder_view_stop(&a->decoder_view);
     if (a->iq_view.fd >= 0) close(a->iq_view.fd);
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
@@ -1495,6 +1527,8 @@ static void load_session(App *a) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
+        return dvbt_backend_main(argc-1, argv+1);
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
     char *source = NULL, *constellation = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
@@ -1506,7 +1540,7 @@ int main(int argc, char **argv) {
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq of file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Eigen configuratiebestand", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 of DVB-T", "MODE"},
-        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbolrate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T: 35000, 40000, 150000, 250000)", "RATE"},
+        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbolrate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},
         {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC passend bij standaard/constellatie (bijv. 3/4)", "FEC"},
         {"gi", 0, 0, G_OPTION_ARG_STRING, &gi, "DVB-T: 1/32, 1/16, 1/8 of auto", "GI"},
         {"no-scatterfix", 0, 0, G_OPTION_ARG_NONE, &no_scatter, "Opgeslagen Scatterfix-keuze uitschakelen", NULL},

@@ -158,9 +158,10 @@ class PipelineTests(unittest.TestCase):
 
     def test_all_parameter_combinations(self):
         for standard in ("DVB-S", "DVB-S2", "DVB-T"):
-            rates = (35000, 40000, 150000, 250000) if standard == "DVB-T" else (35000, 66000, 125000, 250000, 333000)
+            rates = (35000, 40000, 150000, 250000, 333000, 500000) if standard == "DVB-T" else (35000, 66000, 125000, 250000, 333000)
             guards = ("1/32", "1/16", "1/8", "auto") if standard == "DVB-T" else ("1/32",)
-            for sr, fec, gi, scatter in itertools.product(rates, ("1/2", "2/3"), guards, (False, True)):
+            code_rates = ("1/2", "2/3", "3/4", "5/6", "7/8") if standard == "DVB-T" else ("1/2", "2/3")
+            for sr, fec, gi, scatter in itertools.product(rates, code_rates, guards, (False, True)):
                 with self.subTest(standard=standard, sr=sr, fec=fec, gi=gi, scatter=scatter):
                     cmds = self.preview(standard, sr, fec, gi, scatter)
                     self.assertEqual(len(cmds), 4 if scatter else 3)
@@ -173,6 +174,8 @@ class PipelineTests(unittest.TestCase):
                     expected = ("0x10" if fec == "1/2" else "0x40") if standard == "DVB-S2" else fec
                     self.assertEqual(dec[dec.index(flag) + 1], expected)
                     if standard == "DVB-T":
+                        self.assertEqual(dec[0], str(UI))
+                        self.assertIn("--decoder-worker=dvbt", dec)
                         self.assertEqual(dec[dec.index("--gi") + 1], gi)
                     if scatter:
                         self.assertEqual(cmds[2][-2:], ["--udp-output", "127.0.0.1:1235"])
@@ -289,6 +292,8 @@ class PipelineTests(unittest.TestCase):
                 decoder = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")][1]
                 self.assertEqual(int(decoder[decoder.index("--modcods") + 1], 0), 1 << modcod)
         for args in (["--standard", "DVB-S2", "--constellation", "8PSK", "--fec", "1/2"],
+                     ["--standard", "DVB-S2", "--fec", "7/8"],
+                     ["--standard", "DVB-T", "--fec", "4/5"],
                      ["--standard", "DVB-S2", "--constellation", "8PSK", "--fec", "4/5"],
                      ["--constellation", "8PSK"], ["--standard", "DVB-T", "--fec", "9/10"],
                      ["--standard", "DVB-S2", "--constellation", "16APSK"]):

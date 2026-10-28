@@ -11,6 +11,52 @@ static void assert_no_tabs(GtkWidget *widget) {
     g_list_free(children);
 }
 
+static void exercise_decoder_view(App *a) {
+    DecoderView *v=&a->decoder_view;
+    g_assert_true(decoder_view_start(v));
+    int sender=socket(AF_INET,SOCK_DGRAM,0);
+    g_assert_cmpint(sender,>=,0);
+    struct sockaddr_in dest={.sin_family=AF_INET,.sin_port=htons(v->port),
+        .sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
+    DecoderStatus status={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_STATUS,
+        .locks=15,.snr_db=24,.pilot_lock=.97,.cfo_hz=12,.rms_dbfs=-20,.peak_dbfs=-8,
+        .packets=100,.written_packets=98,.rs_ok=100,.service="Test <service>",
+        .provider="PE1ITR",.modulation="DVB-T 2K QPSK",.fec="3/4",.guard="1/32"};
+    DecoderBuffer queue={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_BUFFER,.queued=256,.capacity=1024};
+    DecoderConstellation points={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_CONSTELLATION,.count=4,
+        .iq={.707,.707,-.707,.707,-.707,-.707,.707,-.707}};
+    g_assert_cmpint(sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(status));
+    g_assert_cmpint(sendto(sender,&queue,sizeof(queue),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(queue));
+    g_assert_cmpint(sendto(sender,&points,sizeof(points),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(points));
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"Service: Test <service>");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->provider)),==,"Provider: PE1ITR");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->buffer)),==,"Buffer: 25%");
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->lamps[1])),"#36d866"));
+    g_assert_cmpint(v->points.count,==,4);
+    status.rms_dbfs=NAN;
+    sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest));
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->signal)),"IQ RMS —"));
+    points.count=DECODER_POINTS+1;
+    sendto(sender,&points,sizeof(points),0,(struct sockaddr *)&dest,sizeof(dest));
+    sendto(sender,&status,7,0,(struct sockaddr *)&dest,sizeof(dest));
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_cmpint(v->points.count,==,4);
+    v->status_time-=11*G_USEC_PER_SEC; v->points_time-=11*G_USEC_PER_SEC; v->buffer_time-=11*G_USEC_PER_SEC;
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->buffer)),==,"Buffer: —");
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->lamps[0])),"#888888"));
+    g_assert_true(decoder_view_start(v));
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_cmpint(v->points.count,==,0);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"Service: —");
+    decoder_view_stop(v); close(sender);
+    decoder_view_tick(v,FALSE,"DVB-S2");
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"weergave volgt"));
+    g_assert_cmpint(abs(gtk_widget_get_allocated_width(v->area)-gtk_widget_get_allocated_height(v->area)),<=,1);
+}
+
 static void exercise_file_selection(App *a) {
     int source=a->source, standard=a->standard, constellation=a->constellation;
     int fec=a->fec, gi=a->gi, sr=a->sr;
@@ -60,6 +106,7 @@ static gboolean exercise(gpointer data) {
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        exercise_decoder_view(a);
         exercise_file_selection(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
@@ -263,7 +310,26 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpint(a->sr, ==, 150000);
         g_assert_false(gtk_widget_get_sensitive(a->constellation_box));
         g_assert_cmpint(a->fec, ==, 0); /* DVB-T cannot retain 9/10. */
+        g_assert_cmpint(gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(a->fec_box)),NULL), ==, 5);
+        g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), "8"));
+        pipeline=describe(a);
+        g_assert_nonnull(strstr(pipeline,"'--fec' '5/6'")); g_free(pipeline);
+        g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), "11"));
+        pipeline=describe(a);
+        g_assert_nonnull(strstr(pipeline,"'--fec' '7/8'")); g_free(pipeline);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);
+        g_assert_false(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), "11"));
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 2);
+        g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), "0"));
         g_assert_true(gtk_widget_get_sensitive(a->gi_box));
+        g_assert_cmpint(gtk_tree_model_iter_n_children(gtk_combo_box_get_model(GTK_COMBO_BOX(a->sr_box)),NULL), ==, 6);
+        for (int index=4;index<=5;++index) {
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),index);
+            g_assert_cmpint(a->sr, ==, index==4 ? 333000 : 500000);
+            pipeline=describe(a);
+            g_assert_nonnull(strstr(pipeline,index==4 ? "'--sr' '333000'" : "'--sr' '500000'"));
+            g_free(pipeline);
+        }
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 3);
         g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "196078");
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)), ==, "Gain -10 dB");
@@ -350,6 +416,8 @@ static gboolean exercise(gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
+        return dvbt_backend_main(argc-1, argv+1);
     g_assert_cmpint(argc, ==, 2);
     App a = {.sr = 125000, .tune_fd = -1};
     a.config = g_key_file_new();

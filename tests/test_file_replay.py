@@ -158,7 +158,9 @@ class FilePipelineTests(unittest.TestCase):
             cfg['paths']['rbdvbt_rx'] = str(decoder)
             cfg['session'] = {'renderer': 'mpegts'}
             cfg['renderer'] = {'output_file': 'received.ts'}
-            iq = Path(tmp, 'dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000.iq')
+            # Exercise generic EOF/tail handling using the external satellite
+            # backend; DVB-T now always uses the compiled-in decoder.
+            iq = Path(tmp, 'dvbs-qpsk-sr35000-fec1-2-fs250000.iq')
             data = bytes(range(256)) * 100
             iq.write_bytes(data)
             Path(str(iq) + '.json').write_text(json.dumps({'format': 's16', 'sample_rate_hz': 250000}))

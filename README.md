@@ -88,13 +88,14 @@ schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
 De waterval en het spectrum nemen elk een kwart van het werkvlak in.
 Frequentie en gain staan bovenin op dezelfde regel als Start/Stop.
 De bediening gaat met de pijltjestoetsen; er zijn geen plus/min-knoppen.
-Onder het spectrum staan grijs omrande panelen voor Mode en Renderer.
-Deze tonen alleen een samenvatting: wijzigen
+Onder het spectrum staan links een vierkante constellatie en rechts service-info.
+Daaronder staat één compact paneel **Mode / Renderer**.
+Dit toont alleen een samenvatting: wijzigen
 doe je via hun menu. Rechtsboven staat één knop met een statuslampje: **Start SDR** bij uitgeschakelde
 ontvangst, **Stop SDR · actief** met een groene knop en groen lampje tijdens
 ontvangst. Tijdens stoppen is de knop geel en tijdelijk geblokkeerd; na een fout
-wordt hij rood en kun je opnieuw starten. Onderaan staan het opstartcommando,
-de status en het log.
+wordt hij rood en kun je opnieuw starten. Onderaan staan de status en het
+uitklapbare **Opstartcommando / Log**.
 
 - **SDR**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
   device-argumenten, antenne en UHD-images;
@@ -111,19 +112,20 @@ de status en het log.
 De GUI bevat onder andere:
 
 - DVB-S en DVB-S2: SR 35000, 66000, 125000, 250000 of 333000; FEC 1/2 of 2/3.
-- DVB-T: SR 150000 of 250000; FEC 1/2 of 2/3; guard interval 1/32, 1/16,
-  1/8 of auto, zoals ondersteund door de lokale `rbdvbt_rx`.
+- DVB-T: BW 35000, 40000, 150000, 250000, 333000 of 500000 Hz; FEC 1/2, 2/3, 3/4, 5/6 of 7/8;
+  guard interval 1/32, 1/16, 1/8 of auto.
 - Scatterfix aan/uit, één Start/Stop-knop, een pipelineweergave en een logvenster.
 
-DVB-S/S2 gebruiken `leandvb`, DVB-T gebruikt `rbdvbt_rx`, en beide worden
-standaard weergegeven met `cvlc`. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
+DVB-S/S2 gebruiken `leandvb`. De DVB-T-broncode wordt rechtstreeks meegecompileerd
+en gelinkt in `linrad_dvb`; een losse `rbdvbt_rx`-executable is niet nodig.
+Beide modes worden standaard weergegeven met `cvlc`. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
 `0x10`, FEC 2/3 selecteert `0x40`. De standaard samplerate is **1010526**
 samples/s. Frequentie en de SDR zelf stel je in Linrad in.
 
 Zonder Scatterfix:
 
 ```text
-Linrad UDP -> C-ontvanger -> leandvb / rbdvbt_rx -> cvlc (stdin)
+Linrad UDP -> C-ontvanger -> leandvb / ingebouwde DVB-T-decoder -> cvlc (stdin)
 ```
 
 Met Scatterfix:
@@ -143,14 +145,88 @@ korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
+### Ingebouwde DVB-T-decoder en verdeling van het werk
+
+`make` bouwt de vastgelegde broncode in `third_party/rbdvbt` mee in
+`build/linrad_dvb`. De oorspronkelijke auteur is **Rob Hardenberg / PE1ITR**;
+herkomst, lokale aanpassingen en licentie staan in
+[third_party/rbdvbt/README.md](third_party/rbdvbt/README.md).
+Er is tijdens bouwen of ontvangen geen andere checkout of decoderbinary nodig.
+`make package` legt ook de decoderlicentie in `build` voor distributie.
+
+De GUI start voor DVB-T dezelfde executable met `--decoder-worker=dvbt`.
+Dit werkproces gebruikt de bestaande procesbewaking en Start/Stop-afhandeling,
+maar voert de meegecompileerde C-functies uit. Dit houdt de GTK-eventloop vrij
+van DSP-werk en maakt een volgende start onafhankelijk van oude decoderstatus.
+
+| Onderdeel | Werk |
+|---|---|
+| GTK-hoofdproces | Bediening, spectrum/waterval en ontvangstpanelen, maximaal 10 GUI-updates/s |
+| Bronhelper | SDR/Linrad/bestandsinvoer, bandfilter en bestaande IQ-monitor; hardware-uitvoer heeft een eigen begrensde wachtrij |
+| `dvbt-iq` | IQ uit de pipe lezen en in de begrensde invoerring plaatsen |
+| `dvbt-ofdm` | Resampling, timing/AFC, FFT, pilots en equalizing |
+| `dvbt-fec` | Deinterleaving, doorlopende Viterbi, Reed–Solomon, TS-validatie en uitvoer |
+| Renderer | Video/audio afspelen of Scatterfix verwerken |
+
+De OS-scheduler kan deze threads/processen over de beschikbare cores verdelen;
+er is geen vaste core-affiniteit of realtimescheduling. De FEC-keten behoudt
+zijn volgorde en decoderstatus binnen één worker. Meer FEC-workers zonder een
+ander algoritme zouden die continuïteit verbreken. De GUI deelt geen DSP-locks:
+kleine lokale UDP-berichten zijn niet-blokkerend en mogen worden overgeslagen.
+Een langzaam renderprogramma kan de TS-uitvoer wel ophouden; de bestaande
+begrensde buffers en overflowmeldingen blijven daarom nodig.
+
+Het vierkante constellatiepaneel staat direct onder het spectrum, links van
+**Service-info**. Dat toont OFDM/FEC/TS/service-lampjes, SNR, pilot-lock, CFO,
+IQ-niveaus, service- en providernaam en pakketstatistieken. **Buffer** is het
+percentage bezette plaatsen in de OFDM→FEC-wachtrij van 1024 symbolen, exclusief
+het blok dat wordt verwerkt. Deze vulling wordt bij iedere wachtrijwijziging
+doorgegeven, ook als nog geen TS-lock bestaat. Onbekende gegevens tonen `—`.
+Bij Stop/herstart worden alle gegevens gewist; na tien seconden zonder actuele
+telemetrie worden lampjes grijs en oude meetwaarden verborgen. Er zijn geen
+extra DVB-T-spectrum- of buffervensters. De monitorinterface en GTK-panelen zijn
+afzonderlijke modules voor later gebruik door andere modes; DVB-S/S2 gebruiken
+voorlopig nog hun bestaande decoderweergave.
+
+Alle vijf DVB-T-FEC-verhoudingen (**1/2, 2/3, 3/4, 5/6 en 7/8**) gebruiken de
+doorlopende Viterbi-route. De oude code beperkte die route tot 1/2 en 2/3 en
+viel voor hogere verhoudingen terug op opnieuw decoderen per blok.
+Dit zijn de verhoudingen uit [DVB BlueBook A012, §4.3.3](https://dvb.org/wp-content/uploads/2019/12/a012_dvb-t_june_2015.pdf).
+Hogere verhoudingen geven bij gelijke modulatie/BW/GI meer nuttige bitrate en
+minder foutbescherming. De FEC moet overeenkomen met de zender.
+Voor 333 en 500 kHz BW moet de IQ-bron voldoende bandbreedte en samplerate
+leveren. De nominale DVB-T-samplerates bij interpolatiefactor 1 zijn ongeveer
+381 en 571 ksample/s; een hogere bronrate wordt intern geresampled. De SDR-IQ
+met maximaal 196078 samples/s is voor die bandbreedtes onvoldoende. Kies een
+geschikte Linrad-uitvoer, HackRF/B210 of IQ-opname; controleer ook het bandfilter.
+`make test-dvbt` controleert de werkelijke decoder voor alle vijf FEC's met
+bekende gecodeerde bytes, puncturing, bitfouten, blokovergangen en resets.
+In een synthetische realtime QPSK/2K-test op 250 kHz (10,5 s IQ, deze machine)
+daalde de FEC-thread-CPU-tijd voor 3/4 van circa 1,72 naar 0,81 s. De maximale
+wachtrijvulling was 6,25%, zonder overflow. Een aparte H.264-test leverde
+service/provider en 1510 TS-pakketten op; alle uitgevoerde pakketten kwamen
+bytegetrouw uit de originele TS. Dit is geen garantie voor zwakke RF-signalen,
+andere computers of hogere bandbreedtes.
+
+Aanvullende synthetische realtime-tests op dezelfde machine controleerden
+5/6 en 7/8 op 250 kHz, 5/6 op 333 kHz (7,88 s IQ) en 7/8 op 500 kHz
+(5,25 s IQ). Alle runs leverden service-info en bytegetrouwe TS-pakketten
+zonder wachtrij-overflow. Bij 500 kHz/7/8 was de maximale wachtrijvulling 12,5%;
+de FEC-thread gebruikte circa 1,10 CPU-seconde. Dit zijn korte functionele
+doorvoertests, geen langdurige RF- of belastingstest.
+
 ### Eigen configuratie
 
 Pas `linrad-dvb.ini` aan voor de programmapaden en opstartopties:
 
-- `[paths]`: C-ontvanger, `leandvb`, `rbdvbt_rx`, Scatterfix en `cvlc`.
+- `[paths]`: C-ontvanger, `leandvb`, Scatterfix en `cvlc`.
+  Een oude `rbdvbt_rx`-padinstelling wordt genegeerd.
 - `[linrad]`: IPv4-adres, UDP-poort (50000), headerlengte (24), samplerate,
   IQ-formaat (`s16` of `u8`) en extra ontvangeropties.
-- `[leandvb]`, `[rbdvbt_rx]`, `[scatterfix]`, `[cvlc]`: extra programma-argumenten.
+- `[leandvb]`, `[rbdvbt_rx]`, `[scatterfix]`, `[cvlc]`: extra argumenten.
+  `[rbdvbt_rx]` configureert nu de ingebouwde decoder; `--live` en
+  `--resample-to-dvbt-rate` worden automatisch toegevoegd. Een oude `--gui`
+  opent geen extra DVB-T-vensters meer.
 - `[scatterfix]`: lokaal UDP-adres en poort, standaard `127.0.0.1:1235`.
 
 Paden met een slash zijn relatief aan de map van het configuratiebestand;
@@ -689,13 +765,13 @@ Small 2048-sample reads avoid the latency of the high-rate SDR blocks.
 The decoder receives the selected source sample rate; `--resample-to-dvbt-rate`
 converts this to about 45714.286 samples/s for 40 kHz DVB-T at `--dvbt-ir 1`.
 Integer rounding of SDR-IQ rates is tolerated up to 0.5 samples/s; other rate
-changes are rejected. The 40 kHz mode requires a recent `rbdvbt_rx` supporting
-`--sr 40000` and still needs an RF reception test.
+changes are rejected. The compiled-in DVB-T receiver supports `--sr 40000`;
+this mode still needs an RF reception test.
 
 DVB-T bandwidth **35 kHz** is also selectable in the C GUI as `35000`
 (or `--standard DVB-T --sr 35000`). Keep the SDR-IQ source sample rate at
 111111 samples/s; the receiver resamples to 40000 samples/s internally for
-35 kHz bandwidth at `--dvbt-ir 1`. This requires `rbdvbt_rx` with 35k support.
+35 kHz bandwidth at `--dvbt-ir 1`. The compiled-in receiver includes 35k support.
 
 ```bash
 ./build/linrad_dvb --source sdriq --standard DVB-T --sr 40000 --fec 1/2 --gi 1/32
