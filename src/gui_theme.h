@@ -55,7 +55,18 @@ static void apply_receiver_theme(void) {
         "#spectrum-bw, #spectrum-scatter { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; }"
         "#spectrum-bw label, #spectrum-scatter label { background-color: transparent; }"
         "#spectrum-bw:checked, #spectrum-scatter:checked { background-color: #b52323; border-color: #ff7070; color: #ffffff; }"
-        "#spectrum-bw:checked:hover, #spectrum-scatter:checked:hover { background-color: #d02b2b; }";
+        "#spectrum-bw:checked:hover, #spectrum-scatter:checked:hover { background-color: #d02b2b; }"
+        /* Keep window decorations light, including inactive windows. Override
+         * the white foreground and black label backgrounds used in the body. */
+        "headerbar, .titlebar {"
+        " background-color: #e6e6e6; background-image: none; color: #000000;"
+        " text-shadow: none; -gtk-icon-shadow: none; box-shadow: none; }"
+        "headerbar *, .titlebar * {"
+        " background-color: transparent; background-image: none; color: #000000;"
+        " text-shadow: none; -gtk-icon-shadow: none; box-shadow: none; }"
+        "headerbar button, .titlebar button { border-color: transparent; }"
+        "headerbar button:hover, .titlebar button:hover { background-color: #d5d5d5; }"
+        "headerbar button:active, .titlebar button:active { background-color: #c5c5c5; }";
     GtkCssProvider *provider = gtk_css_provider_new();
     GError *error = NULL;
     if (!gtk_css_provider_load_from_data(provider, css, -1, &error)) {
