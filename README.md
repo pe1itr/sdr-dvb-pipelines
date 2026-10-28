@@ -1,12 +1,19 @@
 # LeanDVB receive helpers for multiple SDR sources
 
+For the new Linrad-only C receiver and GUI, run `make` followed by
+`./build/linrad_dvb`. Set parameters directly in the GUI and edit
+`linrad-dvb.ini` for paths and startup options. See
+[Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
+The profile-driven scripts described elsewhere in this README are the older
+experimental workflow.
+
 This repository contains a small collection of experimental command-line helpers for receiving narrowband DVB-S and DVB-S2 signals with **LeanDVB**.
 
 The setup is built around the main launcher script:
 
 - `rx_dvb_linrad_leandvb.sh`
 
-That script selects a predefined receive profile and connects one of several SDR input paths to `leandvb`, usually followed by `cvlc` for MPEG-TS playback. The profiles are intentionally practical and experimental. There is currently **no polished user interface**; the expected way of working is still via shell commands, pipes, and profile numbers.
+That script selects a predefined receive profile and connects one of several SDR input paths to `leandvb`, usually followed by `cvlc` for MPEG-TS playback. The profiles are intentionally practical and experimental. This older workflow uses shell commands, pipes, and profile numbers; the new Linrad GUI operates independently of it.
 
 Useful upstream references:
 
@@ -58,6 +65,157 @@ Run a profile with:
 ```
 
 The launcher currently includes profiles 1 through 18, covering DVB-S, DVB-S2, measurement, and multiple source devices. fileciteturn1file0
+
+## Linrad DVB ontvanger in C
+
+De toepassing ondersteunt Linrad, directe SDR-hardware en IQ-bestanden. Je stelt de parameters
+rechtstreeks in de GTK-GUI in; er zijn geen profielen nodig. Zowel de GUI als de
+Linrad UDP-ontvanger zijn in C geschreven. `rx_dvb_linrad_leandvb.sh` wordt niet
+gelezen, gestart of gewijzigd door de toepassing. De overige scripts hieronder
+blijven beschikbaar voor de oudere experimenten.
+
+Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
+GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR en UHD):
+
+```bash
+make
+./build/linrad_dvb
+```
+
+De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
+schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
+**SDR**, **Mode**, **Renderer** en **Info** (PE1ITR en de sneltoetsen).
+De waterval en het spectrum nemen elk een kwart van het werkvlak in.
+Frequentie en gain staan bovenin op dezelfde regel als Start/Stop.
+De bediening gaat met de pijltjestoetsen; er zijn geen plus/min-knoppen.
+Onder het spectrum staan grijs omrande panelen voor Mode en Renderer.
+Deze tonen alleen een samenvatting: wijzigen
+doe je via hun menu. Rechtsboven staat één knop met een statuslampje: **Start SDR** bij uitgeschakelde
+ontvangst, **Stop SDR · actief** met een groene knop en groen lampje tijdens
+ontvangst. Tijdens stoppen is de knop geel en tijdelijk geblokkeerd; na een fout
+wordt hij rood en kun je opnieuw starten. Onderaan staan het opstartcommando,
+de status en het log.
+
+- **SDR**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
+  device-argumenten, antenne en UHD-images;
+  bij Linrad het UDP-adres, de poort, de headerlengte en de frequentie voor de schaal.
+  Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
+- **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
+- **Renderer**: VLC (`cvlc`), VLC met bediening, een eigen programma of een
+  MPEG-TS-bestand, plus Scatterfix aan/uit.
+- **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
+  **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
+  Deze toetsen gelden in het hoofdvenster, ook tijdens ontvangst.
+  In de instellingendialogen werken de toetsen als normale invoer.
+
+De GUI bevat onder andere:
+
+- DVB-S en DVB-S2: SR 35000, 66000, 125000, 250000 of 333000; FEC 1/2 of 2/3.
+- DVB-T: SR 150000 of 250000; FEC 1/2 of 2/3; guard interval 1/32, 1/16,
+  1/8 of auto, zoals ondersteund door de lokale `rbdvbt_rx`.
+- Scatterfix aan/uit, één Start/Stop-knop, een pipelineweergave en een logvenster.
+
+DVB-S/S2 gebruiken `leandvb`, DVB-T gebruikt `rbdvbt_rx`, en beide worden
+standaard weergegeven met `cvlc`. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
+`0x10`, FEC 2/3 selecteert `0x40`. De standaard samplerate is **1010526**
+samples/s. Frequentie en de SDR zelf stel je in Linrad in.
+
+Zonder Scatterfix:
+
+```text
+Linrad UDP -> C-ontvanger -> leandvb / rbdvbt_rx -> cvlc (stdin)
+```
+
+Met Scatterfix:
+
+```text
+Linrad UDP -> C-ontvanger -> decoder -> Scatterfix -> UDP MPEG-TS -> cvlc
+```
+
+Scatterfix blijft het bestaande externe `TSscatterfix/tools/contest_live.py`
+programma, met zijn eigen Python/FFmpeg-afhankelijkheden. De vervanging door C
+betreft de Linrad-ontvanger en de GUI. Zonder Scatterfix gebruikt de nieuwe
+ontvangstpipeline geen Python-helper.
+
+Tijdens ontvangst zijn de parameterkeuzes geblokkeerd. Stop ruimt alle gestarte
+procesgroepen op, inclusief subprocessen van de decoder of Scatterfix. Na een
+korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
+gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
+de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
+
+### Eigen configuratie
+
+Pas `linrad-dvb.ini` aan voor de programmapaden en opstartopties:
+
+- `[paths]`: C-ontvanger, `leandvb`, `rbdvbt_rx`, Scatterfix en `cvlc`.
+- `[linrad]`: IPv4-adres, UDP-poort (50000), headerlengte (24), samplerate,
+  IQ-formaat (`s16` of `u8`) en extra ontvangeropties.
+- `[leandvb]`, `[rbdvbt_rx]`, `[scatterfix]`, `[cvlc]`: extra programma-argumenten.
+- `[scatterfix]`: lokaal UDP-adres en poort, standaard `127.0.0.1:1235`.
+
+Paden met een slash zijn relatief aan de map van het configuratiebestand;
+losse programmanamen worden in `PATH` gezocht. Processen starten met die map
+als werkmap, zodat bijvoorbeeld het Scatterfix-modelpad hetzelfde werkt vanaf
+elke startmap. De standaardconfiguratie wordt gevonden naast de map `build`,
+onafhankelijk van de werkmap van de terminal. Een eigen bestand selecteer je met:
+
+```bash
+./build/linrad_dvb --config /pad/naar/linrad-dvb.ini
+```
+
+De configuratie wordt bij het starten van de toepassing ingelezen. Herstart de
+GUI na wijzigingen. Argumenten ondersteunen aanhalingstekens voor spaties,
+maar geen shell-expansie, variabelen, redirections of pipelines. Zet de parameters
+die de GUI beheert niet nogmaals in de extra argumenten. Programmapaden in
+`[paths]` hebben geen aanhalingstekens nodig, ook bij spaties.
+
+### C-ontvanger zelfstandig gebruiken
+
+`build/linrad_udp_to_stdout` vervangt `linrad_udp_to_stdout_v3.py` in nieuwe
+pipelines. Het bestaande Python-bestand blijft beschikbaar als testreferentie
+en voor de ongewijzigde oudere scripts.
+
+```bash
+./build/linrad_udp_to_stdout --help
+./build/linrad_udp_to_stdout --s16-gain 2 --measure 3200000 > /dev/null
+./build/linrad_udp_to_stdout --record-iq recordings
+./build/linrad_udp_to_stdout --record-iq recordings --record-stdout | vervolgprogramma
+```
+
+Ondersteund: header verwijderen, s16-doorvoer/gain, u8-conversie met scale en
+offset, meetstatistieken, IQ-opnamen en optionele gelijktijdige stdout-uitvoer.
+Afronding en clipping komen overeen met de Python-versie. Meten rondt een
+byte-aantal naar beneden af op complete IQ-paren; daardoor kan ook een niet
+uitgelijnd meetaantal afronden. Te grote UDP-pakketten worden verworpen in plaats
+van gedeeltelijk doorgestuurd; stel `--bufsize` zo nodig hoger in (standaard 8192).
+Een oneven laatste payloadbyte wordt, net als in Python, weggelaten.
+Opnamen overschrijven geen bestaand bestand met dezelfde naam.
+
+Voor opname vanuit de GUI voeg je bijvoorbeeld `--record-iq recordings` toe
+bij `[linrad] args`. De GUI voegt altijd `--record-stdout` toe zodat de decoder
+IQ blijft ontvangen. De ontvanger wijzigt de samplerate niet; de ingestelde waarde
+moet overeenkomen met de uitvoer van Linrad.
+
+### Controle zonder GUI
+
+```bash
+./build/linrad_dvb --print-pipeline --standard DVB-S2 --sr 66000 --fec 2/3
+./build/linrad_dvb --print-pipeline --standard DVB-T --sr 250000 --gi 1/16 --scatterfix
+./build/linrad_dvb --run --standard DVB-S --sr 125000 --fec 1/2
+make test
+```
+
+`--run` start dezelfde pipeline zonder GUI en stopt met Ctrl+C. Zonder deze
+vlag worden eventuele commandoregelparameters de beginwaarden van de GUI.
+`--print-pipeline` toont de argumenten zonder ontvangers of VLC te starten; de
+UDP-pijl in de Scatterfix-weergave is een beschrijving, geen shellcommando.
+
+De regressietests gebruiken Python 3 als testhulpmiddel. Ze vergelijken alle
+s16-waarden met de oorspronkelijke Python-conversie, controleren de
+parametercombinaties en testen IQ-opnamen, UDP/pipe-doorvoer en procesopruiming
+met vervangende decoders. Als `broadwayd` beschikbaar is, testen ze ook de GTK-
+keuzes, Stop, herstarten en sluiten op een eigen onzichtbaar testscherm.
+Deze tests vervangen geen ontvangsttest met een echt DVB-signaal uit Linrad.
 
 ## Repository contents
 
@@ -439,3 +597,300 @@ This applies to the helper scripts and repository content in this project.
 External / upstream software used by this project, including LeanDVB / LeanSDR, VLC, Linrad, TSDuck, SoapySDR, rtl-sdr, and HackRF tools, remains subject to its own license terms.
 
 Many thanks to the authors and maintainers of these excellent tools, and especially to the LeanDVB / LeanSDR and Linrad authors, for making this kind of experimentation possible.
+
+
+### Direct HackRF, B210 and SDR-IQ inputs in the C GUI
+
+Build with `make all` and launch `./build/linrad_dvb`. The build requires GTK 3,
+GLib, json-c, FFTW3 single precision (fftw3f), SoapySDR and UHD development packages; HackRF reception also requires the
+SoapyHackRF driver; SDR-IQ requires the SoapyRFSpace driver. Select `linrad`,
+`hackrf`, `b210`, `sdriq` or **Bestand (IQ)** in **SDR → Input / SDR**. With reception
+stopped, set sample rate (samples/s), frequency (kHz), and IQ format.
+The gain readout is in the top bar; use the up/down arrow keys to adjust it.
+Frequency values in `linrad-dvb.ini` remain in Hz.
+Start opens the selected SDR; Stop closes the receive pipeline. Frequency and gain
+are disabled for Linrad, where tuning is done in Linrad itself. GUI edits are kept per source; press **W** to save them to the active INI file
+and restore them on the next start.
+
+The frequency readout in the top bar shows **RF frequency = SDR frequency + LO offset**.
+Set **LO-offset (kHz)** in the **SDR** menu for the converter: 28 MHz IF plus 408000 kHz offset
+shows 436.000000 MHz. The **SDR / IF (kHz)** field is also in the **SDR** menu.
+Below these settings, a live calculation shows **SDR/IF + LO-offset = RF** and
+the difference **RF − IF** in MHz and kHz to help check the offset. The top bar
+shows the received RF frequency and gain alongside Start/Stop.
+The offset changes the readout and spectrum/waterfall axes; the hardware always receives the IF frequency.
+Signed offsets are supported; this is an additive offset, not a high-side mixer
+inversion mode.
+
+Use the keyboard left/right arrow keys to tune by **Afstemstap (Hz)**,
+configured in the **SDR** menu (default 1000 Hz). Plain arrows tune whenever the launcher window is active,
+including when a text/number field has focus. Ctrl/Alt-modified arrows retain
+their normal editing behavior. **Up/down** increases/decreases RX gain, also
+while receiving: SDR-IQ uses its ATT steps (-20, -10, 0, +10 dB), while HackRF
+and B210 requests change by 1 dB within their allowed ranges. Hardware may
+quantize gain; the helper logs the applied gain. The gain label shows the
+requested setting. Direct
+HackRF, B210 and SDR-IQ inputs can retune while receiving without restarting the
+pipeline. Samples already buffered can still belong to the previous frequency,
+and the decoder may need to reacquire. Successful device tuning is logged as
+`[SDR] Tuned to ... Hz`; the large readout shows the requested setting, not a
+measured RF frequency. Linrad UDP tuning remains in Linrad and the readout says so.
+
+`lo_offset` and `tune_step` in each SDR section of `linrad-dvb.ini` are in **Hz**.
+Both default to 0 and 1000 respectively for older configs.
+Press **W** (or **w**) in the active launcher window to save the current settings,
+including all edited SDR sections, selected input, DVB standard, rate/bandwidth,
+constellation, FEC, guard interval and Scatterfix. This also works during reception.
+The active INI file (including one selected with `--config`) is replaced atomically;
+comments and unrelated settings are preserved. Success or failure appears in the
+status line. On the next start the `[session]` selection is restored, without
+starting reception automatically. Explicit command-line selections override saved
+values; `--no-scatterfix` disables a saved Scatterfix selection. Changing the
+standard via CLI resets incompatible mode defaults unless explicitly supplied.
+Closing without W leaves the previous saved settings intact.
+The internal `sdr_to_stdout --control-stdin` option accepts a frequency in Hz or `gain DB`
+per line on a private pipe from the launcher; stdout remains IQ only.
+
+The **IQ-bandfilter** checkbox enables a digital filter before the DVB decoder,
+for all sources including Linrad UDP. **[** narrows and **]** widens its total
+bandwidth by 5% and enables it. You can also enter the total width in Hz directly;
+uncheck the box for bypass. Width and enable state are saved per input with **W**.
+The sample rate, IQ format and number of samples sent to the decoder stay the same.
+The filter is centered at zero in complex baseband (the SDR tuning frequency).
+Linrad recordings/measurements represent the filtered output when enabled.
+
+The filter is an **8193-tap symmetric, real, Blackman-windowed FIR** applied
+identically to I and Q, implemented using FFT overlap-save. Its fixed group delay
+is **4096 samples**, regardless of filter width (36.864 ms at 111111 samples/s).
+Changing width preserves input history and does not change group delay. Enabling
+or bypassing changes the signal delay and may cause reacquisition; changing width
+can also create a short transition. Bypass preserves the original bytes exactly.
+Width denotes the full **-6 dB** bandwidth, not a brick-wall passband: leave margin
+around the wanted signal. Allowed widths are max(10 Hz, sample-rate/256) through
+95% of sample rate. There is no resampling, decimation, or frequency-dependent
+phase correction. Fixed symmetric coefficients provide linear phase in the
+passband. Hardware throughput and RF lock with the filter need live testing.
+
+For **SDR-IQ with DVB-T 40 kHz**, select `sdriq`, DVB-T, bandwidth `40000`,
+FEC `1/2` and GI `1/32` (matching the transmitter). The defaults are 111111
+samples/s, 28000 kHz, ATT gain +10 dB and `s16`. Set frequency to the converter
+output, not its UHF input. `[sdriq] args` defaults to
+`driver=rfspace,sdr-iq=/dev/ttyUSB0`; change the device path if needed.
+The SDR-IQ sample-rate selector offers 8138, 16276, 37793, 55556, 111111,
+158730 and 196078 samples/s. For 40 kHz DVB-T, start at 111111 or 196078;
+the lowest rates do not cover this signal. RF ATT gain is -20, -10, 0 or +10 dB.
+For the existing DVB-S2 125 ksym/s use case, select 196078 samples/s.
+
+SDR-IQ reception is implemented in C in `sdr_to_stdout`, using SoapyRFSpace CF32
+and the same clipped, rounded CF32-to-s16 conversion as the Python example.
+No Python process is used. Optional `u8` uses the common C helper's full-scale
+s16-to-u8 conversion; the old Python `--scale` boost is not applied.
+Small 2048-sample reads avoid the latency of the high-rate SDR blocks.
+The decoder receives the selected source sample rate; `--resample-to-dvbt-rate`
+converts this to about 45714.286 samples/s for 40 kHz DVB-T at `--dvbt-ir 1`.
+Integer rounding of SDR-IQ rates is tolerated up to 0.5 samples/s; other rate
+changes are rejected. The 40 kHz mode requires a recent `rbdvbt_rx` supporting
+`--sr 40000` and still needs an RF reception test.
+
+DVB-T bandwidth **35 kHz** is also selectable in the C GUI as `35000`
+(or `--standard DVB-T --sr 35000`). Keep the SDR-IQ source sample rate at
+111111 samples/s; the receiver resamples to 40000 samples/s internally for
+35 kHz bandwidth at `--dvbt-ir 1`. This requires `rbdvbt_rx` with 35k support.
+
+```bash
+./build/linrad_dvb --source sdriq --standard DVB-T --sr 40000 --fec 1/2 --gi 1/32
+```
+
+For the first 5 MSym/s test, select DVB-S2, symbol rate `5000000`, FEC `3/4`, and
+sample rate `10000000`. This selects **QPSK 3/4** (`--modcods 0x80`). Set frequency
+and gain for the actual signal. The default DVB-S2 arguments accept normal frames;
+change `--framesizes 1` in `[leandvb]` if the transmitter uses short frames.
+
+HackRF defaults to `u8`: native signed 8-bit samples are offset to unsigned IQ
+without increasing their size. B210 defaults to `s16` to preserve its resolution;
+`u8` is also selectable but discards precision. At 10 MS/s these formats carry
+20 MB/s and 40 MB/s respectively. LeanDVB's normal decoder converts both formats
+to float internally, so the smaller pipe traffic is not a guarantee of faster
+DVB-S2/LDPC decoding. B210 USB transport remains `sc16` with either output format.
+
+The B210 input follows `atv-receiver-analog`: UHD, channel 0, internal clock, and
+Kintex-7 images from `[b210] images` (default
+`/home/rhardenb/repos/ettus/uhd-images`). This directory must contain the matching
+`usrp_b210_fpga.bin` and `usrp_b200_fw.hex`. `[b210] antenna` selects `TX/RX` or `RX2`;
+`args` supplies UHD device selection. `[hackrf] args` supplies Soapy device selection.
+The helper rejects a coerced sample rate instead of silently feeding the decoder
+at the wrong rate. An independent output thread and a bounded 500 ms IQ queue keep USB reception
+running during short decoder stalls (about 20 MB at 10 MS/s with `s16`). Capacity
+is counted in bytes, so short hardware reads do not waste buffer space. The log
+reports RX rate, bytes delivered to the decoder expressed as MS/s, actual queued
+milliseconds and peak queue occupancy once per second and keeps a cumulative count of dropped samples.
+These measurements distinguish an output bottleneck from a hardware overflow.
+Hardware
+overflows are counted and logged, and reception continues so the decoder can
+reacquire after lost samples. When the output queue fills, new complete IQ blocks are dropped and counted;
+previously queued bytes remain intact and reception continues. The first drop is
+logged immediately, followed by periodic throughput/drop counters. This keeps the
+receiver running while searching in noise. Sample gaps can cause loss of lock and
+TS packets; sustained drops with a real signal still require throughput diagnosis.
+Other receive errors remain fatal. Sustained 5 MSym/s decoding still needs a
+hardware/CPU throughput test.
+
+Preview without opening hardware:
+
+```bash
+./build/linrad_dvb --source hackrf --standard DVB-S2 --sr 5000000 --fec 3/4 --print-pipeline
+./build/linrad_dvb --source b210 --standard DVB-S2 --sr 5000000 --fec 3/4 --print-pipeline
+```
+
+`make test` checks pipeline construction, GUI source/parameter changes, and process
+lifecycle using fake decoders; it does not claim an RF lock or hardware throughput.
+
+
+The **Constellatie (DVB-S2)** selector supports QPSK and 8PSK. The FEC list adapts
+to the selection: 8PSK supports 3/5, 2/3, 3/4, 5/6, 8/9 and 9/10; QPSK also
+supports 1/4, 1/3, 2/5, 1/2 and 4/5. Switching keeps the selected FEC if valid;
+otherwise it selects 2/3 for 8PSK or 1/2 for QPSK/DVB-S/DVB-T. This selector only
+controls DVB-S2 and is disabled for the other standards.
+For 5 MSym/s **8PSK 3/4**, select 8PSK and FEC 3/4 (MODCOD 14, mask `0x4000`):
+
+```bash
+./build/linrad_dvb --source b210 --standard DVB-S2 --sr 5000000 --constellation 8PSK --fec 3/4
+```
+
+The CLI rejects unsupported constellation/FEC combinations. Omitting
+`--constellation` retains QPSK; 8PSK without `--fec` defaults to 2/3.
+
+
+`make test-iq-output` checks the threaded IQ queue with a stalled pipe consumer,
+byte-for-byte delivery after reads resume, queue saturation, Stop while blocked,
+and propagation of a closed decoder pipe. The queue absorbs short stalls; it
+cannot compensate for a decoder that is continuously slower than the SDR.
+
+
+DVB-S2 startup defaults omit `--fastlock`. Without a valid signal, aggressive
+frame searches can be much slower than decoding an already acquired clean signal.
+The messages `Unsupported or corrupted FEC` / `MODCOD` can arise from false
+physical-layer-header detections in noise, including operation without an antenna.
+They do not by themselves establish that the transmitter uses the wrong FEC.
+Overflow recovery is not a guarantee of error-free reception: check that the
+`dropped` counter stops increasing once a valid signal has been acquired.
+
+
+`make test-iq-conversion` compares the actual C conversion routines used by the
+SDR helper with `hackrf_s8_to_u8.py` from the original HackRF pipeline. It checks
+all 256 signed-byte representations, all 65,536 signed 16-bit values, block
+boundaries, zero/quantization edges and asymmetric I/Q pairs. HackRF CS8 becomes
+u8 by XOR 0x80. UHD host `sc16` is passed unchanged to `--s16`; conversion to u8
+maps -32768 to 0, 0 to 128 and 32767 to 255, retaining I/Q order. These are format
+tests; they do not validate RF levels, physical I/Q orientation or the attached
+B210 firmware with a known signal.
+
+The legacy `rx_dvb_linrad_leandvb.sh` profiles are not identical receiver setups:
+14/15 use a +500 kHz hardware LO offset and decoder `--tune -500000`, HackRF
+LNA 16 dB / VGA 40 dB, and 50 LDPC bitflips. Profile 16 uses 5 MSym/s, no offset,
+8PSK 3/4 and zero LDPC bitflips, and is labelled `WERKT NIET` in the script.
+The GUI currently uses center tuning and the Soapy aggregate gain control; its
+single gain value does not reproduce that LNA/VGA pair automatically.
+
+### IQ-spectrum en waterfall
+
+De GTK-GUI toont bovenaan eerst de waterval en daaronder het spectrum,
+beide over de volledige breedte en voor alle invoerbronnen. De monitor meet het IQ vóór het bandfilter (in het gekozen uitgangsformaat). De blauwe
+markeringen geven de ingestelde totale filterbreedte aan, met grenzen op
+−BW/2 en +BW/2. Bij uitgeschakeld filter zijn de markeringen gedimd. De toetsen
+`[` en `]` bedienen de bandbreedte vanuit het hoofdvenster. De BW-aanduiding staat
+in het spectrum direct links van de rechter filtergrens en beweegt mee met die
+lijn. De kleine **BW**-knop links in het spectrum, net onder de bovenste as,
+schakelt het IQ-bandfilter aan en uit. De knop is rood wanneer het filter aan
+staat. Er is geen apart IQ-bandfilterpaneel of BW-invoerveld meer.
+Het spectrum in de DVB-ontvanger meet juist
+het doorgegeven signaal ná het filter.
+
+Spectrum en waterfall gebruiken dezelfde vaste, instelbare ondergrens en bereik
+in dBFS/Hz; er is geen automatische niveauregeling. De kleine pijltjes rechts
+in het spectrum wijzigen de schaal met 5 dB per klik: onderaan, net boven de
+onderste as, stel je de ondergrens in; bovenaan, net onder de bovenste as,
+het bereik. Omhoog verhoogt de waarde, omlaag verlaagt deze. De actuele waarde
+staat ook in de tooltip. Meer ingangsruis blijft dus
+zichtbaar zolang de ingang niet clipt. De frequentieas toont de ontvangstfrequentie
+in MHz (SDR/IF + LO-offset). Bij Linrad stel je de middenfrequentie voor de
+weergave handmatig in via **SDR**; dit stemt Linrad zelf niet af.
+De nieuwste waterfallregel staat bovenaan. Bij een gewijzigde frequentie of
+samplerate wordt de historie gewist om oude regels niet onder een nieuwe
+frequentieschaal te tonen. De filtermarkeringen tonen de huidige instelling.
+
+De monitor gebruikt 2048-punts Hann-FFT's, met acht spectra gemiddeld in lineair
+vermogen. Resolutie en updatefrequentie hangen af van de samplerate (maximaal
+10 updates/s). De waterfall toont opeenvolgende ontvangen updates, geen exacte
+tijdas. Telemetrie gaat via een lokale niet-blokkerende UDP-socket; bij drukte
+mogen beeldupdates vervallen zonder op de GUI te wachten. De monitor wijzigt
+geen IQ-samples, versterking, filtercoëfficiënten of samplerate. Er is voor deze
+weergave geen aanpassing aan de DVB-ontvanger nodig.
+
+### IQ-bestanden realtime afspelen
+
+Stop de ontvangst en kies **SDR → Input / SDR → Bestand (IQ)**. Met **Bladeren…**
+kies je de opname. De toepassing leest automatisch het JSON-bestand ernaast
+(`opname.iq.json` of `opname.json`) en vult samplerate, bestandsformaat,
+ontvangstfrequentie en beschikbare DVB-instellingen in. Controleer de samenvatting
+onder **Mode**, sluit de SDR-instellingen en druk rechtsboven op **Start bestand**.
+Dezelfde knop wordt groen en toont **Stop bestand · actief**. De opname speelt
+eenmaal af; aan het einde wordt de decoderuitvoer afgewerkt en stopt de pipeline.
+Een volgende Start begint opnieuw bij het begin. **W** bewaart de bestandskeuze
+en instellingen voor de volgende start van de toepassing.
+
+Ondersteunde opnamen zijn interleaved I,Q: signed 16-bit little-endian (`s16` /
+`cs16_le`), unsigned 8-bit (`u8` / `cu8`) en 32-bit float little-endian
+(`cf32` / `fc32`). Float wordt begrensd tot −1…+1 en naar s16 omgezet voor de
+decoder. Een eventuele header wordt overgeslagen. Samplerate, bestandsformaat,
+headerlengte en middenfrequentie zijn ook handmatig instelbaar onder SDR.
+Zonder voldoende metadata staat er een melding om de instellingen te controleren.
+
+De metadata van datv-transmitter en de afgeleide Airplanescatter-opnamen worden
+ondersteund. Als `parameters.iq_in` naar het oorspronkelijke zendbestand verwijst,
+worden de DVB-instellingen ook uit diens JSON gelezen wanneer dat aanwezig is.
+De metadata van de gekozen opname heeft voorrang. Namen met bijvoorbeeld
+`dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000` leveren ontbrekende DVB- en
+samplerate-instellingen. De gekozen opname bepaalt altijd het sampleformaat en
+de afspeelsamplerate; de samplegegevens uit het oorspronkelijke zendbestand
+worden daarvoor niet gebruikt.
+
+Waterval, spectrum, **BW** en **[ / ]** werken ook tijdens bestandsweergave.
+De ontvangstfrequentie bepaalt alleen de frequentieschaal. Hardware-afstemming
+en gain zijn uitgeschakeld. De ingebouwde `iq_file_to_stdout` speelt op basis van
+het aantal samples en een monotone klok af; als de decoder achterloopt, vertraagt
+het afspelen zonder samples over te slaan. De helper wordt met `make all` gebouwd.
+**Renderer** kiest zoals gebruikelijk een speler of rechtstreekse MPEG-TS-uitvoer.
+
+Vanaf de opdrachtregel kan dit ook:
+
+```bash
+./build/linrad_dvb --iq-file /pad/naar/opname.iq
+./build/linrad_dvb --iq-file /pad/naar/opname.iq --print-pipeline
+./build/linrad_dvb --iq-file /pad/naar/opname.iq --run
+```
+
+### Renderer en rechtstreeks MPEG-TS opslaan
+
+Via **Renderer** kies je VLC, VLC met bediening, een eigen programma of
+**MPEG-TS-bestand**. Het hoofdscherm toont de gekozen uitvoer en Scatterfix-status.
+Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
+
+Een eigen programma krijgt de transportstream op stdin. Geef bij **Programma / pad**
+alleen het uitvoerbare bestand op en vul de opties bij **Argumenten** in.
+`{input}` wordt vervangen door `-` voor stdin of `udp://host:port` bij Scatterfix.
+Gebruik de invoersyntaxis die het gekozen programma ondersteunt; een programma
+dat stdin zonder argument leest, kan lege argumenten gebruiken. Met Scatterfix
+is `{input}` nodig voor de UDP-invoer. Argumenten worden zonder shell uitgevoerd.
+
+**MPEG-TS-bestand** schrijft de decoderuitvoer rechtstreeks naar de opgegeven
+bestandsnaam, zonder speler of Scatterfix. Relatieve paden zijn relatief aan
+de INI-map. De doelmap moet bestaan en het bestand moet nieuw zijn; een bestaand
+bestand wordt niet overschreven. Stop sluit de opname. De bytes worden ongewijzigd
+opgeslagen: de ontvanger voegt geen ontbrekende TS-pakketten toe.
+
+De nieuwe instellingen zijn achterwaarts compatibel; zonder rendererkeuze blijft
+`cvlc` de standaard. `[session] renderer` is `cvlc`, `vlc`, `custom` of `mpegts`.
+Voor een eigen programma gebruik je `[paths] custom_renderer` en `[renderer] args`;
+voor bestandsuitvoer `[renderer] output_file`. VLC gebruikt de bestaande
+`[cvlc] args`; `[paths] vlc` is standaard `vlc`.
