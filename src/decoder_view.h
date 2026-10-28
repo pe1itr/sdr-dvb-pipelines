@@ -2,6 +2,8 @@
 #define DECODER_VIEW_H
 #include <gtk/gtk.h>
 #include "decoder_monitor.h"
+#define DECODER_HISTORY_FRAMES 12
+#define DECODER_HISTORY_AGE (G_USEC_PER_SEC / 2)
 typedef struct {
     GtkWidget *area, *state, *lamps[4], *service, *provider;
     GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer;
@@ -11,6 +13,9 @@ typedef struct {
     gboolean active;
     DecoderStatus status;
     DecoderConstellation points;
+    DecoderConstellation history[DECODER_HISTORY_FRAMES];
+    gint64 history_time[DECODER_HISTORY_FRAMES];
+    unsigned history_next;
     DecoderBuffer queue;
 } DecoderView;
 GtkWidget *decoder_view_create(DecoderView *v);

@@ -29,16 +29,28 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
         cairo_move_to(cr,x,y-4); cairo_line_to(cr,x,y+4);
     }
     cairo_stroke(cr);
-    gboolean fresh=v->active && v->points_time && g_get_monotonic_time()-v->points_time<STATUS_AGE;
+    gint64 now=g_get_monotonic_time();
+    gboolean fresh=v->active && v->points_time && now-v->points_time<STATUS_AGE;
     if (fresh) {
         cairo_save(cr); cairo_rectangle(cr,left,top,size,size); cairo_clip(cr);
-        cairo_set_source_rgb(cr,50./255,205./255,50./255); /* X11 lime green */
-        for (uint32_t i=0;i<v->points.count;++i) {
-            double re=v->points.iq[2*i], im=v->points.iq[2*i+1];
-            if (!isfinite(re) || !isfinite(im)) continue;
-            cairo_rectangle(cr,floor(left+size/2+re*scale),floor(top+size/2-im*scale),1,1);
+        /* Draw oldest first. A half-second history keeps small updates dense;
+         * retain the newest frame across a short pause in incoming telemetry. */
+        for (unsigned f=0;f<DECODER_HISTORY_FRAMES;++f) {
+            unsigned slot=(v->history_next+f)%DECODER_HISTORY_FRAMES;
+            gboolean latest=f==DECODER_HISTORY_FRAMES-1;
+            gint64 age=now-v->history_time[slot];
+            if (!v->history_time[slot] || (!latest && age>=DECODER_HISTORY_AGE)) continue;
+            double alpha=latest ? 1 : .25+.75*(1.-(double)age/DECODER_HISTORY_AGE);
+            cairo_set_source_rgba(cr,50./255,205./255,50./255,alpha);
+            DecoderConstellation *points=&v->history[slot];
+            for (uint32_t i=0;i<points->count;++i) {
+                double re=points->iq[2*i], im=points->iq[2*i+1];
+                if (!isfinite(re) || !isfinite(im)) continue;
+                cairo_rectangle(cr,floor(left+size/2+re*scale),floor(top+size/2-im*scale),1,1);
+            }
+            cairo_fill(cr);
         }
-        cairo_fill(cr); cairo_restore(cr);
+        cairo_restore(cr);
     }
     cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8); cairo_set_font_size(cr,12);
@@ -153,6 +165,8 @@ void decoder_view_stop(DecoderView *v) {
     if (v->fd>=0 && v->port) close(v->fd);
     v->fd=-1; v->port=0; v->active=FALSE;
     v->status_time=v->points_time=v->buffer_time=0;
+    memset(v->history_time,0,sizeof(v->history_time));
+    v->history_next=0;
     memset(&v->queue,0,sizeof(v->queue));
     memset(&v->status,0,sizeof(v->status)); memset(&v->points,0,sizeof(v->points));
 }
@@ -189,6 +203,9 @@ static void receive_frames(DecoderView *v) {
             v->status_time=g_get_monotonic_time();
         } else if (frame.points.type==DECODER_CONSTELLATION && n==sizeof(DecoderConstellation) && frame.points.count<=DECODER_POINTS) {
             v->points=frame.points; v->points_time=g_get_monotonic_time();
+            v->history[v->history_next]=frame.points;
+            v->history_time[v->history_next]=v->points_time;
+            v->history_next=(v->history_next+1)%DECODER_HISTORY_FRAMES;
         } else if (frame.queue.type==DECODER_BUFFER && n==sizeof(DecoderBuffer)) {
             v->queue=frame.queue; v->buffer_time=g_get_monotonic_time();
         }

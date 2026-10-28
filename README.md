@@ -185,7 +185,13 @@ met twee kolommen, dunne scheidingslijnen, rechts uitgelijnde meetwaarden en
 aparte eenheden. De constellatie gebruikt
 dunne limegroene punten, een assenkruis en QPSK-referentiekruisjes zoals het
 oorspronkelijke decodervenster. Nieuwe punten worden ook tijdens demodulatie
-doorgegeven, met maximaal 20 updates per seconde. **Buffer** is het
+doorgegeven, met maximaal 20 updates per seconde. Het constellatievenster houdt
+uitsluitend in het GUI-proces een rollende historie van een halve seconde bij
+(maximaal 12 updates), met vervagende oudere punten. Bij een korte onderbreking
+blijft het laatste beeld staan; Stop/herstart wist ook de historie. Dit verandert
+de decoder, blokgrootte en signaalverwerking niet. De aanvoer van nieuwe punten
+blijft afhankelijk van de decoder: 64 OFDM-symbolen vertegenwoordigen bij
+40 kHz BW en GI 1/32 ongeveer 2,96 seconden signaal. **Buffer** is het
 percentage bezette plaatsen in de OFDM→FEC-wachtrij van 1024 symbolen, exclusief
 het blok dat wordt verwerkt. Deze vulling wordt bij iedere wachtrijwijziging
 doorgegeven, ook als nog geen TS-lock bestaat. Onbekende gegevens tonen `—`.
@@ -894,7 +900,11 @@ in dBFS/Hz; er is geen automatische niveauregeling. De kleine pijltjes rechts
 in het spectrum wijzigen de schaal met 5 dB per klik: onderaan, net boven de
 onderste as, stel je de ondergrens in; bovenaan, net onder de bovenste as,
 het bereik. Omhoog verhoogt de waarde, omlaag verlaagt deze. De actuele waarde
-staat ook in de tooltip. Meer ingangsruis blijft dus
+staat ook in de tooltip. **W** bewaart de ondergrens en het bereik voor spectrum
+en waterval in `[display] floor_dbfs_hz` en `range_db`; bij de volgende start
+worden die waarden hersteld. Deze weergave-instellingen gelden voor alle bronnen.
+Zonder opgeslagen waarden blijft de standaard −160 dBFS/Hz met 100 dB bereik.
+Meer ingangsruis blijft dus
 zichtbaar zolang de ingang niet clipt. De frequentieas toont de ontvangstfrequentie
 in MHz (SDR/IF + LO-offset). Bij Linrad stel je de middenfrequentie voor de
 weergave handmatig in via **SDR**; dit stemt Linrad zelf niet af.

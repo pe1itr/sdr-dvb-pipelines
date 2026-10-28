@@ -710,6 +710,8 @@ static void save_settings(App *a) {
                               a->rate_box};
         for (unsigned i = 0; i < G_N_ELEMENTS(fields); ++i)
             if (gtk_widget_is_sensitive(fields[i])) gtk_spin_button_update(GTK_SPIN_BUTTON(fields[i]));
+        g_key_file_set_double(a->config, "display", "floor_dbfs_hz", a->iq_view.floor);
+        g_key_file_set_double(a->config, "display", "range_db", a->iq_view.span);
     }
     g_key_file_set_string(a->config, "session", "source", sources[a->source]);
     g_key_file_set_string(a->config, "session", "standard", standards[a->standard]);
@@ -1446,7 +1448,7 @@ static void gui(App *a) {
     a->dashboard = gtk_grid_new();
     gtk_grid_set_row_homogeneous(GTK_GRID(a->dashboard), TRUE);
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
-    GtkWidget *view = iq_view_create(&a->iq_view);
+    GtkWidget *view = iq_view_create(&a->iq_view, a->config);
     a->filter_box = a->iq_view.filter_toggle;
     a->scatter_box = gtk_toggle_button_new_with_label("Scatterfix");
     gtk_widget_set_name(a->scatter_box,"spectrum-scatter");

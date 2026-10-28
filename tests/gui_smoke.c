@@ -11,6 +11,22 @@ static void assert_no_tabs(GtkWidget *widget) {
     g_list_free(children);
 }
 
+static gboolean constellation_green_at(DecoderView *v, double re, double im) {
+    int w=gtk_widget_get_allocated_width(v->area), h=gtk_widget_get_allocated_height(v->area);
+    double size=MIN(w,h), scale=size*.43/1.6;
+    int x=floor((w-size)/2+size/2+re*scale), y=floor((h-size)/2+size/2-im*scale);
+    cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_ARGB32,w,h);
+    cairo_t *cr=cairo_create(surface);
+    gboolean handled=FALSE;
+    g_signal_emit_by_name(v->area,"draw",cr,&handled);
+    cairo_surface_flush(surface);
+    uint32_t pixel;
+    memcpy(&pixel,cairo_image_surface_get_data(surface)+y*cairo_image_surface_get_stride(surface)+4*x,4);
+    gboolean green=((pixel>>8)&255) > ((pixel>>16)&255);
+    cairo_destroy(cr); cairo_surface_destroy(surface);
+    return green;
+}
+
 static void exercise_decoder_view(App *a) {
     DecoderView *v=&a->decoder_view;
     g_assert_true(decoder_view_start(v));
@@ -34,6 +50,16 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->buffer)),==,"25");
     g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->lamps[1])),"#36d866"));
     g_assert_cmpint(v->points.count,==,4);
+    /* New frames add to the trail; expired points vanish, even while the
+     * newest frame is retained during a brief pause in incoming telemetry. */
+    points.iq[0]=.4; points.iq[1]=.4;
+    sendto(sender,&points,sizeof(points),0,(struct sockaddr *)&dest,sizeof(dest));
+    decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_true(constellation_green_at(v,.707,.707));
+    g_assert_true(constellation_green_at(v,.4,.4));
+    v->history_time[0]-=DECODER_HISTORY_AGE+10000;
+    g_assert_false(constellation_green_at(v,.707,.707));
+    g_assert_true(constellation_green_at(v,.4,.4));
     status.rms_dbfs=NAN;
     sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest));
     decoder_view_tick(v,TRUE,"DVB-T");
@@ -50,6 +76,8 @@ static void exercise_decoder_view(App *a) {
     g_assert_true(decoder_view_start(v));
     decoder_view_tick(v,TRUE,"DVB-T");
     g_assert_cmpint(v->points.count,==,0);
+    for (unsigned i=0;i<DECODER_HISTORY_FRAMES;++i) g_assert_cmpint(v->history_time[i],==,0);
+    g_assert_false(constellation_green_at(v,.4,.4));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"—");
     decoder_view_stop(v); close(sender);
     decoder_view_tick(v,FALSE,"DVB-S2");
@@ -354,6 +382,10 @@ static gboolean exercise(gpointer data) {
         g_assert_nonnull(strstr(pipeline, "'--sr' '40000'"));
         g_assert_nonnull(strstr(pipeline, "'--sample-rate' '196078'")); g_free(pipeline);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_FILE);
+        /* W must persist display adjustments as well as receiver settings. */
+        gtk_button_clicked(GTK_BUTTON(a->iq_view.level_buttons[0]));
+        gtk_button_clicked(GTK_BUTTON(a->iq_view.level_buttons[3]));
+        double saved_floor=a->iq_view.floor, saved_span=a->iq_view.span;
         event.keyval = GDK_KEY_W;
         g_signal_emit_by_name(a->window, "key-press-event", &event, &handled);
         g_assert_true(handled);
@@ -374,6 +406,21 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpfloat(g_key_file_get_double(restored.config, "sdriq", "lo_offset", NULL), ==, 408000000);
         g_assert_cmpfloat(g_key_file_get_double(restored.config, "sdriq", "frequency", NULL), ==, 28000125);
         g_assert_cmpfloat(g_key_file_get_double(restored.config, "sdriq", "gain", NULL), ==, -10);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "display", "floor_dbfs_hz", NULL), ==, saved_floor);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "display", "range_db", NULL), ==, saved_span);
+        GtkWidget *restored_spectrum=iq_view_create(&restored.iq_view,restored.config);
+        g_object_ref_sink(restored_spectrum);
+        g_assert_cmpfloat(restored.iq_view.floor, ==, saved_floor);
+        g_assert_cmpfloat(restored.iq_view.span, ==, saved_span);
+        close(restored.iq_view.fd);
+        gtk_widget_destroy(restored_spectrum); g_object_unref(restored_spectrum);
+        /* Missing or malformed display settings leave older INIs usable. */
+        g_key_file_remove_group(restored.config,"display",NULL);
+        g_assert_cmpfloat(iq_view_saved_level(restored.config,"floor_dbfs_hz",-160,-200,-10), ==, -160);
+        g_key_file_set_string(restored.config,"display","range_db","nan");
+        g_assert_cmpfloat(iq_view_saved_level(restored.config,"range_db",100,10,160), ==, 100);
+        g_key_file_set_double(restored.config,"display","range_db",0);
+        g_assert_cmpfloat(iq_view_saved_level(restored.config,"range_db",100,10,160), ==, 100);
         g_key_file_unref(restored.config);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_CVLC);
         char *original_path = a->config_path;

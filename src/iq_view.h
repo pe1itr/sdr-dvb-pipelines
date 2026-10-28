@@ -17,16 +17,13 @@ typedef struct {
 static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     IQView *v = data;
     double w=gtk_widget_get_allocated_width(widget), h=gtk_widget_get_allocated_height(widget);
-    double left=65, right=w-40, wf=25, wh=h/2-52;
+    double left=65, right=w-40, wf=5, wh=h/2-32;
     double top=h/2+25, bottom=h-30;
     double floor=v->floor, span=v->span;
     cairo_set_source_rgb(cr, 0,0,0); cairo_paint(cr);
     cairo_select_font_face(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL); cairo_set_font_size(cr,12);
     cairo_set_source_rgb(cr,.9,.9,.9);
     char text[200];
-    gboolean fresh=v->active && v->last_frame && g_get_monotonic_time()-v->last_frame < 2000000;
-    g_snprintf(text,sizeof(text),"IQ vóór filter · %.6f MHz · %s",v->center/1e6,fresh?"live":"geen actuele IQ-data");
-    cairo_move_to(cr,left,18); cairo_show_text(cr,text);
     if (right <= left || wh <= 0) return FALSE;
     for (int j=0;j<=4;++j) {
         double y=top+(bottom-top)*j/4;
@@ -141,13 +138,23 @@ static gboolean iq_view_control_position(GtkOverlay *overlay, GtkWidget *child, 
     return TRUE;
 }
 
-static GtkWidget *iq_view_create(IQView *v) {
+static double iq_view_saved_level(GKeyFile *config, const char *key, double fallback,
+                                  double low, double high) {
+    GError *error=NULL;
+    double value=g_key_file_get_double(config,"display",key,&error);
+    if (error || !isfinite(value) || value<low || value>high) value=fallback;
+    g_clear_error(&error);
+    return value;
+}
+
+static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     v->fd=socket(AF_INET,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
     struct sockaddr_in addr={.sin_family=AF_INET,.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
     socklen_t len=sizeof(addr);
     if(v->fd>=0 && (bind(v->fd,(struct sockaddr *)&addr,sizeof(addr)) || getsockname(v->fd,(struct sockaddr *)&addr,&len))) {close(v->fd);v->fd=-1;}
     if(v->fd>=0) v->port=ntohs(addr.sin_port);
-    v->floor=-160; v->span=100;
+    v->floor=iq_view_saved_level(config,"floor_dbfs_hz",-160,-200,-10);
+    v->span=iq_view_saved_level(config,"range_db",100,10,160);
     v->area=gtk_drawing_area_new(); gtk_widget_set_size_request(v->area,600,280);
     gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ-monitor kon geen lokale socket openen" :
         "Waterval: nieuwste boven. IQ vóór het filter; blauw → groen → geel = meer vermogen. Frequentie in MHz.");
