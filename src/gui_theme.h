@@ -6,7 +6,7 @@
 static void apply_receiver_theme(void) {
     static const char css[] =
         "#frequency-display { font-family: monospace; font-size: 24px; font-weight: bold; }"
-        "#gain-display { font-family: monospace; font-size: 16px; font-weight: bold; }"
+        "#gain-display, #mode-display { font-family: monospace; font-size: 16px; font-weight: bold; }"
         "frame > border { border: 1px solid #777777; border-radius: 3px; }"
         "menubar { background-color: #151515; }"
         "button.spectrum-arrow { min-width: 18px; min-height: 14px; padding: 0; border-radius: 2px; }"

@@ -1412,6 +1412,8 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(root), top_bar, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), menu, FALSE, FALSE, 0);
     a->mode_summary = gtk_label_new("");
+    gtk_widget_set_name(a->mode_summary, "mode-display");
+    gtk_widget_set_margin_start(a->mode_summary, 24);
     gtk_label_set_xalign(GTK_LABEL(a->mode_summary),0);
     gtk_label_set_ellipsize(GTK_LABEL(a->mode_summary),PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(top_bar),a->mode_summary,TRUE,TRUE,6);
