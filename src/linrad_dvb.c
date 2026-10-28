@@ -68,8 +68,9 @@ static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "file"};
 static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Bestand (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
-enum { RENDER_CVLC, RENDER_VLC, RENDER_CUSTOM, RENDER_FILE };
-static const char *renderers[] = {"cvlc", "vlc", "custom", "mpegts"};
+enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE };
+static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts"};
+static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
 static gboolean use_scatter(App *a) { return a->scatter && a->renderer != RENDER_FILE; }
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
@@ -244,6 +245,13 @@ static void build_pipeline(App *a) {
             g_strfreev(parts); g_free(arg);
         }
         g_free(input);
+    } else if (a->renderer == RENDER_FFPLAY) {
+        s = new_stage(a, "ffplay");
+        options(a, s, "ffplay", "args", "-i");
+        /* FFmpeg uses pipe:0 for stdin and UDP URLs without VLC's @. */
+        char *input = use_scatter(a) ? g_strdup(vlc_input) : g_strdup("pipe:0");
+        if (use_scatter(a)) memmove(input+6, input+7, strlen(input+7)+1);
+        add(s, input); g_free(input);
     } else if (a->renderer != RENDER_FILE) {
         s = new_stage(a, renderers[a->renderer]); options(a, s, "cvlc", "args", ""); add(s, vlc_input);
     }
@@ -952,6 +960,10 @@ static void source_defaults(App *a) {
         g_key_file_set_string(a->config, "paths", "sdr", "build/sdr_to_stdout");
     if (!g_key_file_has_key(a->config, "paths", "vlc", NULL))
         g_key_file_set_string(a->config, "paths", "vlc", "vlc");
+    if (!g_key_file_has_key(a->config, "paths", "ffplay", NULL))
+        g_key_file_set_string(a->config, "paths", "ffplay", "ffplay");
+    if (!g_key_file_has_key(a->config, "ffplay", "args", NULL))
+        g_key_file_set_string(a->config, "ffplay", "args", ffplay_args);
     if (!g_key_file_has_key(a->config, "paths", "custom_renderer", NULL))
         g_key_file_set_string(a->config, "paths", "custom_renderer", "mpv");
     if (!g_key_file_has_key(a->config, "renderer", "args", NULL))
@@ -1355,7 +1367,8 @@ static void create_mode_renderer(App *a) {
     a->constellation_box = combo(a->controls, "Constellatie", 4, constellations, 2, a->constellation);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS-uitvoer", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Uitvoer", 0,
-        (const char *[]) {"VLC (cvlc)", "VLC met bediening", "Eigen programma", "MPEG-TS-bestand"}, 4, a->renderer);
+        (const char *[]) {"VLC (cvlc)", "VLC met bediening", "FFplay", "Eigen programma", "MPEG-TS-bestand"},
+        G_N_ELEMENTS(renderers), a->renderer);
     a->scatter_box = gtk_check_button_new_with_label("Scatterfix gebruiken");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), a->scatter);
     gtk_grid_attach(GTK_GRID(a->renderer_panel), a->scatter_box, 0, 1, 2, 1);

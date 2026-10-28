@@ -145,6 +145,16 @@ static gboolean exercise(gpointer data) {
         gtk_dialog_response(GTK_DIALOG(a->mode_dialog), GTK_RESPONSE_CLOSE);
         g_assert_false(gtk_widget_get_visible(a->mode_dialog));
         show_renderer(NULL, a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_FFPLAY);
+        g_assert_true(apply_renderer(a));
+        g_assert_false(gtk_widget_get_sensitive(a->renderer_program));
+        g_assert_true(gtk_widget_get_sensitive(a->scatter_box));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->renderer_summary)), "ffplay"));
+        save_settings(a);
+        char *renderer = g_key_file_get_string(a->config, "session", "renderer", NULL);
+        g_assert_cmpstr(renderer, ==, "ffplay"); g_free(renderer);
+        char *ffplay = describe(a);
+        g_assert_nonnull(strstr(ffplay, "'pipe:0'")); g_free(ffplay);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_CUSTOM);
         gtk_entry_set_text(GTK_ENTRY(a->renderer_args), "'unfinished");
         g_assert_false(apply_renderer(a));

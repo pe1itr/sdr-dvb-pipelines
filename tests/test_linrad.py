@@ -365,6 +365,21 @@ class PipelineTests(unittest.TestCase):
             # Direct file output excludes both the renderer and Scatterfix.
             self.assertEqual(len(self.preview("DVB-S", 125000, "1/2", scatter=True, config=path)), 2)
             self.assertFalse(Path(tmp, "capture with spaces.ts").exists())  # Preview has no side effects.
+            cfg["session"]["renderer"] = "ffplay"
+            # Older INIs have neither the program path nor an ffplay section.
+            cfg["paths"].pop("ffplay", None)
+            cfg.remove_section("ffplay")
+            for scatter in (False, True):
+                self.write_config(cfg, path)
+                commands = self.preview("DVB-S", 125000, "1/2", scatter=scatter, config=path)
+                self.assertEqual(commands[-1], ["ffplay", "-hide_banner", "-loglevel", "warning",
+                    "-autoexit", "-f", "mpegts", "udp://127.0.0.1:1235" if scatter else "pipe:0"])
+                self.assertEqual(len(commands), 4 if scatter else 3)
+            cfg["paths"]["ffplay"] = "players/my ffplay"
+            cfg["ffplay"] = {"args": '-window_title "DVB ontvangst" -f mpegts'}
+            self.write_config(cfg, path)
+            self.assertEqual(self.preview("DVB-T", 40000, "1/2", config=path)[-1],
+                [str(Path(tmp, "players/my ffplay")), "-window_title", "DVB ontvangst", "-f", "mpegts", "pipe:0"])
 
 
 class LifecycleTests(PipelineTests):

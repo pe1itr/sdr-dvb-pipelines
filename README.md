@@ -953,7 +953,7 @@ Vanaf de opdrachtregel kan dit ook:
 
 ### Renderer en rechtstreeks MPEG-TS opslaan
 
-Via **Renderer** kies je VLC, VLC met bediening, een eigen programma of
+Via **Renderer** kies je VLC, VLC met bediening, **FFplay**, een eigen programma of
 **MPEG-TS-bestand**. Het hoofdscherm toont de gekozen uitvoer en Scatterfix-status.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
 
@@ -971,7 +971,12 @@ bestand wordt niet overschreven. Stop sluit de opname. De bytes worden ongewijzi
 opgeslagen: de ontvanger voegt geen ontbrekende TS-pakketten toe.
 
 De nieuwe instellingen zijn achterwaarts compatibel; zonder rendererkeuze blijft
-`cvlc` de standaard. `[session] renderer` is `cvlc`, `vlc`, `custom` of `mpegts`.
+`cvlc` de standaard. `[session] renderer` is `cvlc`, `vlc`, `ffplay`, `custom` of `mpegts`.
 Voor een eigen programma gebruik je `[paths] custom_renderer` en `[renderer] args`;
 voor bestandsuitvoer `[renderer] output_file`. VLC gebruikt de bestaande
 `[cvlc] args`; `[paths] vlc` is standaard `vlc`.
+FFplay gebruikt `[paths] ffplay` (standaard `ffplay`) en eigen opties in
+`[ffplay] args` (standaard `-hide_banner -loglevel warning -autoexit -f mpegts`).
+Het leest MPEG-TS via `pipe:0` of via `udp://host:port` bij Scatterfix.
+Installeer ffplay als het nog niet op het systeem staat; bestaande INI-bestanden
+krijgen de nieuwe standaardwaarden automatisch.
