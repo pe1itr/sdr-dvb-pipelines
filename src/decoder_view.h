@@ -3,7 +3,9 @@
 #include <gtk/gtk.h>
 #include "decoder_monitor.h"
 typedef struct {
-    GtkWidget *area, *state, *lamps[4], *signal, *service, *provider, *buffer, *details;
+    GtkWidget *area, *state, *lamps[4], *service, *provider;
+    GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer;
+    GtkWidget *modulation, *fec, *guard, *packets, *written, *rs_ok, *rs_errors, *cc_errors;
     int fd, port;
     gint64 status_time, points_time, buffer_time;
     gboolean active;

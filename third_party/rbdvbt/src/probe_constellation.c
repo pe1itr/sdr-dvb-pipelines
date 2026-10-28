@@ -1284,6 +1284,11 @@ static void gui_constellation_submit(const complexf_t *points,
 #define VISUALIZER_SPECTRUM_BINS 512u
 #define VISUALIZER_CONSTELLATION_POINTS 768u
 #define VISUALIZER_MIN_INTERVAL_SECONDS 0.20
+#ifdef LINRAD_EMBEDDED_DVBT
+#define CONSTELLATION_MIN_INTERVAL_SECONDS 0.05
+#else
+#define CONSTELLATION_MIN_INTERVAL_SECONDS VISUALIZER_MIN_INTERVAL_SECONDS
+#endif
 
 static void visualizer_submit_spectrum_iq(const complexf_t *samples,
                                           size_t sample_count,
@@ -1393,7 +1398,7 @@ static void visualizer_submit_constellation_points(const complexf_t *points,
 
     now = monotonic_seconds();
     if (visualizer_last_constellation_time > 0.0 &&
-        now - visualizer_last_constellation_time < VISUALIZER_MIN_INTERVAL_SECONDS) {
+        now - visualizer_last_constellation_time < CONSTELLATION_MIN_INTERVAL_SECONDS) {
         return;
     }
     visualizer_last_constellation_time = now;
@@ -8219,6 +8224,17 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             }
         }
 
+        /* Feed the embedded display during demodulation as well as at block
+         * completion, so narrow-band reception does not wait for a full block.
+         * The submission helper throttles these non-blocking UDP updates. */
+#ifdef LINRAD_EMBEDDED_DVBT
+        if (cfg->live_mode && dvbt_monitor_enabled()) {
+            double snr_now = evm_count > 0 && evm_error_sum > 0.0 ?
+                10.0 * log10((double)evm_count / evm_error_sum) : 0.0;
+            visualizer_submit_constellation_points(rx_sio_soft,
+                RBDVBT_DVBT_2K_DATA_CELLS, cfg->sample_rate_hz, snr_now, pilot_lock, cfo_hz);
+        }
+#endif
         if (viterbi_symbols != NULL &&
             viterbi_symbol_cell_count + RBDVBT_DVBT_2K_DATA_CELLS <= viterbi_symbol_cell_cap) {
             memcpy(&viterbi_symbols[viterbi_symbol_cell_count],

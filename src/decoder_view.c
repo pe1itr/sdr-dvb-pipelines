@@ -13,24 +13,34 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
     double w=gtk_widget_get_allocated_width(widget), h=gtk_widget_get_allocated_height(widget);
     double size=fmin(w,h), left=(w-size)/2, top=(h-size)/2;
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
+    cairo_save(cr);
+    cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
     cairo_set_source_rgb(cr,.25,.25,.25); cairo_set_line_width(cr,1);
-    for (int i=1;i<4;++i) {
-        double offset=size*i/4;
-        cairo_move_to(cr,left+offset,top); cairo_line_to(cr,left+offset,top+size);
-        cairo_move_to(cr,left,top+offset); cairo_line_to(cr,left+size,top+offset);
+    cairo_move_to(cr,left+size/2,top); cairo_line_to(cr,left+size/2,top+size);
+    cairo_move_to(cr,left,top+size/2); cairo_line_to(cr,left+size,top+size/2);
+    cairo_stroke(cr);
+    /* Match the original receiver's scale and ideal QPSK reference crosses. */
+    double scale=size*.43/1.6;
+    cairo_set_source_rgb(cr,.65,.65,.65);
+    for (int re=-1;re<=1;re+=2) for (int im=-1;im<=1;im+=2) {
+        double x=floor(left+size/2+re*.70710678*scale)+.5;
+        double y=floor(top+size/2-im*.70710678*scale)+.5;
+        cairo_move_to(cr,x-4,y); cairo_line_to(cr,x+4,y);
+        cairo_move_to(cr,x,y-4); cairo_line_to(cr,x,y+4);
     }
     cairo_stroke(cr);
     gboolean fresh=v->active && v->points_time && g_get_monotonic_time()-v->points_time<STATUS_AGE;
     if (fresh) {
         cairo_save(cr); cairo_rectangle(cr,left,top,size,size); cairo_clip(cr);
-        cairo_set_source_rgba(cr,.25,1,.45,.8);
+        cairo_set_source_rgb(cr,50./255,205./255,50./255); /* X11 lime green */
         for (uint32_t i=0;i<v->points.count;++i) {
             double re=v->points.iq[2*i], im=v->points.iq[2*i+1];
             if (!isfinite(re) || !isfinite(im)) continue;
-            cairo_rectangle(cr,left+size*(.5+re/4)-1,top+size*(.5-im/4)-1,2,2);
+            cairo_rectangle(cr,floor(left+size/2+re*scale),floor(top+size/2-im*scale),1,1);
         }
         cairo_fill(cr); cairo_restore(cr);
     }
+    cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8); cairo_set_font_size(cr,12);
     cairo_move_to(cr,left+6,top+16); cairo_show_text(cr,fresh ? "Q" : "Geen actuele constellatie");
     cairo_move_to(cr,left+size-14,top+size/2-6); cairo_show_text(cr,"I");
@@ -43,6 +53,47 @@ static GtkWidget *label(GtkWidget *box, const char *text) {
     gtk_label_set_ellipsize(GTK_LABEL(l),PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(box),l,FALSE,FALSE,0);
     return l;
+}
+
+static GtkWidget *field(GtkWidget *grid, int column, int row, const char *name,
+                        const char *unit, gboolean numeric) {
+    GtkWidget *caption=gtk_label_new(name), *value=gtk_label_new("—");
+    gtk_style_context_add_class(gtk_widget_get_style_context(caption),"decoder-caption");
+    gtk_style_context_add_class(gtk_widget_get_style_context(value),"decoder-value");
+    gtk_label_set_xalign(GTK_LABEL(caption),0);
+    gtk_grid_attach(GTK_GRID(grid),caption,column,row,1,1);
+    gtk_label_set_xalign(GTK_LABEL(value),numeric ? 1 : 0);
+    /* Bound both size requests so changing digits or missing data cannot
+     * move neighbouring fields. Long values remain available as tooltips. */
+    gtk_label_set_ellipsize(GTK_LABEL(value),PANGO_ELLIPSIZE_END);
+    gtk_label_set_width_chars(GTK_LABEL(value),10);
+    gtk_label_set_max_width_chars(GTK_LABEL(value),10);
+    if (numeric) {
+        PangoAttrList *attrs=pango_attr_list_new();
+        pango_attr_list_insert(attrs,pango_attr_family_new("monospace"));
+        gtk_label_set_attributes(GTK_LABEL(value),attrs);
+        pango_attr_list_unref(attrs);
+    }
+    gtk_grid_attach(GTK_GRID(grid),value,column+1,row,1,1);
+    GtkWidget *units=gtk_label_new(unit);
+    gtk_style_context_add_class(gtk_widget_get_style_context(units),"decoder-unit");
+    gtk_label_set_xalign(GTK_LABEL(units),0);
+    gtk_grid_attach(GTK_GRID(grid),units,column+2,row,1,1);
+    return value;
+}
+
+static GtkWidget *name_field(GtkWidget *grid, int row, const char *name) {
+    GtkWidget *caption=gtk_label_new(name), *value=gtk_label_new("—");
+    gtk_style_context_add_class(gtk_widget_get_style_context(caption),"decoder-caption");
+    gtk_style_context_add_class(gtk_widget_get_style_context(value),"decoder-value");
+    gtk_label_set_xalign(GTK_LABEL(caption),0);
+    gtk_label_set_xalign(GTK_LABEL(value),0);
+    gtk_label_set_ellipsize(GTK_LABEL(value),PANGO_ELLIPSIZE_END);
+    gtk_label_set_width_chars(GTK_LABEL(value),12);
+    gtk_label_set_max_width_chars(GTK_LABEL(value),12);
+    gtk_grid_attach(GTK_GRID(grid),caption,0,row,1,1);
+    gtk_grid_attach(GTK_GRID(grid),value,1,row,5,1);
+    return value;
 }
 
 GtkWidget *decoder_view_create(DecoderView *v) {
@@ -59,17 +110,42 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     GtkWidget *frame=gtk_frame_new("Service-info"), *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
     gtk_container_set_border_width(GTK_CONTAINER(box),8);
     gtk_container_add(GTK_CONTAINER(frame),box);
-    gtk_box_pack_start(GTK_BOX(row),frame,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(row),frame,FALSE,FALSE,0);
     v->state=label(box,"");
     GtkWidget *lamps=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,18);
+    gtk_widget_set_halign(lamps,GTK_ALIGN_START);
+    gtk_box_set_homogeneous(GTK_BOX(lamps),TRUE);
     gtk_box_pack_start(GTK_BOX(box),lamps,FALSE,FALSE,0);
-    for (int i=0;i<4;++i) v->lamps[i]=label(lamps,"");
-    v->signal=label(box,"");
-    v->service=label(box,"Service: —");
-    v->provider=label(box,"Provider: —");
-    v->buffer=label(box,"Buffer: —");
+    for (int i=0;i<4;++i) {
+        v->lamps[i]=label(lamps,"");
+        gtk_label_set_width_chars(GTK_LABEL(v->lamps[i]),9);
+        gtk_label_set_max_width_chars(GTK_LABEL(v->lamps[i]),9);
+        gtk_box_set_child_packing(GTK_BOX(lamps),v->lamps[i],TRUE,TRUE,0,GTK_PACK_START);
+    }
+    GtkWidget *grid=gtk_grid_new();
+    gtk_widget_set_name(grid,"decoder-grid");
+    gtk_widget_set_halign(grid,GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
+    v->snr=field(grid,0,0,"SNR","dB",TRUE);
+    v->pilot=field(grid,3,0,"Pilot","%",TRUE);
+    v->cfo=field(grid,0,1,"CFO","Hz",TRUE);
+    v->buffer=field(grid,3,1,"Buffer","%",TRUE);
+    v->rms=field(grid,0,2,"IQ RMS","dBFS",TRUE);
+    v->peak=field(grid,3,2,"Piek","dBFS",TRUE);
     gtk_widget_set_tooltip_text(v->buffer,"Vulling van de OFDM → FEC-wachtrij; de taak die verwerkt wordt telt niet mee.");
-    v->details=label(box,"");
+    v->service=name_field(grid,3,"Service");
+    v->provider=name_field(grid,4,"Provider");
+    v->modulation=name_field(grid,5,"Mode");
+    v->fec=field(grid,0,6,"FEC","",FALSE);
+    v->guard=field(grid,3,6,"GI","",FALSE);
+    v->packets=field(grid,0,7,"TS","",TRUE);
+    v->written=field(grid,3,7,"Uit","",TRUE);
+    v->rs_ok=field(grid,0,8,"RS goed","",TRUE);
+    v->rs_errors=field(grid,3,8,"RS fout","",TRUE);
+    v->cc_errors=field(grid,0,9,"CC-fouten","",TRUE);
+    GtkWidget *empty=gtk_label_new("");
+    gtk_style_context_add_class(gtk_widget_get_style_context(empty),"decoder-caption");
+    gtk_grid_attach(GTK_GRID(grid),empty,3,9,3,1);
     return row;
 }
 
@@ -119,16 +195,18 @@ static void receive_frames(DecoderView *v) {
     }
 }
 
-static void set_name(GtkWidget *widget, const char *prefix, const char *value) {
-    char *valid=g_utf8_make_valid(value,-1), *text=g_strdup_printf("%s: %s",prefix,*valid ? valid : "—");
-    gtk_label_set_text(GTK_LABEL(widget),text);
-    gtk_widget_set_tooltip_text(widget,text);
-    g_free(valid); g_free(text);
+static void set_value(GtkWidget *widget, const char *value) {
+    char *valid=g_utf8_make_valid(value,-1);
+    gtk_label_set_text(GTK_LABEL(widget),*valid ? valid : "—");
+    gtk_widget_set_tooltip_text(widget,*valid ? valid : NULL);
+    g_free(valid);
 }
 
-static void measurement(char text[32], const char *format, double value) {
+static void measurement(GtkWidget *widget, const char *format, double value) {
+    char text[32];
     if (isfinite(value)) g_snprintf(text,32,format,value);
     else g_strlcpy(text,"—",32);
+    set_value(widget,text);
 }
 
 void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
@@ -149,28 +227,26 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         gtk_label_set_markup(GTK_LABEL(v->lamps[i]),text);
     }
     if (fresh) {
-        char snr[32], pilot[32], cfo[32], rms[32], peak[32];
-        measurement(snr,"%.1f",s->snr_db); measurement(pilot,"%.0f",100*s->pilot_lock);
-        measurement(cfo,"%+.1f",s->cfo_hz); measurement(rms,"%.1f",s->rms_dbfs); measurement(peak,"%.1f",s->peak_dbfs);
-        g_snprintf(text,sizeof(text),"SNR %s dB · Pilot %s%% · CFO %s Hz\nIQ RMS %s dBFS · Piek %s dBFS",
-            snr,pilot,cfo,rms,peak);
-        gtk_label_set_text(GTK_LABEL(v->signal),text);
-        set_name(v->service,"Service",s->service); set_name(v->provider,"Provider",s->provider);
+        measurement(v->snr,"%.1f",s->snr_db); measurement(v->pilot,"%.0f",100*s->pilot_lock);
+        measurement(v->cfo,"%+.1f",s->cfo_hz);
+        measurement(v->rms,"%.1f",s->rms_dbfs); measurement(v->peak,"%.1f",s->peak_dbfs);
+        set_value(v->service,s->service); set_value(v->provider,s->provider);
         if (s->buffer_valid && isfinite(s->buffer_percent))
-            g_snprintf(text,sizeof(text),"Buffer: %.0f%%",CLAMP(s->buffer_percent,0,100));
-        else g_snprintf(text,sizeof(text),"Buffer: —");
+            g_snprintf(text,sizeof(text),"%.0f",CLAMP(s->buffer_percent,0,100));
+        else g_snprintf(text,sizeof(text),"—");
         gtk_label_set_text(GTK_LABEL(v->buffer),text);
-        g_snprintf(text,sizeof(text),"%s · FEC %s · GI %s\nTS %u · Uit %u · RS goed %u / fout %u · CC-fouten %u",
-            s->modulation,s->fec,s->guard,s->packets,s->written_packets,s->rs_ok,s->rs_uncorrectable,s->cc_errors);
-        char *valid=g_utf8_make_valid(text,-1); gtk_label_set_text(GTK_LABEL(v->details),valid); g_free(valid);
+        set_value(v->modulation,s->modulation); set_value(v->fec,s->fec); set_value(v->guard,s->guard);
+        measurement(v->packets,"%.0f",s->packets); measurement(v->written,"%.0f",s->written_packets);
+        measurement(v->rs_ok,"%.0f",s->rs_ok); measurement(v->rs_errors,"%.0f",s->rs_uncorrectable);
+        measurement(v->cc_errors,"%.0f",s->cc_errors);
     } else {
-        gtk_label_set_text(GTK_LABEL(v->signal),"SNR — · Pilot — · CFO —\nIQ RMS — · Piek —");
-        set_name(v->service,"Service",""); set_name(v->provider,"Provider","");
-        gtk_label_set_text(GTK_LABEL(v->buffer),"Buffer: —");
-        gtk_label_set_text(GTK_LABEL(v->details),"");
+        GtkWidget *fields[]={v->snr,v->pilot,v->cfo,v->rms,v->peak,v->service,v->provider,
+            v->modulation,v->fec,v->guard,v->packets,v->written,v->rs_ok,v->rs_errors,v->cc_errors};
+        for (size_t i=0;i<G_N_ELEMENTS(fields);++i) set_value(fields[i],"");
+        gtk_label_set_text(GTK_LABEL(v->buffer),"—");
     }
     if (active && v->buffer_time && g_get_monotonic_time()-v->buffer_time<STATUS_AGE && v->queue.capacity) {
-        g_snprintf(text,sizeof(text),"Buffer: %.0f%%",CLAMP(100. * v->queue.queued/v->queue.capacity,0,100));
+        g_snprintf(text,sizeof(text),"%.0f",CLAMP(100. * v->queue.queued/v->queue.capacity,0,100));
         gtk_label_set_text(GTK_LABEL(v->buffer),text);
     }
     gtk_widget_queue_draw(v->area);

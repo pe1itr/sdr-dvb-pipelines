@@ -161,7 +161,7 @@ van DSP-werk en maakt een volgende start onafhankelijk van oude decoderstatus.
 
 | Onderdeel | Werk |
 |---|---|
-| GTK-hoofdproces | Bediening, spectrum/waterval en ontvangstpanelen, maximaal 10 GUI-updates/s |
+| GTK-hoofdproces | Bediening en spectrum/waterval op 10 updates/s; decoderpaneel op maximaal 20 updates/s |
 | Bronhelper | SDR/Linrad/bestandsinvoer, bandfilter en bestaande IQ-monitor; hardware-uitvoer heeft een eigen begrensde wachtrij |
 | `dvbt-iq` | IQ uit de pipe lezen en in de begrensde invoerring plaatsen |
 | `dvbt-ofdm` | Resampling, timing/AFC, FFT, pilots en equalizing |
@@ -178,7 +178,12 @@ begrensde buffers en overflowmeldingen blijven daarom nodig.
 
 Het vierkante constellatiepaneel staat direct onder het spectrum, links van
 **Service-info**. Dat toont OFDM/FEC/TS/service-lampjes, SNR, pilot-lock, CFO,
-IQ-niveaus, service- en providernaam en pakketstatistieken. **Buffer** is het
+IQ-niveaus, service- en providernaam en pakketstatistieken in een compact raster
+met twee kolommen, dunne scheidingslijnen, rechts uitgelijnde meetwaarden en
+aparte eenheden. De constellatie gebruikt
+dunne limegroene punten, een assenkruis en QPSK-referentiekruisjes zoals het
+oorspronkelijke decodervenster. Nieuwe punten worden ook tijdens demodulatie
+doorgegeven, met maximaal 20 updates per seconde. **Buffer** is het
 percentage bezette plaatsen in de OFDM→FEC-wachtrij van 1024 symbolen, exclusief
 het blok dat wordt verwerkt. Deze vulling wordt bij iedere wachtrijwijziging
 doorgegeven, ook als nog geen TS-lock bestaat. Onbekende gegevens tonen `—`.

@@ -867,6 +867,12 @@ static gboolean exit_signal(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static gboolean decoder_tick(gpointer data) {
+    App *a=data;
+    decoder_view_tick(&a->decoder_view, a->running && !a->stopping && a->standard == 2, standards[a->standard]);
+    return G_SOURCE_CONTINUE;
+}
+
 static gboolean monitor_tick(gpointer data) {
     App *a = data;
     const char *section = sources[a->source];
@@ -881,7 +887,6 @@ static gboolean monitor_tick(gpointer data) {
     }
     a->iq_view.center = center; a->iq_view.rate = rate;
     iq_view_receive(&a->iq_view);
-    decoder_view_tick(&a->decoder_view, a->running && !a->stopping && a->standard == 2, standards[a->standard]);
     return G_SOURCE_CONTINUE;
 }
 
@@ -1392,7 +1397,7 @@ static void gui(App *a) {
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(a->window), root);
     GtkWidget *menu = gtk_menu_bar_new();
-    GtkWidget *config_item = gtk_menu_item_new_with_label("SDR"), *info_item = gtk_menu_item_new_with_label("Info");
+    GtkWidget *config_item = gtk_menu_item_new_with_label("Input"), *info_item = gtk_menu_item_new_with_label("Info");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), config_item);
     GtkWidget *mode_item = gtk_menu_item_new_with_label("Mode"), *renderer_item = gtk_menu_item_new_with_label("Renderer");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mode_item);
@@ -1486,7 +1491,9 @@ static void gui(App *a) {
     g_signal_connect(a->power_button, "clicked", G_CALLBACK(power_clicked), a);
     g_signal_connect(a->window, "delete-event", G_CALLBACK(window_close), a);
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
-    monitor_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); gtk_main();
+    guint decoder_timer = g_timeout_add(50, decoder_tick, a);
+    monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); gtk_main();
+    g_source_remove(decoder_timer);
     g_source_remove(a->iq_view.timer);
     decoder_view_stop(&a->decoder_view);
     if (a->iq_view.fd >= 0) close(a->iq_view.fd);
