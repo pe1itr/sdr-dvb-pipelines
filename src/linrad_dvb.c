@@ -732,9 +732,21 @@ static void save_settings(App *a) {
     g_free(message); g_free(contents); g_clear_error(&error);
 }
 
+static void show_config(GtkWidget *widget, gpointer data);
+static void show_mode(GtkWidget *widget, gpointer data);
+static void show_renderer(GtkWidget *widget, gpointer data);
+static void show_about(GtkWidget *widget, gpointer data);
+
 static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
     App *a = data; (void)widget;
     if (event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK)) return FALSE;
+    switch (gdk_keyval_to_lower(event->keyval)) {
+    case GDK_KEY_i: show_config(NULL,a); return TRUE;
+    case GDK_KEY_m: show_mode(NULL,a); return TRUE;
+    case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
+    case GDK_KEY_a: show_about(NULL,a); return TRUE;
+    default: break;
+    }
     if (event->keyval == GDK_KEY_w || event->keyval == GDK_KEY_W) { save_settings(a); return TRUE; }
     if (event->keyval == GDK_KEY_bracketleft) { filter_step(a, -1); return TRUE; }
     if (event->keyval == GDK_KEY_bracketright) { filter_step(a, 1); return TRUE; }
@@ -1170,26 +1182,65 @@ static void show_config(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->config_dialog));
 }
 
-static void show_info(GtkWidget *widget, gpointer data) {
+static GtkWidget *about_label(GtkWidget *box, const char *text, const char *style) {
+    GtkWidget *label=gtk_label_new(text);
+    gtk_label_set_xalign(GTK_LABEL(label),0);
+    gtk_label_set_line_wrap(GTK_LABEL(label),TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(label),64);
+    gtk_label_set_selectable(GTK_LABEL(label),TRUE);
+    if (style) gtk_style_context_add_class(gtk_widget_get_style_context(label),style);
+    gtk_box_pack_start(GTK_BOX(box),label,FALSE,FALSE,0);
+    return label;
+}
+
+static void show_about(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
-    GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(a->window), GTK_DIALOG_MODAL,
-        GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE, "Linrad DVB · PE1ITR");
-    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog),
-        "← / →  ontvangstfrequentie omlaag / omhoog\n"
-        "↑ / ↓  gain omhoog / omlaag\n"
-        "[ / ]  IQ-bandbreedte kleiner / groter (filter aan)\n"
-        "W  configuratie opslaan\n\n"
-        "Sneltoetsen werken in het hoofdvenster, ook tijdens ontvangst.\n"
-        "Knop rechtsboven: Start SDR / Stop SDR.\n"
-        "Lampje: grijs = uit, groen = actief, geel = stoppen, rood = fout.\n"
-        "SDR: hardware of Bestand (IQ), samplerate en instellingen.\n"
-        "Bestand: kies IQ + JSON-metadata, Start bestand speelt realtime af.\n"
-        "Mode: DVB-mode, symbolrate / BW, FEC en modulatie.\n"
-        "Renderer: speler, eigen programma of MPEG-TS-bestand.\n"
-        "Hardware, DVB en renderer wijzigen bij Stop.\n"
-        "Bij Linrad regel je frequentie en gain in Linrad zelf.\n"
-        "De ontvangstfrequentie is SDR-frequentie + LO-offset.\n"
-        "Waterval: nieuwste regel boven; schaal in MHz.\n\nConfig: %s", a->config_path);
+    GtkWidget *dialog=gtk_dialog_new_with_buttons("About · Linrad DVB",GTK_WINDOW(a->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Sluiten",GTK_RESPONSE_CLOSE,NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog),580,-1);
+    GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,12);
+    gtk_container_set_border_width(GTK_CONTAINER(box),18);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),box,TRUE,TRUE,0);
+    about_label(box,"linrad_dvb","about-title");
+    about_label(box,"linrad_dvb is een softwareprogramma voor radioamateurs die digitale "
+        "amateurtelevisie bij zwakke signalen ontvangen (weak signal).",NULL);
+    about_label(box,"Gemaakt door Rob Hardenberg, PE1ITR.",NULL);
+    /* Compiler timestamps identify this executable, not the date it is opened. */
+    about_label(box,"Builddatum: " __DATE__ " · " __TIME__,"about-meta");
+    about_label(box,"Toetsen","about-heading");
+    GtkWidget *grid=gtk_grid_new();
+    gtk_widget_set_name(grid,"about-shortcuts");
+    gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
+    const char *shortcuts[][2]={
+        {"Toets","Omschrijving"},
+        {"I","Input openen"},
+        {"M","Mode openen"},
+        {"R","Renderer openen"},
+        {"A","About openen"},
+        {"← / →","Ontvangstfrequentie verlagen / verhogen"},
+        {"↑ / ↓","Gain verhogen / verlagen"},
+        {"[ / ]","IQ-bandfilter smaller / breder maken"},
+        {"W","Instellingen opslaan, inclusief spectrum en waterval"}
+    };
+    for (unsigned row=0;row<G_N_ELEMENTS(shortcuts);++row) {
+        for (int column=0;column<2;++column) {
+            GtkWidget *cell=gtk_label_new(shortcuts[row][column]);
+            gtk_label_set_xalign(GTK_LABEL(cell),column ? 0 : .5);
+            gtk_label_set_line_wrap(GTK_LABEL(cell),TRUE);
+            gtk_style_context_add_class(gtk_widget_get_style_context(cell),
+                row==0 ? "about-table-heading" : column==0 ? "about-key" : "about-description");
+            if (column==0) gtk_label_set_width_chars(GTK_LABEL(cell),10);
+            else {
+                gtk_widget_set_hexpand(cell,TRUE);
+                gtk_label_set_max_width_chars(GTK_LABEL(cell),48);
+            }
+            gtk_grid_attach(GTK_GRID(grid),cell,column,row,1,1);
+        }
+    }
+    about_label(box,"Sneltoetsen werken in het hoofdvenster, ook met kleine letters en tijdens ontvangst. "
+        "In instellingenschermen blijven de toetsen beschikbaar voor tekstinvoer.","about-meta");
+    about_label(box,"Bij Linrad regel je frequentie en gain in Linrad zelf.","about-meta");
+    gtk_widget_show_all(dialog);
     gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
 }
 
@@ -1402,12 +1453,16 @@ static void gui(App *a) {
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(a->window), root);
     GtkWidget *menu = gtk_menu_bar_new();
-    GtkWidget *config_item = gtk_menu_item_new_with_label("Input"), *info_item = gtk_menu_item_new_with_label("Info");
+    GtkWidget *config_item = gtk_menu_item_new_with_label("Input"), *about_item = gtk_menu_item_new_with_label("About");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), config_item);
     GtkWidget *mode_item = gtk_menu_item_new_with_label("Mode"), *renderer_item = gtk_menu_item_new_with_label("Renderer");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mode_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), renderer_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), info_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), about_item);
+    gtk_widget_set_tooltip_text(config_item, "Input openen · I");
+    gtk_widget_set_tooltip_text(mode_item, "Mode openen · M");
+    gtk_widget_set_tooltip_text(renderer_item, "Renderer openen · R");
+    gtk_widget_set_tooltip_text(about_item, "About openen · A");
     g_signal_connect(mode_item, "activate", G_CALLBACK(show_mode), a);
     g_signal_connect(renderer_item, "activate", G_CALLBACK(show_renderer), a);
     GtkWidget *top_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
@@ -1442,7 +1497,7 @@ static void gui(App *a) {
     gtk_box_pack_end(GTK_BOX(top_bar), a->power_button, FALSE, FALSE, 0);
     power_refresh(a);
     g_signal_connect(config_item, "activate", G_CALLBACK(show_config), a);
-    g_signal_connect(info_item, "activate", G_CALLBACK(show_info), a);
+    g_signal_connect(about_item, "activate", G_CALLBACK(show_about), a);
 
     /* Two equally sized halves: waterfall + spectrum, then controls + logs. */
     a->dashboard = gtk_grid_new();

@@ -84,7 +84,8 @@ make
 
 De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
-**Input**, **Mode**, **Renderer** en **Info** (PE1ITR en de sneltoetsen).
+**Input**, **Mode**, **Renderer** en **About**. About toont een korte uitleg,
+Rob Hardenberg / PE1ITR als maker, de builddatum en de sneltoetsen in een raster.
 De waterval en het spectrum nemen elk een kwart van het werkvlak in.
 De bovenbalk toont achtereenvolgens mode, Symb/s (satelliet) of BW in Hz (DVB-T),
 en FEC. Frequentie en gain staan op dezelfde regel als Start/Stop.
@@ -106,6 +107,8 @@ uitklapbare **Opstartcommando / Log**.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
 - **Renderer**: VLC (`cvlc`), VLC met bediening, FFplay, een eigen programma of een
   MPEG-TS-bestand.
+- **I / M / R / A**: open respectievelijk Input, Mode, Renderer en About.
+  Kleine letters werken ook; Alt of Ctrl is niet nodig.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
   Deze toetsen gelden in het hoofdvenster, ook tijdens ontvangst.

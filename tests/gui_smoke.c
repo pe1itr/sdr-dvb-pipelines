@@ -129,6 +129,58 @@ static void exercise_file_selection(App *a) {
     g_free(path); g_free(metadata);
 }
 
+static gboolean close_about(gpointer data) {
+    gboolean *seen=data;
+    GList *windows=gtk_window_list_toplevels();
+    for (GList *p=windows;p;p=p->next) {
+        if (GTK_IS_DIALOG(p->data) && gtk_widget_get_visible(p->data) &&
+            !g_strcmp0(gtk_window_get_title(GTK_WINDOW(p->data)),"About · Linrad DVB")) {
+            *seen=TRUE;
+            const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
+            if (screenshot) {
+                GtkRequisition minimum,natural;
+                gtk_widget_get_preferred_size(p->data,&minimum,&natural);
+                GtkAllocation allocation={0,0,MAX(580,minimum.width),natural.height};
+                gtk_widget_size_allocate(p->data,&allocation);
+                cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,allocation.width,allocation.height);
+                cairo_t *cr=cairo_create(surface);
+                gtk_widget_draw(p->data,cr);
+                char *dir=g_path_get_dirname(screenshot), *path=g_build_filename(dir,"about-smoke.png",NULL);
+                g_assert_cmpint(cairo_surface_write_to_png(surface,path),==,CAIRO_STATUS_SUCCESS);
+                g_free(dir); g_free(path); cairo_destroy(cr); cairo_surface_destroy(surface);
+            }
+            gtk_dialog_response(GTK_DIALOG(p->data),GTK_RESPONSE_CLOSE);
+        }
+    }
+    g_list_free(windows);
+    return G_SOURCE_REMOVE;
+}
+
+static void exercise_menu_shortcuts(App *a) {
+    const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r};
+    GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog};
+    gtk_window_set_focus(GTK_WINDOW(a->window),a->power_button);
+    for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) for (unsigned upper=0;upper<2;++upper) {
+        GdkEventKey event={.keyval=upper ? gdk_keyval_to_upper(keys[i]) : keys[i]};
+        gboolean handled=FALSE;
+        g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
+        g_assert_true(handled);
+        g_assert_true(gtk_widget_get_visible(dialogs[i]));
+        gtk_dialog_response(GTK_DIALOG(dialogs[i]),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(dialogs[i]));
+        event.state=GDK_CONTROL_MASK;
+        g_assert_false(tuning_key(a->window,&event,a));
+        g_assert_false(gtk_widget_get_visible(dialogs[i]));
+    }
+    for (unsigned upper=0;upper<2;++upper) {
+        gboolean seen=FALSE, handled=FALSE;
+        GdkEventKey event={.keyval=upper ? GDK_KEY_A : GDK_KEY_a};
+        g_idle_add(close_about,&seen);
+        g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
+        g_assert_true(handled); g_assert_true(seen);
+    }
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
@@ -161,6 +213,7 @@ static gboolean exercise(gpointer data) {
             g_assert_cmpint(cairo_surface_write_to_png(surface, screenshot), ==, CAIRO_STATUS_SUCCESS);
             cairo_destroy(cr); cairo_surface_destroy(surface);
         }
+        exercise_menu_shortcuts(a);
         show_config(NULL, a);
         g_assert_true(gtk_widget_get_visible(a->config_dialog));
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->center_box), 437.125);
