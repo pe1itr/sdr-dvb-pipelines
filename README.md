@@ -84,26 +84,28 @@ make
 
 De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
-**SDR**, **Mode**, **Renderer** en **Info** (PE1ITR en de sneltoetsen).
+**Input**, **Mode**, **Renderer** en **Info** (PE1ITR en de sneltoetsen).
 De waterval en het spectrum nemen elk een kwart van het werkvlak in.
-Frequentie en gain staan bovenin op dezelfde regel als Start/Stop.
+De bovenbalk toont achtereenvolgens mode, Symb/s (satelliet) of BW in Hz (DVB-T),
+en FEC. Frequentie en gain staan op dezelfde regel als Start/Stop.
 De bediening gaat met de pijltjestoetsen; er zijn geen plus/min-knoppen.
 Onder het spectrum staan links een vierkante constellatie en rechts service-info.
-Daaronder staat één compact paneel **Mode / Renderer**.
-Dit toont alleen een samenvatting: wijzigen
-doe je via hun menu. Rechtsboven staat één knop met een statuslampje: **Start SDR** bij uitgeschakelde
+Mode en renderer wijzigen doe je via hun menu. Naast **BW** staat de knop
+**Scatterfix**, rood wanneer ingeschakeld. Schakel Scatterfix bij gestopte
+ontvangst; bij rechtstreekse MPEG-TS-bestandsuitvoer is de knop uitgeschakeld.
+Rechtsboven staat één knop met een statuslampje: **Start SDR** bij uitgeschakelde
 ontvangst, **Stop SDR · actief** met een groene knop en groen lampje tijdens
 ontvangst. Tijdens stoppen is de knop geel en tijdelijk geblokkeerd; na een fout
 wordt hij rood en kun je opnieuw starten. Onderaan staan de status en het
 uitklapbare **Opstartcommando / Log**.
 
-- **SDR**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
+- **Input**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
   device-argumenten, antenne en UHD-images;
   bij Linrad het UDP-adres, de poort, de headerlengte en de frequentie voor de schaal.
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
-- **Renderer**: VLC (`cvlc`), VLC met bediening, een eigen programma of een
-  MPEG-TS-bestand, plus Scatterfix aan/uit.
+- **Renderer**: VLC (`cvlc`), VLC met bediening, FFplay, een eigen programma of een
+  MPEG-TS-bestand.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
   Deze toetsen gelden in het hoofdvenster, ook tijdens ontvangst.
@@ -954,7 +956,8 @@ Vanaf de opdrachtregel kan dit ook:
 ### Renderer en rechtstreeks MPEG-TS opslaan
 
 Via **Renderer** kies je VLC, VLC met bediening, **FFplay**, een eigen programma of
-**MPEG-TS-bestand**. Het hoofdscherm toont de gekozen uitvoer en Scatterfix-status.
+**MPEG-TS-bestand**. De rendererkeuze staat in dit menu; Scatterfix bedien je met
+de knop naast **BW** in het spectrum.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
 
 Een eigen programma krijgt de transportstream op stdin. Geef bij **Programma / pad**

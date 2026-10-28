@@ -113,8 +113,9 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_get_parent(a->gain_display) == gtk_widget_get_parent(a->power_button));
         g_assert_false(gtk_widget_is_ancestor(a->standard_box, a->window));
         g_assert_false(gtk_widget_is_ancestor(a->renderer_box, a->window));
-        g_assert_true(gtk_widget_is_ancestor(a->mode_summary, a->window));
-        g_assert_true(gtk_widget_is_ancestor(a->renderer_summary, a->window));
+        g_assert_true(gtk_widget_get_parent(a->mode_summary) == gtk_widget_get_parent(a->power_button));
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->mode_summary)), ==, "DVB-S · Symb/s 125000 · FEC 1/2");
+        g_assert_true(gtk_widget_get_parent(a->scatter_box) == gtk_widget_get_parent(a->filter_box));
         g_assert_cmpint(abs(2*gtk_widget_get_allocated_height(a->iq_view.area) -
                            gtk_widget_get_allocated_height(a->dashboard)), <=, 1);
         const char *screenshot = g_getenv("LINRAD_GUI_SCREENSHOT");
@@ -149,7 +150,7 @@ static gboolean exercise(gpointer data) {
         g_assert_true(apply_renderer(a));
         g_assert_false(gtk_widget_get_sensitive(a->renderer_program));
         g_assert_true(gtk_widget_get_sensitive(a->scatter_box));
-        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->renderer_summary)), "ffplay"));
+        g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->renderer_box)), ==, RENDER_FFPLAY);
         save_settings(a);
         char *renderer = g_key_file_get_string(a->config, "session", "renderer", NULL);
         g_assert_cmpstr(renderer, ==, "ffplay"); g_free(renderer);
@@ -169,7 +170,7 @@ static gboolean exercise(gpointer data) {
         g_assert_false(gtk_widget_get_visible(a->renderer_dialog));
         g_assert_cmpint(a->stage_count, ==, 2);
         g_assert_false(gtk_widget_get_sensitive(a->scatter_box));
-        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->renderer_summary)), "recording with spaces.ts"));
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->output_file)), ==, "recording with spaces.ts");
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_CVLC);
         /* Exercise telemetry reception and both Cairo displays with real bins. */
         g_assert_cmpint(a->iq_view.port, >, 0);
@@ -348,7 +349,7 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)), ==, "436.000125 MHz");
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), 2);
         g_assert_cmpint(a->sr, ==, 40000);
-        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->mode_summary)), "Bandbreedte: 40000 Hz"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->mode_summary)), "DVB-T · BW 40000 Hz · FEC"));
         pipeline = describe(a);
         g_assert_nonnull(strstr(pipeline, "'--sr' '40000'"));
         g_assert_nonnull(strstr(pipeline, "'--sample-rate' '196078'")); g_free(pipeline);
@@ -395,6 +396,10 @@ static gboolean exercise(gpointer data) {
         g_assert_false(gtk_widget_get_sensitive(a->controls));
         g_assert_false(gtk_widget_get_sensitive(a->hardware));
         g_assert_false(gtk_widget_get_sensitive(a->renderer_panel));
+        g_assert_false(gtk_widget_is_sensitive(a->scatter_box));
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
+        g_assert_true(a->scatter);
+        g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->scatter_box)));
         g_assert_true(gtk_widget_is_sensitive(a->filter_box));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stop SDR · actief");
@@ -410,6 +415,7 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Start SDR");
         g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->power_button), "receiver-off"));
         g_assert_true(gtk_widget_get_sensitive(a->controls));
+        g_assert_true(gtk_widget_is_sensitive(a->scatter_box));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);

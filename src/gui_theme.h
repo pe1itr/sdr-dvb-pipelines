@@ -45,10 +45,10 @@ static void apply_receiver_theme(void) {
         "#receiver-power.receiver-stopping .power-lamp { color: #ffdb60; }"
         "#receiver-power.receiver-error { background-color: #6a2020; border-color: #ff7777; }"
         "#receiver-power.receiver-error .power-lamp { color: #ff8888; }"
-        "#spectrum-bw { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; }"
-        "#spectrum-bw label { background-color: transparent; }"
-        "#spectrum-bw:checked { background-color: #b52323; border-color: #ff7070; color: #ffffff; }"
-        "#spectrum-bw:checked:hover { background-color: #d02b2b; }";
+        "#spectrum-bw, #spectrum-scatter { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; }"
+        "#spectrum-bw label, #spectrum-scatter label { background-color: transparent; }"
+        "#spectrum-bw:checked, #spectrum-scatter:checked { background-color: #b52323; border-color: #ff7070; color: #ffffff; }"
+        "#spectrum-bw:checked:hover, #spectrum-scatter:checked:hover { background-color: #d02b2b; }";
     GtkCssProvider *provider = gtk_css_provider_new();
     GError *error = NULL;
     if (!gtk_css_provider_load_from_data(provider, css, -1, &error)) {

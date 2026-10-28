@@ -5,7 +5,7 @@
 #include <sys/socket.h>
 #define IQ_VIEW_ROWS 180
 typedef struct {
-    GtkWidget *area, *floor_controls, *span_controls, *level_buttons[4], *filter_toggle;
+    GtkWidget *area, *floor_controls, *span_controls, *level_buttons[4], *filter_toggle, *filter_controls;
     int fd, port, rows;
     guint timer;
     IQMonitorFrame frame;
@@ -131,11 +131,11 @@ static void iq_view_level_clicked(GtkButton *button, gpointer data) {
 /* Anchor the controls to the spectrum axes, including after resizing. */
 static gboolean iq_view_control_position(GtkOverlay *overlay, GtkWidget *child, GdkRectangle *rect, gpointer data) {
     (void)overlay; IQView *v=data;
-    if (child!=v->floor_controls && child!=v->span_controls && child!=v->filter_toggle) return FALSE;
+    if (child!=v->floor_controls && child!=v->span_controls && child!=v->filter_controls) return FALSE;
     GtkRequisition size;
     gtk_widget_get_preferred_size(child,NULL,&size);
     int w=gtk_widget_get_allocated_width(v->area), h=gtk_widget_get_allocated_height(v->area);
-    *rect=(GdkRectangle){child==v->filter_toggle ? 69 : w-size.width-5,
+    *rect=(GdkRectangle){child==v->filter_controls ? 69 : w-size.width-5,
                          child==v->floor_controls ? h-33-size.height : h/2+28,
                          size.width, size.height};
     return TRUE;
@@ -161,7 +161,9 @@ static GtkWidget *iq_view_create(IQView *v) {
     v->filter_toggle=gtk_toggle_button_new_with_label("BW");
     gtk_widget_set_name(v->filter_toggle,"spectrum-bw");
     atk_object_set_name(gtk_widget_get_accessible(v->filter_toggle),"IQ-bandfilter aan/uit");
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay),v->filter_toggle);
+    v->filter_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,4);
+    gtk_box_pack_start(GTK_BOX(v->filter_controls),v->filter_toggle,FALSE,FALSE,0);
+    gtk_overlay_add_overlay(GTK_OVERLAY(overlay),v->filter_controls);
     for (int i=0; i<4; ++i) {
         GtkWidget *button=gtk_button_new(), *icon=gtk_image_new_from_icon_name(
             i%2==0 ? "pan-up-symbolic" : "pan-down-symbolic",GTK_ICON_SIZE_MENU);

@@ -30,7 +30,7 @@ typedef struct {
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[4][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
-    GtkWidget *mode_dialog, *renderer_dialog, *mode_summary, *renderer_summary;
+    GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
     int renderer;
@@ -281,7 +281,10 @@ static char *describe(App *a) {
 
 static void status(App *a, const char *message) {
     fprintf(stderr, "[pipeline] %s\n", message);
-    if (a->status) gtk_label_set_text(GTK_LABEL(a->status), message);
+    if (a->status) {
+        gtk_label_set_text(GTK_LABEL(a->status), message);
+        gtk_widget_set_visible(a->status, *message != '\0');
+    }
 }
 
 static void log_text(App *a, const char *text) {
@@ -316,7 +319,17 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static void scatter_refresh(App *a) {
+    if (!a->scatter_box) return;
+    gtk_widget_set_sensitive(a->scatter_box, !a->running && !a->stopping && a->renderer != RENDER_FILE);
+    gtk_widget_set_tooltip_text(a->scatter_box, a->renderer == RENDER_FILE ?
+        "Scatterfix is niet beschikbaar bij rechtstreekse MPEG-TS-bestandsuitvoer." :
+        a->running || a->stopping ? "Stop de ontvangst om Scatterfix te wijzigen." :
+        a->scatter ? "Scatterfix aan · klik om uit te schakelen." : "Scatterfix uit · klik om in te schakelen.");
+}
+
 static void power_refresh(App *a) {
+    scatter_refresh(a);
     if (!a->power_button) return;
     GtkStyleContext *style = gtk_widget_get_style_context(a->power_button);
     const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error"};
@@ -522,19 +535,11 @@ pipe_error:
 
 static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
-    char *text = g_strdup_printf("%s · %s: %d %s\nFEC: %s · %s: %s",
-        standards[a->standard], a->standard == 2 ? "Bandbreedte" : "Symbolrate", a->sr,
-        a->standard == 2 ? "Hz" : "sym/s", fecs[a->fec],
-        a->standard == 2 ? "Guard interval" : "Constellatie",
-        a->standard == 2 ? guards[a->gi] : constellations[a->standard == 1 ? a->constellation : 0]);
+    char *text = g_strdup_printf("%s · %s %d%s · FEC %s",
+        standards[a->standard], a->standard == 2 ? "BW" : "Symb/s", a->sr,
+        a->standard == 2 ? " Hz" : "", fecs[a->fec]);
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
-    char *target = a->renderer == RENDER_FILE ? setting(a, "renderer", "output_file") :
-        setting(a, "paths", a->renderer == RENDER_CUSTOM ? "custom_renderer" : renderers[a->renderer]);
-    text = g_strdup_printf("%s: %s\nScatterfix: %s", a->renderer == RENDER_FILE ? "MPEG-TS-bestand" : "Programma",
-        target, use_scatter(a) ? "aan" : "uit");
-    gtk_label_set_text(GTK_LABEL(a->renderer_summary), text);
-    gtk_widget_set_tooltip_text(a->renderer_summary, target);
-    g_free(text); g_free(target);
+    scatter_refresh(a);
 }
 
 static void refresh_preview(App *a) {
@@ -805,6 +810,17 @@ static void selection_changed(GtkWidget *widget, gpointer data) {
     a->scatter = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->scatter_box));
     a->renderer = gtk_combo_box_get_active(GTK_COMBO_BOX(a->renderer_box));
     refresh_preview(a);
+}
+
+static void scatter_changed(GtkWidget *widget, gpointer data) {
+    App *a=data;
+    if (a->running || a->stopping || a->renderer == RENDER_FILE) {
+        g_signal_handlers_block_by_func(widget, scatter_changed, a);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget),a->scatter);
+        g_signal_handlers_unblock_by_func(widget, scatter_changed, a);
+        return;
+    }
+    selection_changed(widget,data);
 }
 
 static void populate_rates(App *a) {
@@ -1090,17 +1106,6 @@ static void choose_iq_file(GtkWidget *widget, gpointer data) {
     gtk_widget_destroy(chooser);
 }
 
-static GtkWidget *panel(GtkWidget *parent, const char *title) {
-    GtkWidget *frame = gtk_frame_new(title), *grid = gtk_grid_new();
-    gtk_container_set_border_width(GTK_CONTAINER(grid), 8);
-    gtk_grid_set_row_spacing(GTK_GRID(grid), 5);
-    gtk_grid_set_column_spacing(GTK_GRID(grid), 8);
-    gtk_container_add(GTK_CONTAINER(frame), grid);
-    gtk_box_pack_start(GTK_BOX(parent), frame, TRUE, TRUE, 0);
-    gtk_widget_set_valign(frame, GTK_ALIGN_FILL);
-    return grid;
-}
-
 static GtkWidget *entry_field(GtkWidget *grid, const char *label, int row, App *a,
                               const char *section, const char *key) {
     GtkWidget *entry = gtk_entry_new(), *caption = gtk_label_new(label);
@@ -1271,18 +1276,6 @@ static void create_config(App *a) {
     g_signal_connect(a->config_dialog, "delete-event", G_CALLBACK(config_close), a);
 }
 
-static GtkWidget *summary_label(GtkWidget *grid) {
-    GtkWidget *label = gtk_label_new("");
-    gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_label_set_yalign(GTK_LABEL(label), 0);
-    gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
-    gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
-    gtk_label_set_width_chars(GTK_LABEL(label), 20);
-    gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
-    gtk_widget_set_valign(label, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), label, 0, 0, 1, 1);
-    return label;
-}
-
 static GtkWidget *settings_dialog(App *a, const char *title, GtkWidget **grid) {
     GtkWidget *dialog = gtk_dialog_new_with_buttons(title, GTK_WINDOW(a->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Sluiten", GTK_RESPONSE_CLOSE, NULL);
@@ -1317,7 +1310,7 @@ static void renderer_selection_changed(GtkWidget *widget, gpointer data) {
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->output_file, a->renderer == RENDER_FILE);
-    gtk_widget_set_sensitive(a->scatter_box, a->renderer != RENDER_FILE);
+    scatter_refresh(a);
 }
 
 static gboolean apply_renderer(App *a) {
@@ -1369,25 +1362,22 @@ static void create_mode_renderer(App *a) {
     a->renderer_box = combo(a->renderer_panel, "Uitvoer", 0,
         (const char *[]) {"VLC (cvlc)", "VLC met bediening", "FFplay", "Eigen programma", "MPEG-TS-bestand"},
         G_N_ELEMENTS(renderers), a->renderer);
-    a->scatter_box = gtk_check_button_new_with_label("Scatterfix gebruiken");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), a->scatter);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->scatter_box, 0, 1, 2, 1);
-    a->renderer_program = entry_field(a->renderer_panel, "Programma / pad", 2, a, "paths", "custom_renderer");
-    a->renderer_args = entry_field(a->renderer_panel, "Argumenten", 3, a, "renderer", "args");
-    a->output_file = entry_field(a->renderer_panel, "MPEG-TS-bestand", 4, a, "renderer", "output_file");
+    a->renderer_program = entry_field(a->renderer_panel, "Programma / pad", 1, a, "paths", "custom_renderer");
+    a->renderer_args = entry_field(a->renderer_panel, "Argumenten", 2, a, "renderer", "args");
+    a->output_file = entry_field(a->renderer_panel, "MPEG-TS-bestand", 3, a, "renderer", "output_file");
     GtkWidget *hint = gtk_label_new("Eigen programma: MPEG-TS op stdin; {input} wordt - of de UDP-URL bij Scatterfix.\n"
         "Bestandsuitvoer schrijft rechtstreeks uit de decoder, zonder Scatterfix.\n"
         "Relatieve paden beginnen bij de INI-map. Bestaande bestanden worden niet overschreven.");
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(hint), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 5, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 4, 2, 1);
     a->renderer_error = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(a->renderer_error), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(a->renderer_error), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 6, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 5, 2, 1);
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->output_file, a->renderer == RENDER_FILE);
-    gtk_widget_set_sensitive(a->scatter_box, a->renderer != RENDER_FILE);
+    scatter_refresh(a);
     g_signal_connect(a->mode_dialog, "response", G_CALLBACK(hide_dialog), a);
     g_signal_connect(a->mode_dialog, "delete-event", G_CALLBACK(hide_dialog_close), a);
     g_signal_connect(a->renderer_dialog, "response", G_CALLBACK(renderer_response), a);
@@ -1420,7 +1410,11 @@ static void gui(App *a) {
     g_signal_connect(renderer_item, "activate", G_CALLBACK(show_renderer), a);
     GtkWidget *top_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_box_pack_start(GTK_BOX(root), top_bar, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(top_bar), menu, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(top_bar), menu, FALSE, FALSE, 0);
+    a->mode_summary = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(a->mode_summary),0);
+    gtk_label_set_ellipsize(GTK_LABEL(a->mode_summary),PANGO_ELLIPSIZE_END);
+    gtk_box_pack_start(GTK_BOX(top_bar),a->mode_summary,TRUE,TRUE,6);
     a->frequency_display = gtk_label_new("");
     gtk_widget_set_name(a->frequency_display, "frequency-display");
     gtk_widget_set_tooltip_text(a->frequency_display, "Ontvangstfrequentie · ← / → afstemmen; bij Linrad stem je in Linrad af.");
@@ -1452,6 +1446,11 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
     GtkWidget *view = iq_view_create(&a->iq_view);
     a->filter_box = a->iq_view.filter_toggle;
+    a->scatter_box = gtk_toggle_button_new_with_label("Scatterfix");
+    gtk_widget_set_name(a->scatter_box,"spectrum-scatter");
+    atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"Scatterfix aan/uit");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
     gtk_widget_set_hexpand(view, TRUE); gtk_widget_set_vexpand(view, TRUE);
     gtk_grid_attach(GTK_GRID(a->dashboard), view, 0, 0, 1, 1);
     a->lower = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
@@ -1462,18 +1461,10 @@ static void gui(App *a) {
     gtk_container_add(GTK_CONTAINER(lower_scroll), a->lower);
     gtk_grid_attach(GTK_GRID(a->dashboard), lower_scroll, 0, 1, 1, 1);
     gtk_box_pack_start(GTK_BOX(a->lower), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
-    GtkWidget *panels = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
-    /* The lower viewport scrolls only when the monitor cannot fit its content. */
-    gtk_box_pack_start(GTK_BOX(a->lower), panels, FALSE, TRUE, 0);
-    GtkWidget *session_panel = panel(panels, "Mode / Renderer");
-    a->mode_summary = summary_label(session_panel);
-    a->renderer_summary = summary_label(session_panel);
-    gtk_container_child_set(GTK_CONTAINER(session_panel), a->renderer_summary, "left-attach", 1, NULL);
-    gtk_widget_set_hexpand(a->mode_summary, TRUE);
-    gtk_widget_set_hexpand(a->renderer_summary, TRUE);
     create_mode_renderer(a);
     populate_rates(a); populate_fecs(a);
-    a->status = gtk_label_new("←/→ frequentie · ↑/↓ gain · [ / ] bandbreedte · W opslaan");
+    a->status = gtk_label_new("");
+    gtk_widget_set_no_show_all(a->status, TRUE);
     gtk_label_set_xalign(GTK_LABEL(a->status), 0);
     gtk_label_set_ellipsize(GTK_LABEL(a->status), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(a->lower), a->status, FALSE, FALSE, 0);
@@ -1499,7 +1490,7 @@ static void gui(App *a) {
     g_signal_connect(a->sr_box, "changed", G_CALLBACK(selection_changed), a);
     g_signal_connect(a->fec_box, "changed", G_CALLBACK(selection_changed), a);
     g_signal_connect(a->gi_box, "changed", G_CALLBACK(selection_changed), a);
-    g_signal_connect(a->scatter_box, "toggled", G_CALLBACK(selection_changed), a);
+    g_signal_connect(a->scatter_box, "toggled", G_CALLBACK(scatter_changed), a);
     g_signal_connect(a->renderer_box, "changed", G_CALLBACK(renderer_selection_changed), a);
     g_signal_connect(a->power_button, "clicked", G_CALLBACK(power_clicked), a);
     g_signal_connect(a->window, "delete-event", G_CALLBACK(window_close), a);
