@@ -846,6 +846,9 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
     switch (gdk_keyval_to_lower(event->keyval)) {
     case GDK_KEY_i: show_config(NULL,a); return TRUE;
     case GDK_KEY_m: show_mode(NULL,a); return TRUE;
+    case GDK_KEY_u:
+        video_view_set_muted(&a->video_view, !a->video_view.muted);
+        return TRUE;
     case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
     case GDK_KEY_a: show_about(NULL,a); return TRUE;
     case GDK_KEY_p: save_screenshot(a); return TRUE;
@@ -1344,6 +1347,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"M","Mode openen"},
         {"R","Renderer openen"},
         {"A","About openen"},
+        {"U","Mute / unmute the embedded player"},
         {"← / →","Ontvangstfrequentie verlagen / verhogen"},
         {"↑ / ↓","Gain verhogen / verlagen"},
         {"[ / ]","IQ-bandfilter smaller / breder maken"},

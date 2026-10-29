@@ -157,6 +157,19 @@ static gboolean close_about(gpointer data) {
 }
 
 static void exercise_menu_shortcuts(App *a) {
+    g_assert_false(a->video_view.muted);
+    for (unsigned upper=0;upper<2;++upper) {
+        GdkEventKey event={.keyval=upper ? GDK_KEY_U : GDK_KEY_u};
+        gboolean handled=FALSE;
+        g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
+        g_assert_true(handled);
+        g_assert_cmpint(a->video_view.muted,==,!upper);
+        g_assert_cmpstr(gtk_frame_get_label(GTK_FRAME(a->video_view.container)),==,
+            upper ? "Received video" : "Received video · Muted (U)");
+        event.state=GDK_CONTROL_MASK;
+        g_assert_false(tuning_key(a->window,&event,a));
+        g_assert_cmpint(a->video_view.muted,==,!upper);
+    }
     const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r};
     GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog};
     gtk_window_set_focus(GTK_WINDOW(a->window),a->power_button);

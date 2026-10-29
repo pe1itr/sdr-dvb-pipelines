@@ -178,9 +178,16 @@ GtkWidget *video_view_create(VideoView *v) {
     gtk_widget_set_hexpand(v->area, TRUE); gtk_widget_set_vexpand(v->area, TRUE);
     g_signal_connect(v->area, "draw", G_CALLBACK(draw), v);
     v->timer = g_timeout_add(33, tick, v);
-    GtkWidget *frame = gtk_frame_new("Received video");
-    gtk_container_add(GTK_CONTAINER(frame), v->area);
-    return frame;
+    v->container = gtk_frame_new("Received video");
+    gtk_container_add(GTK_CONTAINER(v->container), v->area);
+    return v->container;
+}
+
+void video_view_set_muted(VideoView *v, gboolean muted) {
+    v->muted = muted;
+    if (v->player) libvlc_audio_set_mute(v->player, muted);
+    if (v->container) gtk_frame_set_label(GTK_FRAME(v->container),
+        muted ? "Received video · Muted (U)" : "Received video");
 }
 
 void video_view_stop(VideoView *v) {
@@ -242,6 +249,7 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
     v->player = libvlc_media_player_new_from_media(media);
     libvlc_media_release(media);
     if (!v->player) goto fail;
+    libvlc_audio_set_mute(v->player, v->muted);
     libvlc_video_set_callbacks(v->player, lock_frame, unlock_frame, display_frame, v);
     libvlc_video_set_format_callbacks(v->player, setup, NULL);
     if (libvlc_media_player_play(v->player) < 0) goto fail;

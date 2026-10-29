@@ -4,7 +4,7 @@
 #include <vlc/vlc.h>
 
 typedef struct {
-    GtkWidget *area;
+    GtkWidget *area, *container;
     libvlc_instance_t *vlc;
     libvlc_media_player_t *player;
     GMutex mutex;
@@ -12,7 +12,7 @@ typedef struct {
     unsigned width, height, pitch;
     double aspect;
     gboolean ready, dirty, local_display;
-    gboolean active;
+    gboolean active, muted;
     GThread *relay;
     gint stopping, relay_failed;
     int source_fd, video_fd, udp_fd;
@@ -25,5 +25,6 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
                           const char *udp_destination, gboolean display, GError **error);
 gboolean video_view_failed(VideoView *v);
 void video_view_stop(VideoView *v);
+void video_view_set_muted(VideoView *v, gboolean muted);
 void video_view_destroy(VideoView *v);
 #endif

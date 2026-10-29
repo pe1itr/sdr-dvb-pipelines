@@ -119,6 +119,7 @@ uitklapbare **Opstartcommando / Log**.
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
 - **I / M / R / A**: open respectievelijk Input, Mode, Renderer en About.
   Kleine letters werken ook; Alt of Ctrl is niet nodig.
+- **U**: geluid van de ingebouwde player dempen; nogmaals **U** schakelt het weer in.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
   **P**: het volledige hoofdvenster als PNG opslaan naast het INI-bestand,
@@ -1056,6 +1057,10 @@ de knop naast **BW** in het spectrum.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
 
 De ingebouwde player toont beeld in het vaste rechterkader en speelt geluid af.
+Met **U** (of **u**) in het hoofdvenster schakel je mute aan of uit. Het videokader
+toont **Muted (U)** zolang het geluid gedempt is. De keuze blijft tijdens deze
+app-sessie behouden, ook na Stop/Start. UDP-uitvoer en TS-opnames behouden hun audio;
+externe players bedienen hun eigen geluid.
 Vink **Also send video/audio via UDP** aan om tegelijk een externe player te voeden.
 Met **UDP stream (external player)** wordt alleen UDP verstuurd, zonder lokaal beeld
 of geluid. Het rechterkader behoudt ook dan zijn afmetingen. Stel het IPv4-adres

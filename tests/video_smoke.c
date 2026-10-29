@@ -75,6 +75,8 @@ int main(int argc, char **argv) {
     g_assert_cmpint(getsockname(sock, (struct sockaddr *)&addr, &length), ==, 0);
     char *destination = g_strdup_printf("127.0.0.1:%u", ntohs(addr.sin_port));
     FILE *forwarded = fopen(argv[5], "wb"); g_assert_nonnull(forwarded);
+    /* Muting before playback must also survive player recreation. */
+    video_view_set_muted(&v, TRUE);
     for (int i = 1; i <= 4; ++i) {
         int fd = open(argv[i], O_RDONLY | O_CLOEXEC); g_assert_cmpint(fd, >=, 0);
         GError *error = NULL;
@@ -105,6 +107,11 @@ int main(int argc, char **argv) {
             if (ready && v.aspect > 0 && packets > 10) break;
         }
         g_assert_true(ready); g_assert_cmpuint(packets, >, 10);
+        g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 1);
+        video_view_set_muted(&v, FALSE);
+        g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 0);
+        video_view_set_muted(&v, TRUE);
+        g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 1);
         g_assert_cmpint(gtk_widget_get_allocated_width(v.area), ==, width);
         g_assert_cmpint(gtk_widget_get_allocated_height(v.area), ==, height);
         /* Verify actual painted pixels and letterboxing, not only decoder state. */
