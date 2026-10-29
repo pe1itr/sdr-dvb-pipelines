@@ -17,6 +17,7 @@
 
 #include "iq_view.h"
 #include "decoder_view.h"
+#include "video_view.h"
 #include "dvbt_backend.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
@@ -32,6 +33,7 @@ typedef struct {
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
+    GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
     int renderer;
     int tune_fd;
@@ -45,6 +47,7 @@ typedef struct {
     GMainLoop *loop;
     IQView iq_view;
     DecoderView decoder_view;
+    VideoView video_view;
 } App;
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
@@ -68,8 +71,13 @@ static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "file"};
 static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Bestand (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
-enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE };
-static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts"};
+enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
+static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts", "embedded", "udp"};
+static gboolean internal_player(App *a) { return a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP; }
+static gboolean udp_output(App *a) {
+    return a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
+        g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
+}
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
 static gboolean use_scatter(App *a) { return a->scatter && a->renderer != RENDER_FILE; }
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
@@ -140,6 +148,16 @@ static void clear_stages(App *a) {
 
 static void build_pipeline(App *a) {
     if (!valid_fec(a, a->fec)) fatal("Ongeldige FEC voor de gekozen standaard/constellatie");
+    if (udp_output(a)) {
+        char *host = setting(a, "renderer", "udp_host");
+        struct in_addr destination;
+        if (inet_pton(AF_INET, host, &destination) != 1 || destination.s_addr == INADDR_ANY ||
+            destination.s_addr == INADDR_BROADCAST) fatal("Config [renderer] udp_host must be a destination IPv4 address");
+        g_free(host);
+        int port = integer_setting(a, "renderer", "udp_port", 1, 65535);
+        if (use_scatter(a) && port == integer_setting(a, "scatterfix", "udp_port", 1, 65535))
+            fatal("UDP output must use a different port from ScatterFix input");
+    }
     clear_stages(a);
     int sample_rate = integer_setting(a, "linrad", "sample_rate", 1, 100000000);
     char *format = setting(a, "linrad", "format"), *ip = setting(a, "linrad", "ip");
@@ -252,7 +270,7 @@ static void build_pipeline(App *a) {
         char *input = use_scatter(a) ? g_strdup(vlc_input) : g_strdup("pipe:0");
         if (use_scatter(a)) memmove(input+6, input+7, strlen(input+7)+1);
         add(s, input); g_free(input);
-    } else if (a->renderer != RENDER_FILE) {
+    } else if (a->renderer != RENDER_FILE && !internal_player(a)) {
         s = new_stage(a, renderers[a->renderer]); options(a, s, "cvlc", "args", ""); add(s, vlc_input);
     }
     for (int i = 0; i < a->stage_count; ++i) g_ptr_array_add(a->stages[i].args, NULL);
@@ -262,12 +280,22 @@ static void build_pipeline(App *a) {
 static char *describe(App *a) {
     GString *text = g_string_new(NULL);
     for (int i = 0; i < a->stage_count; ++i) {
-        if (i) g_string_append(text, use_scatter(a) && i == a->stage_count - 1 ? "\n  [UDP MPEG-TS] ->\n" : "\n  |\n");
+        if (i) g_string_append(text, use_scatter(a) && i == 3 ? "\n  [UDP MPEG-TS] ->\n" : "\n  |\n");
         char **args = (char **)a->stages[i].args->pdata;
         for (int j = 0; args[j]; ++j) {
             char *quoted = g_shell_quote(args[j]);
             if (j) g_string_append_c(text, ' ');
             g_string_append(text, quoted); g_free(quoted);
+        }
+    }
+    if (internal_player(a)) {
+        g_string_append(text, use_scatter(a) ? "\n  [UDP MPEG-TS] -> " : "\n  | ");
+        g_string_append(text, a->renderer == RENDER_UDP ? "UDP output" : "embedded video panel");
+        if (udp_output(a)) {
+            char *host = setting(a, "renderer", "udp_host");
+            g_string_append_printf(text, " + UDP MPEG-TS -> %s:%d", host,
+                integer_setting(a, "renderer", "udp_port", 1, 65535));
+            g_free(host);
         }
     }
     if (a->renderer == RENDER_FILE) {
@@ -350,6 +378,7 @@ static void power_refresh(App *a) {
 static void finish_if_stopped(App *a) {
     if (!a->stopping || a->kill_timer) return;
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
+    if (a->video_view.area) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
     if (!a->exit_code) status(a, a->replay_eof ? "IQ-bestand volledig afgespeeld" : "Gestopt");
@@ -411,7 +440,7 @@ static void child_exit(GPid pid, gint result, gpointer data) {
                 status(a,"IQ-bestand uitgelezen; decoder en speler afronden…");
                 gboolean alive=FALSE;
                 for (int j=0; j<a->stage_count; ++j) if (a->stages[j].pid) alive=TRUE;
-                if (!alive) stop_pipeline(a);
+                if (!alive && !internal_player(a)) stop_pipeline(a);
             } else stop_pipeline(a);
             break;
         }
@@ -436,6 +465,11 @@ static void child_setup(gpointer unused) {
 static void start_pipeline(App *a) {
     if (a->running) return;
     build_pipeline(a); a->exit_code = 0;
+    if (internal_player(a) && !a->video_view.area) {
+        a->exit_code = 1;
+        status(a, "Embedded/UDP playback requires the GUI; use --renderer cvlc, ffplay or mpegts with --run.");
+        return;
+    }
     a->replay_eof=FALSE;
     if (a->source==SOURCE_FILE) {
         char *path=setting(a,"file","path"), *fmt=setting(a,"file","input_format");
@@ -477,6 +511,27 @@ static void start_pipeline(App *a) {
     if (!a->headless) {
         if (!g_unix_open_pipe(log_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(log_pipe[0], TRUE, NULL)) goto pipe_error;
+    }
+    if (internal_player(a)) {
+        char *url = NULL, *destination = NULL;
+        if (use_scatter(a)) {
+            char *host = setting(a, "scatterfix", "udp_host");
+            url = g_strdup_printf("udp://@%s:%d", host, integer_setting(a, "scatterfix", "udp_port", 1, 65535));
+            g_free(host);
+        }
+        if (udp_output(a)) {
+            char *host = setting(a, "renderer", "udp_host");
+            destination = g_strdup_printf("%s:%d", host, integer_setting(a, "renderer", "udp_port", 1, 65535));
+            g_free(host);
+        }
+        GError *error = NULL;
+        gboolean started = video_view_start(&a->video_view, pipes[1][0], url, destination,
+                                             a->renderer == RENDER_EMBEDDED, &error);
+        g_free(url); g_free(destination);
+        if (!started) {
+            status(a, error->message); g_clear_error(&error);
+            a->exit_code = 1; goto pipe_error;
+        }
     }
     if (a->window && a->standard == 2 && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decodertelemetrie niet beschikbaar; ontvangst gaat door.\n");
@@ -530,7 +585,8 @@ pipe_error:
     for (int i = 0; i < made; ++i) { close(pipes[i][0]); close(pipes[i][1]); }
     if (nullfd >= 0) close(nullfd);
     if (log_pipe[0] >= 0) { close(log_pipe[0]); close(log_pipe[1]); }
-    a->exit_code = 1; status(a, "Kan pipeline-pipes niet openen");
+    if (!a->exit_code) status(a, "Cannot open pipeline pipes");
+    a->exit_code = 1;
 }
 
 static void refresh_summaries(App *a) {
@@ -907,6 +963,10 @@ static gboolean exit_signal(gpointer data) {
 
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
+    if (a->running && !a->stopping && video_view_failed(&a->video_view)) {
+        a->exit_code = 1; status(a, "Video / UDP output failed; check the VLC plugins and received stream.");
+        stop_pipeline(a);
+    }
     decoder_view_tick(&a->decoder_view, a->running && !a->stopping && a->standard == 2, standards[a->standard]);
     return G_SOURCE_CONTINUE;
 }
@@ -955,6 +1015,11 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    const char *udp_keys[] = {"udp_enabled", "udp_host", "udp_port"};
+    const char *udp_values[] = {"false", "127.0.0.1", "1234"};
+    for (unsigned i = 0; i < G_N_ELEMENTS(udp_keys); ++i)
+        if (!g_key_file_has_key(a->config, "renderer", udp_keys[i], NULL))
+            g_key_file_set_string(a->config, "renderer", udp_keys[i], udp_values[i]);
     const char *file_keys[]={"path","input_format","format","sample_rate","header_bytes","frequency","metadata"};
     const char *file_values[]={"","s16","s16","250000","0","0","Geen metadata geladen; controleer de instellingen."};
     for (unsigned i=0; i<G_N_ELEMENTS(file_keys); ++i)
@@ -1363,6 +1428,9 @@ static void renderer_selection_changed(GtkWidget *widget, gpointer data) {
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->output_file, a->renderer == RENDER_FILE);
+    gtk_widget_set_sensitive(a->udp_enabled, a->renderer == RENDER_EMBEDDED);
+    gtk_widget_set_sensitive(a->udp_host, internal_player(a));
+    gtk_widget_set_sensitive(a->udp_port, internal_player(a));
     scatter_refresh(a);
 }
 
@@ -1384,6 +1452,24 @@ static gboolean apply_renderer(App *a) {
     }
     if (a->renderer == RENDER_FILE && !*file) {
         gtk_label_set_text(GTK_LABEL(a->renderer_error), "Vul een naam voor het MPEG-TS-bestand in."); return FALSE;
+    }
+    if (internal_player(a)) {
+        gboolean enabled = a->renderer == RENDER_UDP || gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->udp_enabled));
+        const char *host = gtk_entry_get_text(GTK_ENTRY(a->udp_host));
+        gtk_spin_button_update(GTK_SPIN_BUTTON(a->udp_port));
+        int port = gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->udp_port));
+        struct in_addr destination;
+        if (inet_pton(AF_INET, host, &destination) != 1 ||
+            destination.s_addr == INADDR_ANY || destination.s_addr == INADDR_BROADCAST) {
+            gtk_label_set_text(GTK_LABEL(a->renderer_error), "Enter a destination IPv4 address, e.g. 127.0.0.1."); return FALSE;
+        }
+        /* Reserve ScatterFix's port even when it is currently disabled. */
+        if (port == integer_setting(a, "scatterfix", "udp_port", 1, 65535)) {
+            gtk_label_set_text(GTK_LABEL(a->renderer_error), "Choose a different port from ScatterFix input."); return FALSE;
+        }
+        if (a->renderer == RENDER_EMBEDDED) g_key_file_set_boolean(a->config, "renderer", "udp_enabled", enabled);
+        g_key_file_set_string(a->config, "renderer", "udp_host", host);
+        g_key_file_set_integer(a->config, "renderer", "udp_port", port);
     }
     /* Only store active fields, so an unfinished inactive command cannot break a later preview. */
     if (a->renderer == RENDER_CUSTOM) {
@@ -1413,20 +1499,32 @@ static void create_mode_renderer(App *a) {
     a->constellation_box = combo(a->controls, "Constellatie", 4, constellations, 2, a->constellation);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS-uitvoer", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Uitvoer", 0,
-        (const char *[]) {"VLC (cvlc)", "VLC met bediening", "FFplay", "Eigen programma", "MPEG-TS-bestand"},
+        (const char *[]) {"VLC (cvlc)", "VLC met bediening", "FFplay", "Eigen programma", "MPEG-TS-bestand", "Embedded player (right panel)", "UDP stream (external player)"},
         G_N_ELEMENTS(renderers), a->renderer);
     a->renderer_program = entry_field(a->renderer_panel, "Programma / pad", 1, a, "paths", "custom_renderer");
     a->renderer_args = entry_field(a->renderer_panel, "Argumenten", 2, a, "renderer", "args");
     a->output_file = entry_field(a->renderer_panel, "MPEG-TS-bestand", 3, a, "renderer", "output_file");
-    GtkWidget *hint = gtk_label_new("Eigen programma: MPEG-TS op stdin; {input} wordt - of de UDP-URL bij Scatterfix.\n"
-        "Bestandsuitvoer schrijft rechtstreeks uit de decoder, zonder Scatterfix.\n"
-        "Relatieve paden beginnen bij de INI-map. Bestaande bestanden worden niet overschreven.");
+    a->udp_enabled = gtk_check_button_new_with_label("Also send video/audio via UDP");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->udp_enabled),
+        g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->udp_enabled, 0, 4, 2, 1);
+    a->udp_host = entry_field(a->renderer_panel, "UDP destination IPv4", 5, a, "renderer", "udp_host");
+    a->udp_port = spin(a->renderer_panel, "UDP destination port", 6, 1, 65535, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), integer_setting(a, "renderer", "udp_port", 1, 65535));
+    gtk_widget_set_sensitive(a->udp_enabled, a->renderer == RENDER_EMBEDDED);
+    gtk_widget_set_sensitive(a->udp_host, internal_player(a));
+    gtk_widget_set_sensitive(a->udp_port, internal_player(a));
+    GtkWidget *hint = gtk_label_new("Embedded player: fixed panel; video scales to fit without changing its shape.\n"
+        "UDP works alongside the embedded player. In VLC, open udp://@:1234 (default port).\n"
+        "Custom program: MPEG-TS on stdin; {input} becomes - or the UDP URL with ScatterFix.\n"
+        "File output writes directly from the decoder, without ScatterFix.\n"
+        "Relative paths start in the INI directory. Existing files will not be overwritten.");
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(hint), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 4, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 7, 2, 1);
     a->renderer_error = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(a->renderer_error), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(a->renderer_error), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 5, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 8, 2, 1);
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->output_file, a->renderer == RENDER_FILE);
@@ -1439,6 +1537,7 @@ static void create_mode_renderer(App *a) {
 
 static void gui(App *a) {
     source_defaults(a);
+    if (!g_key_file_has_key(a->config, "session", "renderer", NULL)) a->renderer = RENDER_EMBEDDED;
     if (!gtk_init_check(NULL, NULL)) fatal("Kan geen grafisch scherm openen. Gebruik --print-pipeline voor controle zonder GUI.");
     apply_receiver_theme();
     a->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -1499,7 +1598,7 @@ static void gui(App *a) {
     g_signal_connect(config_item, "activate", G_CALLBACK(show_config), a);
     g_signal_connect(about_item, "activate", G_CALLBACK(show_about), a);
 
-    /* Two equally sized halves: waterfall + spectrum, then controls + logs. */
+    /* Full-width waterfall + spectrum above decoder information and video. */
     a->dashboard = gtk_grid_new();
     gtk_grid_set_row_homogeneous(GTK_GRID(a->dashboard), TRUE);
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
@@ -1519,7 +1618,19 @@ static void gui(App *a) {
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(lower_scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
     gtk_container_add(GTK_CONTAINER(lower_scroll), a->lower);
     gtk_grid_attach(GTK_GRID(a->dashboard), lower_scroll, 0, 1, 1, 1);
-    gtk_box_pack_start(GTK_BOX(a->lower), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
+    /* Match Service info's natural width and height without consuming spare
+     * horizontal space; future panels can join this row. */
+    GtkWidget *receiver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_halign(receiver_row, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(receiver_row), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
+    GtkWidget *video_frame = video_view_create(&a->video_view);
+    gtk_widget_set_hexpand(video_frame, FALSE);
+    GtkSizeGroup *panel_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
+    gtk_size_group_add_widget(panel_width, a->decoder_view.service_frame);
+    gtk_size_group_add_widget(panel_width, video_frame);
+    g_object_unref(panel_width);
+    gtk_box_pack_start(GTK_BOX(receiver_row), video_frame, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
     create_mode_renderer(a);
     populate_rates(a); populate_fecs(a);
     a->status = gtk_label_new("");
@@ -1559,6 +1670,7 @@ static void gui(App *a) {
     g_source_remove(decoder_timer);
     g_source_remove(a->iq_view.timer);
     decoder_view_stop(&a->decoder_view);
+    video_view_destroy(&a->video_view);
     if (a->iq_view.fd >= 0) close(a->iq_view.fd);
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
@@ -1600,11 +1712,12 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
-    char *source = NULL, *constellation = NULL;
+    char *source = NULL, *constellation = NULL, *renderer = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
     gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE;
     int sr = -1;
     GOptionEntry entries[] = {
+        {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"IQ-bestand realtime afspelen (met JSON-metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK of 8PSK", "MODULATION"},
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq of file", "SOURCE"},
@@ -1634,6 +1747,11 @@ int main(int argc, char **argv) {
     if (!g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, &error)) fatal("%s: %s", a.config_path, error->message);
     source_defaults(&a);
     load_session(&a);
+    if (renderer) {
+        a.renderer = choice(renderer, renderers, G_N_ELEMENTS(renderers), "renderer");
+        g_key_file_set_string(a.config, "session", "renderer", renderer);
+        g_free(renderer);
+    }
     if (source) a.source = choice(source, sources, G_N_ELEMENTS(sources), "input");
     if (iq_file && !select_iq_file(&a,iq_file,&error)) fatal("%s",error->message);
     if (standard) {

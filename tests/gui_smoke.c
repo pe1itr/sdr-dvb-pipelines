@@ -227,6 +227,25 @@ static gboolean exercise(gpointer data) {
         gtk_dialog_response(GTK_DIALOG(a->mode_dialog), GTK_RESPONSE_CLOSE);
         g_assert_false(gtk_widget_get_visible(a->mode_dialog));
         show_renderer(NULL, a);
+        g_assert_true(gtk_widget_is_ancestor(a->video_view.area, a->window));
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_EMBEDDED);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->udp_enabled), TRUE);
+        gtk_entry_set_text(GTK_ENTRY(a->udp_host), "invalid address");
+        g_assert_false(apply_renderer(a));
+        gtk_entry_set_text(GTK_ENTRY(a->udp_host), "127.0.0.1");
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), integer_setting(a, "scatterfix", "udp_port", 1, 65535));
+        g_assert_false(apply_renderer(a));
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), 1234);
+        g_assert_true(apply_renderer(a));
+        g_assert_true(g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
+        char *embedded = describe(a);
+        g_assert_nonnull(strstr(embedded, "embedded video panel + UDP MPEG-TS -> 127.0.0.1:1234"));
+        g_free(embedded);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_UDP);
+        g_assert_true(apply_renderer(a));
+        g_assert_true(gtk_widget_get_sensitive(a->udp_host));
+        g_assert_false(gtk_widget_get_sensitive(a->udp_enabled));
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->udp_enabled), FALSE);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_FFPLAY);
         g_assert_true(apply_renderer(a));
         g_assert_false(gtk_widget_get_sensitive(a->renderer_program));
@@ -519,12 +538,15 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_EMBEDDED);
+        g_assert_true(apply_renderer(a));
         g_assert_cmpint(a->sr, ==, 250000);
         g_assert_false(gtk_widget_get_sensitive(a->gi_box));
         gtk_button_clicked(GTK_BUTTON(a->power_button));
         g_assert_true(a->running); ++phase;
     } else if (phase == 3) {
         g_assert_cmpint(a->exit_code, ==, 0);
+        g_assert_nonnull(a->video_view.player);
         window_close(a->window, NULL, a);
         return G_SOURCE_REMOVE;
     }

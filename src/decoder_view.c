@@ -120,6 +120,7 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     gtk_container_add(GTK_CONTAINER(square),v->area);
     g_signal_connect(v->area,"draw",G_CALLBACK(draw_constellation),v);
     GtkWidget *frame=gtk_frame_new("Service-info"), *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
+    v->service_frame=frame;
     gtk_container_set_border_width(GTK_CONTAINER(box),8);
     gtk_container_add(GTK_CONTAINER(frame),box);
     gtk_box_pack_start(GTK_BOX(row),frame,FALSE,FALSE,0);

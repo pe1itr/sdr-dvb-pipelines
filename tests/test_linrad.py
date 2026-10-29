@@ -148,6 +148,8 @@ class ReceiverTests(unittest.TestCase):
 class PipelineTests(unittest.TestCase):
     def preview(self, standard, sr, fec, gi="1/32", scatter=False, config=None):
         args = [UI, "--print-pipeline", "--source", "linrad", "--standard", standard, "--sr", str(sr), "--fec", fec, "--gi", gi]
+        if config is None:
+            args += ["--renderer", "cvlc"]
         if scatter:
             args += ["--scatterfix"]
         if config:
@@ -575,6 +577,47 @@ class LifecycleTests(PipelineTests):
                     self.assert_stopped(tmp, int(cfg["linrad"]["port"]))
                 finally:
                     self.cleanup_process(p, tmp)
+            finally:
+                daemon.terminate()
+                daemon.communicate(timeout=3)
+
+
+@unittest.skipUnless(shutil.which("broadwayd") and shutil.which("ffmpeg") and shutil.which("ffprobe"),
+                     "Video smoke test needs Broadway and FFmpeg")
+class VideoTests(unittest.TestCase):
+    def test_embedded_video_fixed_frame_and_udp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs = []
+            for i, (size, aspect) in enumerate((("320x240", "4:3"), ("1280x720", "16:9"),
+                                               ("720x576", "4:3"), ("720x576", "16:9"))):
+                path = Path(tmp, f"{i}.ts")
+                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                                f"color=c=green:s={size}:r=25", "-f", "lavfi", "-i",
+                                "anullsrc=r=48000:cl=stereo", "-t", "4", "-c:v", "mpeg2video",
+                                "-g", "12", "-aspect", aspect, "-c:a", "mp2", "-f", "mpegts", str(path)],
+                               check=True, capture_output=True, timeout=15)
+                inputs.append(path)
+            display = free_port()
+            env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",
+                       XDG_RUNTIME_DIR=tmp, NO_AT_BRIDGE="1")
+            daemon = subprocess.Popen(["broadwayd", "--address", "127.0.0.1", "--port", str(free_port()),
+                                       f":{display}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                time.sleep(0.2)
+                output = Path(tmp, "forwarded.ts")
+                p = subprocess.run([ROOT / "build/video_smoke", *inputs, output],
+                                   env=env, capture_output=True, timeout=35)
+                self.assertEqual(p.returncode, 0, p.stderr.decode())
+                self.assertNotIn(b"CRITICAL", p.stderr)
+                probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                                        "-of", "csv=p=0", str(output)], capture_output=True, text=True, timeout=5)
+                self.assertEqual(probe.returncode, 0, probe.stderr)
+                self.assertIn("video", probe.stdout)
+                self.assertIn("audio", probe.stdout)
+                # An independent player/decoder can actually decode the UDP payload.
+                decode = subprocess.run(["ffmpeg", "-v", "error", "-i", str(output),
+                                         "-frames:v", "1", "-f", "null", "-"], capture_output=True, timeout=5)
+                self.assertEqual(decode.returncode, 0, decode.stderr.decode())
             finally:
                 daemon.terminate()
                 daemon.communicate(timeout=3)

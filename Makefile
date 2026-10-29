@@ -8,6 +8,8 @@ LDLIBS ?=
 BUILD_DIR := build
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0)
+GTK_CFLAGS += $(shell pkg-config --cflags libvlc)
+GTK_LIBS += $(shell pkg-config --libs libvlc)
 GLIB_CFLAGS := $(shell pkg-config --cflags glib-2.0)
 FILTER_CFLAGS := $(shell pkg-config --cflags fftw3f)
 FILTER_LIBS := $(shell pkg-config --libs fftw3f)
@@ -22,8 +24,8 @@ DVBT_DIR := third_party/rbdvbt
 DVBT_SOURCES := $(filter-out $(DVBT_DIR)/src/main.c,$(wildcard $(DVBT_DIR)/src/*.c))
 DVBT_OBJECTS := $(patsubst $(DVBT_DIR)/src/%.c,$(BUILD_DIR)/dvbt/%.o,$(DVBT_SOURCES)) $(BUILD_DIR)/dvbt/backend.o
 DVBT_CFLAGS := -I$(DVBT_DIR)/include -Isrc $(FILTER_CFLAGS) -DLINRAD_EMBEDDED_DVBT -DRBDVBT_VERSION=\"0.1.5\"
-GUI_SOURCES := src/iq_file.c src/decoder_view.c
-GUI_HEADERS := src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h
+GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c
+GUI_HEADERS := src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h
 
 $(BUILD_DIR)/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
 	mkdir -p $(@D)
@@ -56,7 +58,10 @@ package: all
 $(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(DVBT_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(DVBT_OBJECTS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
-test: all $(BUILD_DIR)/gui_smoke
+$(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GTK_CFLAGS) tests/video_smoke.c src/video_view.c -o $@ $(LDFLAGS) $(GTK_LIBS) $(LDLIBS)
+
+test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 	python3 tests/test_linrad.py
 
 clean:

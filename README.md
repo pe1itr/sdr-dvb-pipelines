@@ -75,7 +75,8 @@ gelezen, gestart of gewijzigd door de toepassing. De overige scripts hieronder
 blijven beschikbaar voor de oudere experimenten.
 
 Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
-GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR en UHD):
+GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD en libVLC 3
+(inclusief de VLC-codecplugins)):
 
 ```bash
 make
@@ -86,7 +87,13 @@ De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
 **Input**, **Mode**, **Renderer** en **About**. About toont een korte uitleg,
 Rob Hardenberg / PE1ITR als maker, de builddatum en de sneltoetsen in een raster.
-De waterval en het spectrum nemen elk een kwart van het werkvlak in.
+De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staan
+links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
+en hoogte als Service info. Rechts blijft ruimte vrij voor toekomstige vensters.
+Status en log staan onder deze rij. De ontvangen
+resolutie verandert de afmetingen van het kader niet. Zowel 4:3 als 16:9 wordt
+met behoud van beeldverhouding weergegeven, zonder afsnijden of uitrekken;
+overgebleven ruimte is zwart.
 De bovenbalk toont achtereenvolgens mode, Symb/s (satelliet) of BW in Hz (DVB-T),
 en FEC. Frequentie en gain staan op dezelfde regel als Start/Stop.
 De bediening gaat met de pijltjestoetsen; er zijn geen plus/min-knoppen.
@@ -105,8 +112,8 @@ uitklapbare **Opstartcommando / Log**.
   bij Linrad het UDP-adres, de poort, de headerlengte en de frequentie voor de schaal.
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
-- **Renderer**: VLC (`cvlc`), VLC met bediening, FFplay, een eigen programma of een
-  MPEG-TS-bestand.
+- **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
+  VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
 - **I / M / R / A**: open respectievelijk Input, Mode, Renderer en About.
   Kleine letters werken ook; Alt of Ctrl is niet nodig.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
@@ -123,20 +130,20 @@ De GUI bevat onder andere:
 
 DVB-S/S2 gebruiken `leandvb`. De DVB-T-broncode wordt rechtstreeks meegecompileerd
 en gelinkt in `linrad_dvb`; een losse `rbdvbt_rx`-executable is niet nodig.
-Beide modes worden standaard weergegeven met `cvlc`. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
+De GUI toont het beeld standaard in het rechterpaneel. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
 `0x10`, FEC 2/3 selecteert `0x40`. De standaard samplerate is **1010526**
 samples/s. Frequentie en de SDR zelf stel je in Linrad in.
 
 Zonder Scatterfix:
 
 ```text
-Linrad UDP -> C-ontvanger -> leandvb / ingebouwde DVB-T-decoder -> cvlc (stdin)
+Linrad UDP -> C-ontvanger -> leandvb / ingebouwde DVB-T-decoder -> player (+ optioneel UDP)
 ```
 
 Met Scatterfix:
 
 ```text
-Linrad UDP -> C-ontvanger -> decoder -> Scatterfix -> UDP MPEG-TS -> cvlc
+Linrad UDP -> C-ontvanger -> decoder -> Scatterfix -> UDP MPEG-TS -> player (+ optioneel UDP)
 ```
 
 Scatterfix blijft het bestaande externe `TSscatterfix/tools/contest_live.py`
@@ -968,10 +975,26 @@ Vanaf de opdrachtregel kan dit ook:
 
 ### Renderer en rechtstreeks MPEG-TS opslaan
 
-Via **Renderer** kies je VLC, VLC met bediening, **FFplay**, een eigen programma of
-**MPEG-TS-bestand**. De rendererkeuze staat in dit menu; Scatterfix bedien je met
+Via **Renderer** kies je **Embedded player (right panel)**, **UDP stream (external player)**,
+VLC, VLC met bediening, **FFplay**, een eigen programma of **MPEG-TS-bestand**.
+De rendererkeuze staat in dit menu; Scatterfix bedien je met
 de knop naast **BW** in het spectrum.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
+
+De ingebouwde player toont beeld in het vaste rechterkader en speelt geluid af.
+Vink **Also send video/audio via UDP** aan om tegelijk een externe player te voeden.
+Met **UDP stream (external player)** wordt alleen UDP verstuurd, zonder lokaal beeld
+of geluid. Het rechterkader behoudt ook dan zijn afmetingen. Stel het IPv4-adres
+van de externe player en de doelpoort in; standaard is dit `127.0.0.1:1234`.
+Open in de ontvangende VLC `udp://@:1234`, of in FFplay `udp://0.0.0.0:1234`.
+De externe player bepaalt zelf zijn venstergrootte. De ontvangen MPEG-TS wordt
+ongewijzigd doorgestuurd, zonder hercoderen. Bij ScatterFix gaat de herstelde stream
+naar de ingebouwde player en/of de gekozen UDP-bestemming. Gebruik voor de
+UDP-uitvoer een andere poort dan de ScatterFix-invoer (standaard 1235).
+
+De ingebouwde weergave gebruikt libVLC-videocallbacks en GTK; ook onder Wayland
+en op een GTK-testdisplay is geen apart VLC-venster nodig. Dit gebruikt
+softwaredecodering en schaalt het beeld in de applicatie.
 
 Een eigen programma krijgt de transportstream op stdin. Geef bij **Programma / pad**
 alleen het uitvoerbare bestand op en vul de opties bij **Argumenten** in.
@@ -986,8 +1009,14 @@ de INI-map. De doelmap moet bestaan en het bestand moet nieuw zijn; een bestaand
 bestand wordt niet overschreven. Stop sluit de opname. De bytes worden ongewijzigd
 opgeslagen: de ontvanger voegt geen ontbrekende TS-pakketten toe.
 
-De nieuwe instellingen zijn achterwaarts compatibel; zonder rendererkeuze blijft
-`cvlc` de standaard. `[session] renderer` is `cvlc`, `vlc`, `ffplay`, `custom` of `mpegts`.
+Een opgeslagen rendererkeuze blijft behouden. Zonder rendererkeuze gebruikt de
+GUI `embedded`; de opdrachtregel zonder GUI behoudt `cvlc` als standaard.
+`[session] renderer` is `embedded`, `udp`, `cvlc`, `vlc`, `ffplay`, `custom` of `mpegts`.
+`[renderer] udp_enabled`, `udp_host` en `udp_port` regelen de extra UDP-uitvoer
+(standaard `false`, `127.0.0.1`, `1234`). Bij renderer `udp` is UDP altijd actief.
+Met `--renderer` kun je de opgeslagen keuze overschrijven. `embedded` en `udp`
+vereisen de GUI; gebruik bijvoorbeeld `--run --renderer cvlc` voor de bestaande
+opdrachtregelworkflow.
 Voor een eigen programma gebruik je `[paths] custom_renderer` en `[renderer] args`;
 voor bestandsuitvoer `[renderer] output_file`. VLC gebruikt de bestaande
 `[cvlc] args`; `[paths] vlc` is standaard `vlc`.
