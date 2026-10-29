@@ -351,9 +351,9 @@ static void scatter_refresh(App *a) {
     if (!a->scatter_box) return;
     gtk_widget_set_sensitive(a->scatter_box, !a->running && !a->stopping && a->renderer != RENDER_FILE);
     gtk_widget_set_tooltip_text(a->scatter_box, a->renderer == RENDER_FILE ?
-        "Scatterfix is niet beschikbaar bij rechtstreekse MPEG-TS-bestandsuitvoer." :
-        a->running || a->stopping ? "Stop de ontvangst om Scatterfix te wijzigen." :
-        a->scatter ? "Scatterfix aan · klik om uit te schakelen." : "Scatterfix uit · klik om in te schakelen.");
+        "TSscatterFix is niet beschikbaar bij rechtstreekse MPEG-TS-bestandsuitvoer." :
+        a->running || a->stopping ? "Stop de ontvangst om TSscatterFix te wijzigen." :
+        a->scatter ? "TSscatterFix aan · klik om uit te schakelen." : "TSscatterFix uit · klik om in te schakelen.");
 }
 
 static void power_refresh(App *a) {
@@ -1604,9 +1604,9 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
     GtkWidget *view = iq_view_create(&a->iq_view, a->config);
     a->filter_box = a->iq_view.filter_toggle;
-    a->scatter_box = gtk_toggle_button_new_with_label("Scatterfix");
+    a->scatter_box = gtk_toggle_button_new_with_label("TSscatterFix");
     gtk_widget_set_name(a->scatter_box,"spectrum-scatter");
-    atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"Scatterfix aan/uit");
+    atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix aan/uit");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
     gtk_widget_set_hexpand(view, TRUE); gtk_widget_set_vexpand(view, TRUE);
