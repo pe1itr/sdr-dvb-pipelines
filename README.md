@@ -118,6 +118,12 @@ uitklapbare **Opstartcommando / Log**.
   Kleine letters werken ook; Alt of Ctrl is niet nodig.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
+  **P**: het volledige hoofdvenster als PNG opslaan naast het INI-bestand,
+  inclusief spectrum, waterval en ingebouwde video. Voorbeeld:
+  `linrad-dvb-20261029T181530.123456Z-DVB-T-BW40000-144600kHz.png`.
+  DVB-S/S2 gebruikt bijvoorbeeld `SR333000` (symbolen/s); DVB-T gebruikt BW in Hz.
+  De tijd is UTC; de ontvangstfrequentie inclusief LO-offset wordt afgerond op hele kHz.
+  Bij Linrad wordt de in Input ingevulde schaalfrequentie gebruikt.
   Deze toetsen gelden in het hoofdvenster, ook tijdens ontvangst.
   In de instellingendialogen werken de toetsen als normale invoer.
 

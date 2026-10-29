@@ -181,6 +181,33 @@ static void exercise_menu_shortcuts(App *a) {
     }
 }
 
+static void exercise_screenshot(App *a, guint key, const char *suffix) {
+    /* Settle pending layout changes before sending a real window key event. */
+    GtkRequisition minimum, natural;
+    gtk_widget_get_preferred_size(a->window, &minimum, &natural);
+    GtkAllocation allocation = {0, 0, 1280, 900};
+    gtk_widget_size_allocate(a->window, &allocation);
+    GdkEventKey event = {.keyval=key};
+    gboolean handled = FALSE;
+    g_signal_emit_by_name(a->window, "key-press-event", &event, &handled);
+    g_assert_true(handled);
+    const char *message = gtk_label_get_text(GTK_LABEL(a->status));
+    g_assert_true(g_str_has_prefix(message, "Screenshot saved: "));
+    const char *path = message + strlen("Screenshot saved: ");
+    g_assert_true(g_str_has_suffix(path, suffix));
+    char *name = g_path_get_basename(path);
+    g_assert_true(g_regex_match_simple("^linrad-dvb-[0-9]{8}T[0-9]{6}\\.[0-9]{6}Z-", name, 0, 0));
+    g_free(name);
+    GdkPixbuf *png = gdk_pixbuf_new_from_file(path, NULL);
+    g_assert_nonnull(png);
+    int scale = gtk_widget_get_scale_factor(a->window);
+    g_assert_cmpint(gdk_pixbuf_get_width(png), ==, allocation.width * scale);
+    g_assert_cmpint(gdk_pixbuf_get_height(png), ==, allocation.height * scale);
+    g_object_unref(png);
+    event.state = GDK_CONTROL_MASK;
+    g_assert_false(tuning_key(a->window, &event, a));
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
@@ -223,6 +250,7 @@ static gboolean exercise(gpointer data) {
         monitor_tick(a);
         g_assert_cmpfloat(a->iq_view.center, ==, 437125000);
         g_assert_cmpfloat(a->iq_view.rate, ==, 1010526);
+        exercise_screenshot(a, GDK_KEY_p, "-DVB-S-SR125000-437125kHz.png");
         show_mode(NULL, a);
         gtk_dialog_response(GTK_DIALOG(a->mode_dialog), GTK_RESPONSE_CLOSE);
         g_assert_false(gtk_widget_get_visible(a->mode_dialog));
@@ -455,6 +483,7 @@ static gboolean exercise(gpointer data) {
         g_assert_nonnull(strstr(pipeline, "'--sample-rate' '196078'")); g_free(pipeline);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_FILE);
         /* W must persist display adjustments as well as receiver settings. */
+        exercise_screenshot(a, GDK_KEY_P, "-DVB-T-BW40000-436000kHz.png");
         gtk_button_clicked(GTK_BUTTON(a->iq_view.level_buttons[0]));
         gtk_button_clicked(GTK_BUTTON(a->iq_view.level_buttons[3]));
         double saved_floor=a->iq_view.floor, saved_span=a->iq_view.span;
@@ -526,6 +555,7 @@ static gboolean exercise(gpointer data) {
         ++phase;
     } else if (phase == 1) {
         g_assert_cmpint(a->exit_code, ==, 0);
+        exercise_screenshot(a, GDK_KEY_P, "-DVB-T-BW250000-437125kHz.png");
         gtk_button_clicked(GTK_BUTTON(a->power_button));
         g_assert_false(gtk_widget_get_sensitive(a->power_button));
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "SDR stopt…");

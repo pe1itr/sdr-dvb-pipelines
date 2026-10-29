@@ -788,6 +788,39 @@ static void save_settings(App *a) {
     g_free(message); g_free(contents); g_clear_error(&error);
 }
 
+static void save_screenshot(App *a) {
+    GDateTime *now = g_date_time_new_now_utc();
+    char *timestamp = g_date_time_format(now, "%Y%m%dT%H%M%S.%fZ");
+    const char *section = sources[a->source];
+    double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
+    if (hardware_source(a))
+        frequency += g_key_file_get_double(a->config, section, "lo_offset", NULL);
+    char khz[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(khz, sizeof(khz), "%.0f", frequency / 1e3);
+    char *name = g_strdup_printf("linrad-dvb-%s-%s-%s%d-%skHz.png", timestamp,
+        standards[a->standard], a->standard == 2 ? "BW" : "SR", a->sr, khz);
+    char *path = g_build_filename(a->directory, name, NULL);
+
+    /* Paint the whole widget tree, including our Cairo-backed video frame.
+     * This also works on Wayland and when another window covers the receiver. */
+    int scale = gtk_widget_get_scale_factor(a->window);
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+        gtk_widget_get_allocated_width(a->window) * scale,
+        gtk_widget_get_allocated_height(a->window) * scale);
+    cairo_surface_set_device_scale(surface, scale, scale);
+    cairo_t *cr = cairo_create(surface);
+    gtk_widget_draw(a->window, cr);
+    cairo_status_t result = cairo_status(cr);
+    if (result == CAIRO_STATUS_SUCCESS) result = cairo_surface_write_to_png(surface, path);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+
+    char *message = result == CAIRO_STATUS_SUCCESS ? g_strdup_printf("Screenshot saved: %s", path) :
+        g_strdup_printf("Screenshot failed: %s (%s)", cairo_status_to_string(result), path);
+    status(a, message);
+    g_free(message); g_free(path); g_free(name); g_free(timestamp); g_date_time_unref(now);
+}
+
 static void show_config(GtkWidget *widget, gpointer data);
 static void show_mode(GtkWidget *widget, gpointer data);
 static void show_renderer(GtkWidget *widget, gpointer data);
@@ -801,6 +834,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
     case GDK_KEY_m: show_mode(NULL,a); return TRUE;
     case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
     case GDK_KEY_a: show_about(NULL,a); return TRUE;
+    case GDK_KEY_p: save_screenshot(a); return TRUE;
     default: break;
     }
     if (event->keyval == GDK_KEY_w || event->keyval == GDK_KEY_W) { save_settings(a); return TRUE; }
@@ -1288,7 +1322,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"← / →","Ontvangstfrequentie verlagen / verhogen"},
         {"↑ / ↓","Gain verhogen / verlagen"},
         {"[ / ]","IQ-bandfilter smaller / breder maken"},
-        {"W","Instellingen opslaan, inclusief spectrum en waterval"}
+        {"W","Instellingen opslaan, inclusief spectrum en waterval"},
+        {"P","Save the entire main window as a PNG screenshot"}
     };
     for (unsigned row=0;row<G_N_ELEMENTS(shortcuts);++row) {
         for (int column=0;column<2;++column) {
@@ -1308,6 +1343,10 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Sneltoetsen werken in het hoofdvenster, ook met kleine letters en tijdens ontvangst. "
         "In instellingenschermen blijven de toetsen beschikbaar voor tekstinvoer.","about-meta");
     about_label(box,"Bij Linrad regel je frequentie en gain in Linrad zelf.","about-meta");
+    about_label(box,"Screenshots are saved beside the INI file as "
+        "linrad-dvb-[UTC timestamp]-[mode]-[SR or BW]-[frequency in whole kHz].png. "
+        "SR is in symbols/s; BW is in Hz. "
+        "For Linrad input, the frequency is the value entered in Input.","about-meta");
     gtk_widget_show_all(dialog);
     gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
 }
