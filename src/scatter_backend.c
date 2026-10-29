@@ -158,17 +158,30 @@ ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, G
     return s;
 }
 
+/* Caller holds mutex; generation prevents old callbacks from restoring state. */
+static void reset_recovery(ScatterBackend *s) {
+    ++s->generation;
+    clear_queue(s); s->gap = FALSE; s->dropped = 0;
+    memset(&s->status, 0, sizeof(s->status)); s->status.video_pid = -1;
+    g_clear_pointer(&s->image, g_bytes_unref);
+    s->width = s->height = s->stride = 0;
+    g_atomic_int_set(&s->recovery_failed, FALSE);
+    g_cond_signal(&s->wake);
+}
+
+void scatter_backend_reset(ScatterBackend *s) {
+    if (!s) return;
+    g_mutex_lock(&s->mutex);
+    if (s->enabled && !g_atomic_int_get(&s->stopping)) reset_recovery(s);
+    g_mutex_unlock(&s->mutex);
+}
+
 void scatter_backend_set_enabled(ScatterBackend *s, gboolean enabled) {
     if (!s) return;
     g_mutex_lock(&s->mutex);
     if (s->enabled != enabled) {
-        s->enabled = enabled; ++s->generation;
-        clear_queue(s); s->gap = FALSE; s->dropped = 0;
-        memset(&s->status, 0, sizeof(s->status)); s->status.video_pid = -1;
-        g_clear_pointer(&s->image, g_bytes_unref);
-        s->width = s->height = s->stride = 0;
-        g_atomic_int_set(&s->recovery_failed, FALSE);
-        g_cond_signal(&s->wake);
+        s->enabled = enabled;
+        reset_recovery(s);
     }
     g_mutex_unlock(&s->mutex);
 }

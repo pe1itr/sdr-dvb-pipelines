@@ -175,19 +175,25 @@ static void exercise_menu_shortcuts(App *a) {
     gtk_window_set_focus(GTK_WINDOW(a->window),a->power_button);
     for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) for (unsigned upper=0;upper<2;++upper) {
         GdkEventKey event={.keyval=upper ? gdk_keyval_to_upper(keys[i]) : keys[i]};
+        /* Plain letters must not open menus (R is reserved for recovery). */
+        tuning_key(a->window,&event,a);
+        g_assert_false(gtk_widget_get_visible(dialogs[i]));
+        event.state=GDK_MOD1_MASK;
         gboolean handled=FALSE;
         g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
         g_assert_true(handled);
         g_assert_true(gtk_widget_get_visible(dialogs[i]));
         gtk_dialog_response(GTK_DIALOG(dialogs[i]),GTK_RESPONSE_CLOSE);
         g_assert_false(gtk_widget_get_visible(dialogs[i]));
-        event.state=GDK_CONTROL_MASK;
+        event.state=GDK_CONTROL_MASK | GDK_MOD1_MASK;
         g_assert_false(tuning_key(a->window,&event,a));
         g_assert_false(gtk_widget_get_visible(dialogs[i]));
     }
     for (unsigned upper=0;upper<2;++upper) {
         gboolean seen=FALSE, handled=FALSE;
         GdkEventKey event={.keyval=upper ? GDK_KEY_A : GDK_KEY_a};
+        g_assert_false(tuning_key(a->window,&event,a));
+        event.state=GDK_MOD1_MASK;
         g_idle_add(close_about,&seen);
         g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
         g_assert_true(handled); g_assert_true(seen);
@@ -658,6 +664,27 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_is_sensitive(a->scatter_box));
         GPid decoder_pid = a->stages[1].pid;
         ScatterBackend *backend = a->scatter_backend;
+        for (unsigned upper = 0; upper < 2; ++upper) {
+            g_mutex_lock(&backend->mutex);
+            guint64 generation = backend->generation;
+            g_mutex_unlock(&backend->mutex);
+            GdkEventKey reset = {.keyval=upper ? GDK_KEY_R : GDK_KEY_r};
+            gboolean handled = FALSE;
+            g_signal_emit_by_name(a->window, "key-press-event", &reset, &handled);
+            g_assert_true(handled);
+            g_assert_true(a->running);
+            g_assert_true(a->scatter);
+            g_assert_null(a->scatter_view.image);
+            g_assert_false(gtk_widget_get_visible(a->renderer_dialog));
+            g_assert_true(a->scatter_backend == backend);
+            g_assert_cmpint(a->stages[1].pid, ==, decoder_pid);
+            reset.state = GDK_CONTROL_MASK;
+            g_assert_false(tuning_key(a->window, &reset, a));
+            g_mutex_lock(&backend->mutex);
+            g_assert_cmpuint(backend->generation, ==, generation + 1);
+            g_assert_true(backend->enabled);
+            g_mutex_unlock(&backend->mutex);
+        }
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
         g_assert_false(a->scatter);
         g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));

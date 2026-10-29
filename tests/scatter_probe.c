@@ -37,9 +37,17 @@ int main(int argc, char **argv) {
     ScatterBackend *s = scatter_backend_start(input[0], output, FALSE, &error);
     g_assert_no_error(error); g_assert_nonnull(s); close(input[0]);
     Writer writer = {.fd=input[1], .data=data, .size=size};
-    for (int round = 0; round < 4; ++round) {
-        gboolean enabled = round % 2;
-        scatter_backend_set_enabled(s, enabled);
+    for (int round = 0; round < 6; ++round) {
+        gboolean enabled = round >= 4 || round % 2;
+        if (round >= 4) {
+            scatter_backend_reset(s);
+            g_mutex_lock(&s->mutex);
+            g_assert_true(s->enabled);
+            g_assert_null(s->image);
+            g_assert_cmpuint(s->status.packets_received, ==, 0);
+            g_assert_cmpuint(s->queued, ==, 0);
+            g_mutex_unlock(&s->mutex);
+        } else scatter_backend_set_enabled(s, enabled);
         GThread *thread = g_thread_new("test-fragments", write_fragments, &writer);
         g_thread_join(thread);
         gint64 deadline = g_get_monotonic_time() + 10000000;
@@ -69,8 +77,8 @@ int main(int argc, char **argv) {
     g_assert_cmpuint(s->status.decoded_images, >, 0);
     char *received = NULL; gsize received_size;
     g_assert_true(g_file_get_contents(argv[2], &received, &received_size, NULL));
-    g_assert_cmpuint(received_size, ==, 4 * size);
-    for (int round = 0; round < 4; ++round)
+    g_assert_cmpuint(received_size, ==, 6 * size);
+    for (int round = 0; round < 6; ++round)
         g_assert_cmpmem(received + round * size, size, data, size);
     g_free(received); scatter_backend_destroy(s); close(output); g_free(data);
 
@@ -89,6 +97,6 @@ int main(int argc, char **argv) {
         scatter_backend_destroy(s); close(blocked[0]);
         if (idle[1] >= 0) close(idle[1]);
     }
-    puts("Scatterfix: direct RGB, metadata, stalled input, live toggles, byte-exact relay and Stop OK");
+    puts("Scatterfix: direct RGB, metadata, stalled input, live toggles, reset, byte-exact relay and Stop OK");
     return 0;
 }

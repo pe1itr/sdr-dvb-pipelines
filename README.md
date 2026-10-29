@@ -117,8 +117,11 @@ uitklapbare **Opstartcommando / Log**.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
 - **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
-- **I / M / R / A**: open respectievelijk Input, Mode, Renderer en About.
-  Kleine letters werken ook; Alt of Ctrl is niet nodig.
+- **Alt+I / Alt+M / Alt+R / Alt+A**: open respectievelijk Input, Mode, Renderer en About.
+  Kleine letters werken ook; houd Alt ingedrukt om een menu te openen.
+- **R**: reset de actieve TSscatterFix-reconstructie. Herstelbuffer, beeld en
+  status worden gewist; reconstructie begint opnieuw met nieuwe TS-data.
+  De ontvangst en gewone videospeler blijven doorlopen.
 - **U**: geluid van de ingebouwde player dempen; nogmaals **U** schakelt het weer in.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.

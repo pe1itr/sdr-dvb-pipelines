@@ -842,15 +842,27 @@ static void show_about(GtkWidget *widget, gpointer data);
 
 static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
     App *a = data; (void)widget;
-    if (event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK)) return FALSE;
+    if (event->state & (GDK_CONTROL_MASK | GDK_SUPER_MASK)) return FALSE;
+    if (event->state & GDK_MOD1_MASK) {
+        switch (gdk_keyval_to_lower(event->keyval)) {
+        case GDK_KEY_i: show_config(NULL,a); return TRUE;
+        case GDK_KEY_m: show_mode(NULL,a); return TRUE;
+        case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
+        case GDK_KEY_a: show_about(NULL,a); return TRUE;
+        default: return FALSE;
+        }
+    }
     switch (gdk_keyval_to_lower(event->keyval)) {
-    case GDK_KEY_i: show_config(NULL,a); return TRUE;
-    case GDK_KEY_m: show_mode(NULL,a); return TRUE;
     case GDK_KEY_u:
         video_view_set_muted(&a->video_view, !a->video_view.muted);
         return TRUE;
-    case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
-    case GDK_KEY_a: show_about(NULL,a); return TRUE;
+    case GDK_KEY_r:
+        if (a->running && !a->stopping && a->scatter && a->scatter_backend) {
+            scatter_backend_reset(a->scatter_backend);
+            scatter_view_reset(&a->scatter_view);
+            status(a, "TSscatterFix reset; waiting for new TS data.");
+        }
+        return TRUE;
     case GDK_KEY_p: save_screenshot(a); return TRUE;
     default: break;
     }
@@ -1343,10 +1355,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
     const char *shortcuts[][2]={
         {"Toets","Omschrijving"},
-        {"I","Input openen"},
-        {"M","Mode openen"},
-        {"R","Renderer openen"},
-        {"A","About openen"},
+        {"Alt+I / Alt+M / Alt+R / Alt+A","Open Input / Mode / Renderer / About"},
+        {"R","Reset TSscatterFix reconstruction"},
         {"U","Mute / unmute the embedded player"},
         {"← / →","Ontvangstfrequentie verlagen / verhogen"},
         {"↑ / ↓","Gain verhogen / verlagen"},
@@ -1622,10 +1632,10 @@ static void gui(App *a) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mode_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), renderer_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), about_item);
-    gtk_widget_set_tooltip_text(config_item, "Input openen · I");
-    gtk_widget_set_tooltip_text(mode_item, "Mode openen · M");
-    gtk_widget_set_tooltip_text(renderer_item, "Renderer openen · R");
-    gtk_widget_set_tooltip_text(about_item, "About openen · A");
+    gtk_widget_set_tooltip_text(config_item, "Open Input · Alt+I");
+    gtk_widget_set_tooltip_text(mode_item, "Open Mode · Alt+M");
+    gtk_widget_set_tooltip_text(renderer_item, "Open Renderer · Alt+R");
+    gtk_widget_set_tooltip_text(about_item, "Open About · Alt+A");
     g_signal_connect(mode_item, "activate", G_CALLBACK(show_mode), a);
     g_signal_connect(renderer_item, "activate", G_CALLBACK(show_renderer), a);
     GtkWidget *top_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);

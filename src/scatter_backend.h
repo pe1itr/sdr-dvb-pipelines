@@ -27,6 +27,8 @@ typedef struct {
 ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, GError **error);
 /* Switch only recovery; the original TS relay always keeps running. */
 void scatter_backend_set_enabled(ScatterBackend *s, gboolean enabled);
+/* Discard recovery state and start again with fresh TS data. */
+void scatter_backend_reset(ScatterBackend *s);
 void scatter_backend_stop(ScatterBackend *s);
 gboolean scatter_backend_done(ScatterBackend *s);
 /* Call after done (or outside the GTK event loop). */
