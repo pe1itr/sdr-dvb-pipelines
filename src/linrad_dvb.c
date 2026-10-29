@@ -20,6 +20,7 @@
 #include "video_view.h"
 #include "dvbt_backend.h"
 #include "scatter_view.h"
+#include "ts_info_view.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -50,6 +51,7 @@ typedef struct {
     DecoderView decoder_view;
     VideoView video_view;
     ScatterView scatter_view;
+    TsInfoView information;
     ScatterBackend *scatter_backend;
 } App;
 
@@ -401,6 +403,7 @@ static gboolean force_stop(gpointer data) {
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
     a->stopping = TRUE;
+    ts_info_view_reset(&a->information);
     scatter_backend_stop(a->scatter_backend);
     scatter_view_reset(&a->scatter_view);
     decoder_view_stop(&a->decoder_view);
@@ -687,6 +690,8 @@ static void tune_step(App *a, int direction) {
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
         if (sent != length) { status(a, "Afstemopdracht niet verstuurd; probeer opnieuw"); return; }
     }
+    if (a->scatter_backend) ts_info_backend_reset(a->scatter_backend->information);
+    ts_info_view_reset(&a->information);
     g_key_file_set_double(a->config, section, "frequency", next);
     g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), next/1000.0);
@@ -1013,6 +1018,8 @@ static gboolean exit_signal(gpointer data) {
 
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
+    ts_info_view_tick(&a->information, a->running && !a->stopping && a->scatter_backend ?
+        a->scatter_backend->information : NULL);
     if (!a->stopping) scatter_view_tick(&a->scatter_view, a->scatter_backend);
     if (a->running && !a->stopping && (video_view_failed(&a->video_view) ||
         (a->scatter_backend && g_atomic_int_get(&a->scatter_backend->relay_failed)))) {
@@ -1662,6 +1669,7 @@ static void gui(App *a) {
     atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix aan/uit");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
+    ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls);
     gtk_widget_set_hexpand(view, TRUE); gtk_widget_set_vexpand(view, TRUE);
     gtk_grid_attach(GTK_GRID(a->dashboard), view, 0, 0, 1, 1);
     a->lower = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
@@ -1727,6 +1735,7 @@ static void gui(App *a) {
     video_view_destroy(&a->video_view);
     scatter_view_reset(&a->scatter_view);
     if (a->iq_view.fd >= 0) close(a->iq_view.fd);
+    ts_info_view_destroy(&a->information);
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
     gtk_widget_destroy(a->config_dialog);

@@ -106,6 +106,7 @@ static gpointer relay(gpointer data) {
         if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (n < 0) goto failed;
         if (!n) break;
+        ts_info_backend_feed(s->information, bytes, n);
         g_mutex_lock(&s->mutex);
         if (s->enabled && !g_atomic_int_get(&s->worker_done) && !g_atomic_int_get(&s->recovery_failed)) {
             GBytes *chunk = g_bytes_new(bytes, n);
@@ -134,6 +135,7 @@ static gpointer relay(gpointer data) {
 failed:
     g_atomic_int_set(&s->relay_failed, TRUE);
 done:
+    ts_info_backend_finish(s->information);
     close(s->output); s->output = -1;
     g_mutex_lock(&s->mutex); s->eof = TRUE; g_cond_signal(&s->wake); g_mutex_unlock(&s->mutex);
     g_atomic_int_set(&s->relay_done, TRUE);
@@ -150,6 +152,7 @@ ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, G
         g_set_error(error, G_FILE_ERROR, g_file_error_from_errno(errno), "Cannot start TSscatterfix: %s", g_strerror(errno));
         scatter_backend_destroy(s); return NULL;
     }
+    s->information = ts_info_backend_new();
     s->worker = g_thread_new("scatter-recovery", recover, s);
     s->relay = g_thread_new("scatter-ts-relay", relay, s);
     return s;
@@ -173,11 +176,12 @@ void scatter_backend_set_enabled(ScatterBackend *s, gboolean enabled) {
 void scatter_backend_stop(ScatterBackend *s) {
     if (!s) return;
     g_atomic_int_set(&s->stopping, TRUE);
+    ts_info_backend_stop(s->information);
     g_mutex_lock(&s->mutex); g_cond_signal(&s->wake); g_mutex_unlock(&s->mutex);
 }
 
 gboolean scatter_backend_done(ScatterBackend *s) {
-    return !s || (g_atomic_int_get(&s->relay_done) && g_atomic_int_get(&s->worker_done));
+    return !s || (g_atomic_int_get(&s->relay_done) && g_atomic_int_get(&s->worker_done) && ts_info_backend_done(s->information));
 }
 
 void scatter_backend_destroy(ScatterBackend *s) {
@@ -187,6 +191,7 @@ void scatter_backend_destroy(ScatterBackend *s) {
     if (s->worker) g_thread_join(s->worker);
     if (s->input >= 0) close(s->input);
     if (s->output >= 0) close(s->output);
+    ts_info_backend_free(s->information);
     clear_queue(s); g_clear_pointer(&s->image, g_bytes_unref);
     g_cond_clear(&s->wake); g_mutex_clear(&s->mutex); g_free(s);
 }

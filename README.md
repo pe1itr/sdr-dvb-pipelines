@@ -187,6 +187,50 @@ korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
+### EIT en klassieke teletekst
+
+Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.
+Elke knop is grijs zolang er nog geen inhoud beschikbaar is en wordt groen zodra
+voor de gekozen service EIT-programmainformatie of teletekstpagina 100 is ontvangen.
+De tooltip vermeldt de laatste ontvangsttijd. Beide knoppen blijven aanklikbaar.
+Ze openen hetzelfde niet-modale informatievenster, direct op het betreffende tabblad;
+sluiten van dit venster onderbreekt de ontvangst niet.
+
+**EIT** toont het huidige en volgende programma uit de actual-transportstream
+present/following-tabel, met titel, korte en uitgebreide beschrijving en tijden in
+de lokale tijdzone. Het tabblad **Teletext · 100** toont een klassieke zwarte 4:3-pagina
+met de uitgezonden kleuren, vaste tekenposities, blokgrafiek, dubbele tekenhoogte en
+paginakop. De pagina schaalt als geheel met het venster mee. Ontvangen subpagina's
+van pagina 100 volgen de uitzending; er is geen paginabrowser.
+
+De informatie wordt ook verzameld als het venster gesloten is, bij DVB-S/S2/T,
+alle renderers en met Scatterfix uitgeschakeld. Bij meerdere services kiest de
+ontvanger aanvankelijk de eerste service uit de PAT; in de popup kun je een andere
+service kiezen. Die keuze geldt alleen voor de informatie en verandert de player niet.
+De servicekeuze vermeldt naam en service-ID om verwarring met een externe player te
+voorkomen. Er worden maximaal 32 services bijgehouden.
+
+Tijdens ontvangstonderbrekingen blijft de laatst ontvangen inhoud staan. Na twee
+minuten zonder nieuwe informatie meldt de popup dat er geen recente update is.
+Stoppen, opnieuw starten, afstemmen met de app of een andere informatieservice kiezen
+wist de oude inhoud. Verandering van transportstream-ID wist de inhoud eveneens.
+Afstemmen buiten de app (bijvoorbeeld in Linrad) is alleen via veranderingen in de
+ontvangen transportstream herkenbaar. Ontbrekende teletekst in de PMT en wachten op
+pagina 100 hebben afzonderlijke statusmeldingen; ontbreken van EIT wordt niet uit
+een korte wachttijd afgeleid.
+
+De TS-informatieverwerking draait op een eigen thread met maximaal 1 MiB wachtende
+TS-data. Pakketverlies of overloop reset de opbouw van secties en teletekst; de
+laatst weergegeven inhoud blijft staan. CRC-foute SI-secties worden genegeerd.
+De oorspronkelijke TS-uitvoer blijft byte voor byte behouden. Teletekst gebruikt
+FFmpeg's `libzvbi_teletextdec`; als de gekoppelde FFmpeg zonder libzvbi is gebouwd,
+meldt de popup dat de decoder ontbreekt en blijft EIT beschikbaar.
+
+`make test-ts-info` test de SI-parser en teletekstdecoder met gegenereerde
+transportstreams, inclusief tekstcoderingen, uitgebreide beschrijvingen,
+servicewissels, pakketverlies en pagina-updates. De GTK-smoketest controleert de
+knoppen, popup, servicekeuze en reset tijdens achtergrondverwerking.
+
 ### Ingebouwde DVB-T-decoder en verdeling van het werk
 
 `make` bouwt de vastgelegde broncode in `third_party/rbdvbt` mee in

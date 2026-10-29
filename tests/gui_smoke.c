@@ -245,11 +245,70 @@ static void exercise_scatter_view(App *a) {
     g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
 }
 
+static void exercise_information(App *a) {
+    TsInfoView *v=&a->information;
+    for (int i=1;i>=0;i--) {
+        g_assert_true(gtk_widget_get_parent(v->buttons[i])==gtk_widget_get_parent(a->scatter_box));
+        g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
+        gtk_button_clicked(GTK_BUTTON(v->buttons[i]));
+        g_assert_true(gtk_widget_get_visible(v->dialog));
+        g_assert_cmpint(gtk_notebook_get_current_page(GTK_NOTEBOOK(v->tabs)),==,i);
+        gtk_dialog_response(GTK_DIALOG(v->dialog),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(v->dialog));
+    }
+    char *path=g_build_filename(a->directory,"information.ts",NULL), *bytes=NULL; gsize size;
+    g_assert_true(g_file_get_contents(path,&bytes,&size,NULL)); g_free(path);
+    TsInfoBackend *backend=ts_info_backend_new();
+    ts_info_backend_feed(backend,(guint8 *)bytes,size);
+    gint64 deadline=g_get_monotonic_time()+3000000;
+    do {
+        v->next_tick=0; ts_info_view_tick(v,backend);
+        if (v->snapshot.page) break;
+        g_usleep(1000);
+    } while (g_get_monotonic_time()<deadline);
+    g_assert_nonnull(v->snapshot.page);
+    g_assert_true(v->snapshot.events[0].valid);
+    for (unsigned i=0;i<2;i++)
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
+    gtk_button_clicked(GTK_BUTTON(v->buttons[1]));
+    g_assert_cmpint(gtk_notebook_get_current_page(GTK_NOTEBOOK(v->tabs)),==,1);
+    /* Exercise the actual Cairo page drawing and save a visual check. */
+    GtkRequisition minimum,natural; gtk_widget_get_preferred_size(v->dialog,&minimum,&natural);
+    GtkAllocation allocation={0,0,720,640}; gtk_widget_size_allocate(v->dialog,&allocation);
+    const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
+    if (screenshot) {
+        cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,720,640);
+        cairo_t *cr=cairo_create(surface); gtk_widget_draw(v->dialog,cr);
+        char *dir=g_path_get_dirname(screenshot), *file=g_build_filename(dir,"teletext-smoke.png",NULL);
+        g_assert_cmpint(cairo_surface_write_to_png(surface,file),==,CAIRO_STATUS_SUCCESS);
+        g_free(dir); g_free(file); cairo_destroy(cr); cairo_surface_destroy(surface);
+    }
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(v->services),"2");
+    g_assert_cmpint(v->snapshot.selected,==,2);
+    g_assert_null(v->snapshot.page); g_assert_false(v->snapshot.events[0].valid);
+    for (unsigned i=0;i<2;i++)
+        g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
+    /* A reset during queued work cannot republish the old generation. */
+    ts_info_backend_feed(backend,(guint8 *)bytes,size);
+    ts_info_backend_reset(backend);
+    ts_info_view_reset(v);
+    g_assert_null(v->backend); g_assert_null(v->snapshot.page);
+    ts_info_backend_finish(backend);
+    deadline=g_get_monotonic_time()+3000000;
+    while (!ts_info_backend_done(backend) && g_get_monotonic_time()<deadline) g_usleep(1000);
+    g_assert_true(ts_info_backend_done(backend));
+    TsInfoSnapshot after={0}; ts_info_backend_snapshot(backend,&after);
+    g_assert_cmpuint(after.count,==,0); g_assert_null(after.page);
+    ts_info_snapshot_clear(&after); ts_info_backend_free(backend); g_free(bytes);
+    gtk_dialog_response(GTK_DIALOG(v->dialog),GTK_RESPONSE_CLOSE);
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        exercise_information(a);
         exercise_scatter_view(a);
         exercise_decoder_view(a);
         exercise_file_selection(a);

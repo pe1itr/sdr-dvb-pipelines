@@ -566,6 +566,10 @@ class LifecycleTests(PipelineTests):
     def test_gui_controls_stop_restart_and_close(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.fixture(tmp)
+            from test_ts_info import Stream
+            ts = Stream()
+            Path(tmp, "information.ts").write_bytes(ts.pat(((1, 0x1000), (2, 0x1001))) + ts.sdt() +
+                ts.pmt() + ts.eit() + ts.eit(number=1, title=b"Next event") + ts.teletext() + ts.teletext())
             # A private headless GTK display; never connects to the user's desktop.
             display = free_port()
             env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",

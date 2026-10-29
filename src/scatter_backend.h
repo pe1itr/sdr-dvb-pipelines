@@ -2,9 +2,11 @@
 #define LINRAD_SCATTER_BACKEND_H
 #include <glib.h>
 #include "recovery.h"
+#include "ts_info.h"
 
 #define SCATTER_QUEUE_LIMIT (4u * 1024 * 1024)
 typedef struct {
+    TsInfoBackend *information;
     GMutex mutex;
     GCond wake;
     GQueue queue;
