@@ -166,7 +166,7 @@ class PipelineTests(unittest.TestCase):
             for sr, fec, gi, scatter in itertools.product(rates, code_rates, guards, (False, True)):
                 with self.subTest(standard=standard, sr=sr, fec=fec, gi=gi, scatter=scatter):
                     cmds = self.preview(standard, sr, fec, gi, scatter)
-                    self.assertEqual(len(cmds), 4 if scatter else 3)
+                    self.assertEqual(len(cmds), 3)
                     self.assertEqual(cmds[0][0], str(RX))
                     dec = cmds[1]
                     self.assertEqual(dec[dec.index("--sr") + 1], str(sr))
@@ -179,9 +179,7 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(dec[0], str(UI))
                         self.assertIn("--decoder-worker=dvbt", dec)
                         self.assertEqual(dec[dec.index("--gi") + 1], gi)
-                    if scatter:
-                        self.assertEqual(cmds[2][-2:], ["--udp-output", "127.0.0.1:1235"])
-                    self.assertEqual(cmds[-1][-1], "udp://@127.0.0.1:1235" if scatter else "fd://0")
+                    self.assertEqual(cmds[-1][-1], "fd://0")
 
     def test_direct_sdr_5ms(self):
         for source, fmt in (("hackrf", "--u8"), ("b210", "--s16")):
@@ -249,7 +247,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(p.returncode, 0, p.stderr)
                 return [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
             cmds = preview()
-            self.assertEqual(len(cmds), 4)
+            self.assertEqual(len(cmds), 3)
             self.assertIn("sdriq", cmds[0])
             self.assertIn("28000100", cmds[0])
             self.assertIn("-10", cmds[0])
@@ -352,6 +350,16 @@ class PipelineTests(unittest.TestCase):
     def test_renderer_selection_and_input_arguments(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.config(tmp)
+            low_latency = ["--network-caching=300", "--clock-jitter=0",
+                           "--clock-synchro=0", "--drop-late-frames", "--skip-frames"]
+            cfg["cvlc"]["args"] = " ".join(low_latency)
+            for renderer in ("cvlc", "vlc"):
+                cfg["session"] = {"renderer": renderer}
+                self.write_config(cfg, path)
+                direct = self.preview("DVB-S", 125000, "1/2", config=path)[-1]
+                self.assertEqual(direct[1:], low_latency + ["fd://0"])
+                scatter = self.preview("DVB-S", 125000, "1/2", scatter=True, config=path)[-1]
+                self.assertEqual(scatter[1:], low_latency + ["fd://0"])
             cfg["session"] = {"renderer": "custom"}
             cfg["paths"]["custom_renderer"] = "players/my renderer"
             cfg["renderer"] = {"args": '--input={input} "literal $(touch NO_FILE)"',
@@ -360,11 +368,11 @@ class PipelineTests(unittest.TestCase):
                 self.write_config(cfg, path)
                 commands = self.preview("DVB-S", 125000, "1/2", scatter=scatter, config=path)
                 self.assertEqual(commands[-1], [str(Path(tmp, "players/my renderer")),
-                    "--input=udp://127.0.0.1:1235" if scatter else "--input=-", "literal $(touch NO_FILE)"])
+                    "--input=-", "literal $(touch NO_FILE)"])
                 self.assertFalse(Path(tmp, "NO_FILE").exists())
             cfg["session"]["renderer"] = "mpegts"
             self.write_config(cfg, path)
-            # Direct file output excludes both the renderer and Scatterfix.
+            # File output needs no external renderer; Scatterfix is an embedded branch.
             self.assertEqual(len(self.preview("DVB-S", 125000, "1/2", scatter=True, config=path)), 2)
             self.assertFalse(Path(tmp, "capture with spaces.ts").exists())  # Preview has no side effects.
             cfg["session"]["renderer"] = "ffplay"
@@ -375,8 +383,8 @@ class PipelineTests(unittest.TestCase):
                 self.write_config(cfg, path)
                 commands = self.preview("DVB-S", 125000, "1/2", scatter=scatter, config=path)
                 self.assertEqual(commands[-1], ["ffplay", "-hide_banner", "-loglevel", "warning",
-                    "-autoexit", "-f", "mpegts", "udp://127.0.0.1:1235" if scatter else "pipe:0"])
-                self.assertEqual(len(commands), 4 if scatter else 3)
+                    "-autoexit", "-f", "mpegts", "pipe:0"])
+                self.assertEqual(len(commands), 3)
             cfg["paths"]["ffplay"] = "players/my ffplay"
             cfg["ffplay"] = {"args": '-window_title "DVB ontvangst" -f mpegts'}
             self.write_config(cfg, path)

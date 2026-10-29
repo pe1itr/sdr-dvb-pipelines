@@ -19,6 +19,7 @@
 #include "decoder_view.h"
 #include "video_view.h"
 #include "dvbt_backend.h"
+#include "scatter_view.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -48,6 +49,8 @@ typedef struct {
     IQView iq_view;
     DecoderView decoder_view;
     VideoView video_view;
+    ScatterView scatter_view;
+    ScatterBackend *scatter_backend;
 } App;
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
@@ -79,7 +82,7 @@ static gboolean udp_output(App *a) {
         g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
 }
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
-static gboolean use_scatter(App *a) { return a->scatter && a->renderer != RENDER_FILE; }
+static gboolean use_scatter(App *a) { return a->scatter; }
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
@@ -154,9 +157,7 @@ static void build_pipeline(App *a) {
         if (inet_pton(AF_INET, host, &destination) != 1 || destination.s_addr == INADDR_ANY ||
             destination.s_addr == INADDR_BROADCAST) fatal("Config [renderer] udp_host must be a destination IPv4 address");
         g_free(host);
-        int port = integer_setting(a, "renderer", "udp_port", 1, 65535);
-        if (use_scatter(a) && port == integer_setting(a, "scatterfix", "udp_port", 1, 65535))
-            fatal("UDP output must use a different port from ScatterFix input");
+        integer_setting(a, "renderer", "udp_port", 1, 65535);
     }
     clear_stages(a);
     int sample_rate = integer_setting(a, "linrad", "sample_rate", 1, 100000000);
@@ -239,23 +240,11 @@ static void build_pipeline(App *a) {
         }
     }
     char *vlc_input = g_strdup("fd://0");
-    if (use_scatter(a)) {
-        s = new_stage(a, "scatterfix");
-        options(a, s, "scatterfix", "args", "--udp-output");
-        char *host = setting(a, "scatterfix", "udp_host");
-        if (inet_pton(AF_INET, host, &addr) != 1) fatal("Config [scatterfix] udp_host must be a local IPv4 address");
-        int port = integer_setting(a, "scatterfix", "udp_port", 1, 65535);
-        char *destination = g_strdup_printf("%s:%d", host, port);
-        add(s, "--udp-output"); add(s, destination);
-        g_free(vlc_input); vlc_input = g_strdup_printf("udp://@%s:%d", host, port);
-        g_free(host); g_free(destination);
-    }
     if (a->renderer == RENDER_CUSTOM) {
         s = new_stage(a, "custom_renderer");
         options(a, s, "renderer", "args", "");
         /* The renderer chooses its own stdin syntax via {input}; no shell. */
-        char *input = use_scatter(a) ? g_strdup(vlc_input) : g_strdup("-");
-        if (use_scatter(a)) memmove(input+6, input+7, strlen(input+7)+1); /* udp://host:port */
+        char *input = g_strdup("-");
         for (guint i=1; i<s->args->len; ++i) {
             char *arg = g_ptr_array_index(s->args, i);
             char **parts = g_strsplit(arg, "{input}", -1);
@@ -266,12 +255,12 @@ static void build_pipeline(App *a) {
     } else if (a->renderer == RENDER_FFPLAY) {
         s = new_stage(a, "ffplay");
         options(a, s, "ffplay", "args", "-i");
-        /* FFmpeg uses pipe:0 for stdin and UDP URLs without VLC's @. */
-        char *input = use_scatter(a) ? g_strdup(vlc_input) : g_strdup("pipe:0");
-        if (use_scatter(a)) memmove(input+6, input+7, strlen(input+7)+1);
+        /* FFmpeg uses pipe:0 for stdin. */
+        char *input = g_strdup("pipe:0");
         add(s, input); g_free(input);
     } else if (a->renderer != RENDER_FILE && !internal_player(a)) {
-        s = new_stage(a, renderers[a->renderer]); options(a, s, "cvlc", "args", ""); add(s, vlc_input);
+        s = new_stage(a, renderers[a->renderer]); options(a, s, "cvlc", "args", "");
+        add(s, vlc_input);
     }
     for (int i = 0; i < a->stage_count; ++i) g_ptr_array_add(a->stages[i].args, NULL);
     g_free(vlc_input); g_free(format); g_free(ip);
@@ -280,7 +269,7 @@ static void build_pipeline(App *a) {
 static char *describe(App *a) {
     GString *text = g_string_new(NULL);
     for (int i = 0; i < a->stage_count; ++i) {
-        if (i) g_string_append(text, use_scatter(a) && i == 3 ? "\n  [UDP MPEG-TS] ->\n" : "\n  |\n");
+        if (i) g_string_append(text, "\n  |\n");
         char **args = (char **)a->stages[i].args->pdata;
         for (int j = 0; args[j]; ++j) {
             char *quoted = g_shell_quote(args[j]);
@@ -289,7 +278,7 @@ static char *describe(App *a) {
         }
     }
     if (internal_player(a)) {
-        g_string_append(text, use_scatter(a) ? "\n  [UDP MPEG-TS] -> " : "\n  | ");
+        g_string_append(text, "\n  | ");
         g_string_append(text, a->renderer == RENDER_UDP ? "UDP output" : "embedded video panel");
         if (udp_output(a)) {
             char *host = setting(a, "renderer", "udp_host");
@@ -304,6 +293,7 @@ static char *describe(App *a) {
         g_string_append_printf(text, "\n  > %s  (nieuw MPEG-TS-bestand)", quoted);
         g_free(path); g_free(resolved); g_free(quoted);
     }
+    if (use_scatter(a)) g_string_append(text, "\n  + decoder TS -> embedded TSscatterFix (parallel) -> RGB image / service / progress panel");
     return g_string_free(text, FALSE);
 }
 
@@ -348,12 +338,11 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 }
 
 static void scatter_refresh(App *a) {
+    if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (!a->scatter_box) return;
-    gtk_widget_set_sensitive(a->scatter_box, !a->running && !a->stopping && a->renderer != RENDER_FILE);
-    gtk_widget_set_tooltip_text(a->scatter_box, a->renderer == RENDER_FILE ?
-        "TSscatterFix is niet beschikbaar bij rechtstreekse MPEG-TS-bestandsuitvoer." :
-        a->running || a->stopping ? "Stop de ontvangst om TSscatterFix te wijzigen." :
-        a->scatter ? "TSscatterFix aan · klik om uit te schakelen." : "TSscatterFix uit · klik om in te schakelen.");
+    gtk_widget_set_sensitive(a->scatter_box, !a->stopping);
+    gtk_widget_set_tooltip_text(a->scatter_box, a->stopping ? "Waiting for reception to stop." :
+        a->scatter ? "TSscatterFix on · click to turn off." : "TSscatterFix off · click to turn on.");
 }
 
 static void power_refresh(App *a) {
@@ -378,6 +367,8 @@ static void power_refresh(App *a) {
 static void finish_if_stopped(App *a) {
     if (!a->stopping || a->kill_timer) return;
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
+    if (!scatter_backend_done(a->scatter_backend)) return;
+    scatter_backend_destroy(a->scatter_backend); a->scatter_backend = NULL;
     if (a->video_view.area) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
@@ -399,12 +390,19 @@ static gboolean force_stop(gpointer data) {
         if (a->stages[i].group > 0) kill(-a->stages[i].group, SIGKILL);
         a->stages[i].group = 0;
     }
-    a->kill_timer = 0; finish_if_stopped(a); return G_SOURCE_REMOVE;
+    a->kill_timer = 0;
+    if (!scatter_backend_done(a->scatter_backend)) {
+        a->kill_timer = g_timeout_add(50, force_stop, a);
+        return G_SOURCE_REMOVE;
+    }
+    finish_if_stopped(a); return G_SOURCE_REMOVE;
 }
 
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
     a->stopping = TRUE;
+    scatter_backend_stop(a->scatter_backend);
+    scatter_view_reset(&a->scatter_view);
     decoder_view_stop(&a->decoder_view);
     decoder_view_tick(&a->decoder_view, FALSE, standards[a->standard]);
     if (a->drain_timer) { g_source_remove(a->drain_timer); a->drain_timer=0; }
@@ -457,7 +455,7 @@ static void child_exit(GPid pid, gint result, gpointer data) {
 
 static void child_setup(gpointer unused) {
     (void)unused;
-    /* Each process group includes decoder/scatterfix descendants. */
+    /* Each process group includes decoder/player descendants. */
     if (setsid() < 0) _exit(126);
     signal(SIGPIPE, SIG_DFL); signal(SIGINT, SIG_DFL); signal(SIGTERM, SIG_DFL);
 }
@@ -488,7 +486,7 @@ static void start_pipeline(App *a) {
         }
         g_free(found);
     }
-    int pipes[2][2], log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
+    int pipes[2][2], scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
     if (a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory);
@@ -506,6 +504,7 @@ static void start_pipeline(App *a) {
     }
     for (; made < (a->renderer == RENDER_FILE ? 1 : 2); ++made)
         if (!g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
+    if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (nullfd < 0) goto pipe_error;
     if (!a->headless) {
@@ -514,11 +513,6 @@ static void start_pipeline(App *a) {
     }
     if (internal_player(a)) {
         char *url = NULL, *destination = NULL;
-        if (use_scatter(a)) {
-            char *host = setting(a, "scatterfix", "udp_host");
-            url = g_strdup_printf("udp://@%s:%d", host, integer_setting(a, "scatterfix", "udp_port", 1, 65535));
-            g_free(host);
-        }
         if (udp_output(a)) {
             char *host = setting(a, "renderer", "udp_host");
             destination = g_strdup_printf("%s:%d", host, integer_setting(a, "renderer", "udp_port", 1, 65535));
@@ -529,6 +523,17 @@ static void start_pipeline(App *a) {
                                              a->renderer == RENDER_EMBEDDED, &error);
         g_free(url); g_free(destination);
         if (!started) {
+            status(a, error->message); g_clear_error(&error);
+            a->exit_code = 1; goto pipe_error;
+        }
+    }
+    {
+        /* Keep the TS relay available so recovery can be toggled live. */
+        GError *error = NULL;
+        scatter_view_reset(&a->scatter_view);
+        a->scatter_backend = scatter_backend_start(scatter_pipe[0],
+            output_fd >= 0 ? output_fd : pipes[1][1], a->scatter, &error);
+        if (!a->scatter_backend) {
             status(a, error->message); g_clear_error(&error);
             a->exit_code = 1; goto pipe_error;
         }
@@ -544,9 +549,10 @@ static void start_pipeline(App *a) {
     }
     /* Launch consumers first. GLib closes unused pipe descriptors in children. */
     for (int i = a->stage_count - 1; i >= 0; --i) {
-        int in = i == 0 || (use_scatter(a) && i == 3) ? nullfd : pipes[i - 1][0];
+        int in = i == 0 ? nullfd : pipes[i - 1][0];
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
         int out = i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
+        if (i == 1) out = scatter_pipe[1];
         GError *error = NULL; Stage *s = &a->stages[i];
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
@@ -570,6 +576,7 @@ static void start_pipeline(App *a) {
     }
     for (int i = 0; i < made; ++i) { close(pipes[i][0]); close(pipes[i][1]); }
     close(nullfd);
+    if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
     if (output_fd >= 0) close(output_fd);
     if (tune_pipe[0] >= 0) close(tune_pipe[0]);
     if (a->stopping) { if (tune_pipe[1] >= 0) close(tune_pipe[1]); }
@@ -579,6 +586,8 @@ static void start_pipeline(App *a) {
     if (!a->stopping) status(a, a->source==SOURCE_FILE ? "IQ-bestand wordt realtime afgespeeld" : "Pipeline actief - wachten op/ontvangen van IQ");
     return;
 pipe_error:
+    if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
+    if (a->video_view.area) video_view_stop(&a->video_view);
     if (output_fd >= 0) close(output_fd);
     if (tune_pipe[0] >= 0) close(tune_pipe[0]);
     if (tune_pipe[1] >= 0) close(tune_pipe[1]);
@@ -918,13 +927,20 @@ static void selection_changed(GtkWidget *widget, gpointer data) {
 
 static void scatter_changed(GtkWidget *widget, gpointer data) {
     App *a=data;
-    if (a->running || a->stopping || a->renderer == RENDER_FILE) {
+    if (a->stopping) {
         g_signal_handlers_block_by_func(widget, scatter_changed, a);
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget),a->scatter);
         g_signal_handlers_unblock_by_func(widget, scatter_changed, a);
         return;
     }
-    selection_changed(widget,data);
+    a->scatter = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget));
+    scatter_backend_set_enabled(a->scatter_backend, a->scatter);
+    scatter_view_reset(&a->scatter_view);
+    scatter_refresh(a);
+    /* Do not rebuild stages while their PIDs/process groups are live. */
+    char *text = describe(a);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(a->preview)), text, -1);
+    g_free(text);
 }
 
 static void populate_rates(App *a) {
@@ -997,7 +1013,9 @@ static gboolean exit_signal(gpointer data) {
 
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
-    if (a->running && !a->stopping && video_view_failed(&a->video_view)) {
+    if (!a->stopping) scatter_view_tick(&a->scatter_view, a->scatter_backend);
+    if (a->running && !a->stopping && (video_view_failed(&a->video_view) ||
+        (a->scatter_backend && g_atomic_int_get(&a->scatter_backend->relay_failed)))) {
         a->exit_code = 1; status(a, "Video / UDP output failed; check the VLC plugins and received stream.");
         stop_pipeline(a);
     }
@@ -1488,9 +1506,6 @@ static gboolean apply_renderer(App *a) {
             gtk_label_set_text(GTK_LABEL(a->renderer_error), error->message); g_clear_error(&error); return FALSE;
         }
         g_strfreev(argv);
-        if (a->scatter && !strstr(args, "{input}")) {
-            gtk_label_set_text(GTK_LABEL(a->renderer_error), "Gebruik {input} in de argumenten voor de UDP-invoer van Scatterfix."); return FALSE;
-        }
     }
     if (a->renderer == RENDER_FILE && !*file) {
         gtk_label_set_text(GTK_LABEL(a->renderer_error), "Vul een naam voor het MPEG-TS-bestand in."); return FALSE;
@@ -1504,10 +1519,6 @@ static gboolean apply_renderer(App *a) {
         if (inet_pton(AF_INET, host, &destination) != 1 ||
             destination.s_addr == INADDR_ANY || destination.s_addr == INADDR_BROADCAST) {
             gtk_label_set_text(GTK_LABEL(a->renderer_error), "Enter a destination IPv4 address, e.g. 127.0.0.1."); return FALSE;
-        }
-        /* Reserve ScatterFix's port even when it is currently disabled. */
-        if (port == integer_setting(a, "scatterfix", "udp_port", 1, 65535)) {
-            gtk_label_set_text(GTK_LABEL(a->renderer_error), "Choose a different port from ScatterFix input."); return FALSE;
         }
         if (a->renderer == RENDER_EMBEDDED) g_key_file_set_boolean(a->config, "renderer", "udp_enabled", enabled);
         g_key_file_set_string(a->config, "renderer", "udp_host", host);
@@ -1558,8 +1569,8 @@ static void create_mode_renderer(App *a) {
     gtk_widget_set_sensitive(a->udp_port, internal_player(a));
     GtkWidget *hint = gtk_label_new("Embedded player: fixed panel; video scales to fit without changing its shape.\n"
         "UDP works alongside the embedded player. In VLC, open udp://@:1234 (default port).\n"
-        "Custom program: MPEG-TS on stdin; {input} becomes - or the UDP URL with ScatterFix.\n"
-        "File output writes directly from the decoder, without ScatterFix.\n"
+        "Custom program: MPEG-TS on stdin; {input} becomes -.\n"
+        "TSscatterFix receives a parallel copy; all outputs keep the original stream.\n"
         "Relative paths start in the INI directory. Existing files will not be overwritten.");
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(hint), 64);
     gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 7, 2, 1);
@@ -1672,6 +1683,7 @@ static void gui(App *a) {
     gtk_size_group_add_widget(panel_width, video_frame);
     g_object_unref(panel_width);
     gtk_box_pack_start(GTK_BOX(receiver_row), video_frame, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(receiver_row), scatter_view_create(&a->scatter_view), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
     create_mode_renderer(a);
     populate_rates(a); populate_fecs(a);
@@ -1713,6 +1725,7 @@ static void gui(App *a) {
     g_source_remove(a->iq_view.timer);
     decoder_view_stop(&a->decoder_view);
     video_view_destroy(&a->video_view);
+    scatter_view_reset(&a->scatter_view);
     if (a->iq_view.fd >= 0) close(a->iq_view.fd);
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
@@ -1830,7 +1843,9 @@ int main(int argc, char **argv) {
         guint sigint = g_unix_signal_add(SIGINT, exit_signal, &a), sigterm = g_unix_signal_add(SIGTERM, exit_signal, &a);
         if (run) {
             a.loop = g_main_loop_new(NULL, FALSE); start_pipeline(&a);
+            guint output_timer = g_timeout_add(100, decoder_tick, &a);
             if (a.running) g_main_loop_run(a.loop);
+            g_source_remove(output_timer);
             g_main_loop_unref(a.loop);
         } else gui(&a);
         g_source_remove(sigint); g_source_remove(sigterm);

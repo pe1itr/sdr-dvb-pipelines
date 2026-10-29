@@ -208,11 +208,49 @@ static void exercise_screenshot(App *a, guint key, const char *suffix) {
     g_assert_false(tuning_key(a->window, &event, a));
 }
 
+static void exercise_scatter_view(App *a) {
+    g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), TRUE);
+    g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
+    g_assert_true(gtk_widget_get_parent(a->scatter_view.frame) ==
+                  gtk_widget_get_parent(gtk_widget_get_parent(a->video_view.area)));
+    ScatterBackend sample = {0};
+    g_mutex_init(&sample.mutex);
+    const guint8 rgb[] = {255,0,0, 0,255,0, 0,0,255, 255,255,255};
+    sample.image = g_bytes_new(rgb, sizeof(rgb));
+    sample.width = sample.height = 2; sample.stride = 6;
+    sample.status.phase = SF_IMAGE_READY; sample.status.progress_percent = 100;
+    g_strlcpy(sample.status.provider_name, "PE1ITR", sizeof(sample.status.provider_name));
+    g_strlcpy(sample.status.service_name, "Recovered test card", sizeof(sample.status.service_name));
+    scatter_view_tick(&a->scatter_view, &sample);
+    g_assert_nonnull(a->scatter_view.image);
+    g_assert_cmpfloat(gtk_progress_bar_get_fraction(GTK_PROGRESS_BAR(a->scatter_view.progress)), ==, 1);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->scatter_view.provider)), ==, "Provider: PE1ITR");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->scatter_view.service)), ==, "Service: Recovered test card");
+    /* The view retains its own image reference after the snapshot is freed. */
+    g_bytes_unref(sample.image); g_mutex_clear(&sample.mutex);
+    GtkAllocation allocation = {0, 0, 1600, 900};
+    gtk_widget_size_allocate(a->window, &allocation);
+    const char *screenshot = g_getenv("LINRAD_GUI_SCREENSHOT");
+    if (screenshot) {
+        cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 1600, 900);
+        cairo_t *cr = cairo_create(surface); gtk_widget_draw(a->window, cr);
+        char *dir = g_path_get_dirname(screenshot), *path = g_build_filename(dir, "scatter-smoke.png", NULL);
+        g_assert_cmpint(cairo_surface_write_to_png(surface, path), ==, CAIRO_STATUS_SUCCESS);
+        g_free(path); g_free(dir); cairo_destroy(cr); cairo_surface_destroy(surface);
+    }
+    scatter_view_reset(&a->scatter_view);
+    g_assert_null(a->scatter_view.image);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
+    g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        exercise_scatter_view(a);
         exercise_decoder_view(a);
         exercise_file_selection(a);
         assert_no_tabs(a->window);
@@ -261,8 +299,8 @@ static gboolean exercise(gpointer data) {
         gtk_entry_set_text(GTK_ENTRY(a->udp_host), "invalid address");
         g_assert_false(apply_renderer(a));
         gtk_entry_set_text(GTK_ENTRY(a->udp_host), "127.0.0.1");
-        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), integer_setting(a, "scatterfix", "udp_port", 1, 65535));
-        g_assert_false(apply_renderer(a));
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), 1235);
+        g_assert_true(apply_renderer(a));
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->udp_port), 1234);
         g_assert_true(apply_renderer(a));
         g_assert_true(g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
@@ -297,7 +335,7 @@ static gboolean exercise(gpointer data) {
         renderer_response(GTK_DIALOG(a->renderer_dialog), GTK_RESPONSE_CLOSE, a);
         g_assert_false(gtk_widget_get_visible(a->renderer_dialog));
         g_assert_cmpint(a->stage_count, ==, 2);
-        g_assert_false(gtk_widget_get_sensitive(a->scatter_box));
+        g_assert_true(gtk_widget_get_sensitive(a->scatter_box));
         g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->output_file)), ==, "recording with spaces.ts");
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_CVLC);
         /* Exercise telemetry reception and both Cairo displays with real bins. */
@@ -539,15 +577,23 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpint(a->fec, ==, 1);
         g_assert_cmpint(a->gi, ==, 2);
         g_assert_true(a->scatter);
+        g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
         gtk_button_clicked(GTK_BUTTON(a->power_button));
         g_assert_true(a->running);
         g_assert_false(gtk_widget_get_sensitive(a->controls));
         g_assert_false(gtk_widget_get_sensitive(a->hardware));
         g_assert_false(gtk_widget_get_sensitive(a->renderer_panel));
-        g_assert_false(gtk_widget_is_sensitive(a->scatter_box));
+        g_assert_true(gtk_widget_is_sensitive(a->scatter_box));
+        GPid decoder_pid = a->stages[1].pid;
+        ScatterBackend *backend = a->scatter_backend;
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
+        g_assert_false(a->scatter);
+        g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), TRUE);
         g_assert_true(a->scatter);
-        g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->scatter_box)));
+        g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
+        g_assert_cmpint(a->stages[1].pid, ==, decoder_pid);
+        g_assert_true(a->scatter_backend == backend);
         g_assert_true(gtk_widget_is_sensitive(a->filter_box));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stop SDR · actief");
@@ -567,6 +613,8 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_is_sensitive(a->scatter_box));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
+        g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
+        g_assert_null(a->scatter_backend);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box), RENDER_EMBEDDED);
         g_assert_true(apply_renderer(a));
@@ -577,6 +625,14 @@ static gboolean exercise(gpointer data) {
     } else if (phase == 3) {
         g_assert_cmpint(a->exit_code, ==, 0);
         g_assert_nonnull(a->video_view.player);
+        g_assert_false(a->scatter);
+        libvlc_media_player_t *player = a->video_view.player;
+        GPid decoder_pid = a->stages[1].pid;
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), TRUE);
+        g_assert_true(a->scatter);
+        g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
+        g_assert_true(a->video_view.player == player);
+        g_assert_cmpint(a->stages[1].pid, ==, decoder_pid);
         window_close(a->window, NULL, a);
         return G_SOURCE_REMOVE;
     }

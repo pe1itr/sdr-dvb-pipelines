@@ -1,10 +1,12 @@
 /* Real MPEG-TS decode, UDP duplication and fixed GTK allocation. */
 #define _POSIX_C_SOURCE 200809L
 #include "video_view.h"
+#include "scatter_backend.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <signal.h>
 #include <unistd.h>
 
 static void iterate(void) {
@@ -56,6 +58,7 @@ static void check_udp_only(VideoView *v, int receiver, const char *destination, 
 
 int main(int argc, char **argv) {
     g_assert_cmpint(argc, ==, 6);
+    signal(SIGPIPE, SIG_IGN);
     gtk_init(NULL, NULL);
     VideoView v = {0};
     GtkWidget *window = gtk_offscreen_window_new();
@@ -75,6 +78,15 @@ int main(int argc, char **argv) {
     for (int i = 1; i <= 4; ++i) {
         int fd = open(argv[i], O_RDONLY | O_CLOEXEC); g_assert_cmpint(fd, >=, 0);
         GError *error = NULL;
+        ScatterBackend *scatter = NULL;
+        /* Exercise real libVLC video and UDP with the parallel branch enabled,
+         * including streams whose MPEG-2 video is unsupported by recovery. */
+        if (i >= 3) {
+            int branch[2]; g_assert_cmpint(pipe(branch), ==, 0);
+            scatter = scatter_backend_start(fd, branch[1], TRUE, &error);
+            g_assert_no_error(error); g_assert_nonnull(scatter);
+            close(fd); close(branch[1]); fd = branch[0];
+        }
         g_assert_true(video_view_start(&v, fd, NULL, destination, TRUE, &error));
         g_assert_no_error(error); close(fd);
         gint64 until = g_get_monotonic_time() + 6 * G_USEC_PER_SEC;
@@ -120,6 +132,7 @@ int main(int argc, char **argv) {
         g_assert_cmpfloat_with_epsilon(actual_aspect, i % 2 ? 4.0 / 3 : 16.0 / 9, .02);
         cairo_destroy(cr); cairo_surface_destroy(surface);
         video_view_stop(&v);
+        scatter_backend_destroy(scatter);
         g_assert_false(v.ready); g_assert_null(v.player); g_assert_cmpint(v.fd, ==, -1);
     }
     check_udp_only(&v, sock, destination, FALSE);

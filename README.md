@@ -75,7 +75,8 @@ gelezen, gestart of gewijzigd door de toepassing. De overige scripts hieronder
 blijven beschikbaar voor de oudere experimenten.
 
 Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
-GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD en libVLC 3
+GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD, FFmpeg
+(`libavcodec`, `libavformat`, `libavutil`, `libswscale`) en libVLC 3
 (inclusief de VLC-codecplugins)):
 
 ```bash
@@ -89,7 +90,8 @@ schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
 Rob Hardenberg / PE1ITR als maker, de builddatum en de sneltoetsen in een raster.
 De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staan
 links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
-en hoogte als Service info. Rechts blijft ruimte vrij voor toekomstige vensters.
+en hoogte als Service info. Rechts daarvan verschijnt het TSscatterFix-paneel
+wanneer TSscatterFix is ingeschakeld.
 Status en log staan onder deze rij. De ontvangen
 resolutie verandert de afmetingen van het kader niet. Zowel 4:3 als 16:9 wordt
 met behoud van beeldverhouding weergegeven, zonder afsnijden of uitrekken;
@@ -99,8 +101,9 @@ en FEC. Frequentie en gain staan op dezelfde regel als Start/Stop.
 De bediening gaat met de pijltjestoetsen; er zijn geen plus/min-knoppen.
 Onder het spectrum staan links een vierkante constellatie en rechts service-info.
 Mode en renderer wijzigen doe je via hun menu. Naast **BW** staat de knop
-**Scatterfix**, rood wanneer ingeschakeld. Schakel Scatterfix bij gestopte
-ontvangst; bij rechtstreekse MPEG-TS-bestandsuitvoer is de knop uitgeschakeld.
+**Scatterfix**, rood wanneer ingeschakeld. Je kunt Scatterfix ook tijdens
+ontvangst aan- en uitzetten, zonder de decoder, player of UDP-uitvoer te herstarten.
+Het werkt bij alle uitvoerkeuzes, ook MPEG-TS-bestandsopslag.
 Rechtsboven staat één knop met een statuslampje: **Start SDR** bij uitgeschakelde
 ontvangst, **Stop SDR · actief** met een groene knop en groen lampje tijdens
 ontvangst. Tijdens stoppen is de knop geel en tijdelijk geblokkeerd; na een fout
@@ -149,16 +152,37 @@ Linrad UDP -> C-ontvanger -> leandvb / ingebouwde DVB-T-decoder -> player (+ opt
 Met Scatterfix:
 
 ```text
-Linrad UDP -> C-ontvanger -> decoder -> Scatterfix -> UDP MPEG-TS -> player (+ optioneel UDP)
+Linrad UDP -> C-ontvanger -> decoder -> oorspronkelijke TS -> player (+ optioneel UDP)
+                                  \-> kopie -> embedded TSscatterFix -> RGB-afbeelding + status
 ```
 
-Scatterfix blijft het bestaande externe `TSscatterfix/tools/contest_live.py`
-programma, met zijn eigen Python/FFmpeg-afhankelijkheden. De vervanging door C
-betreft de Linrad-ontvanger en de GUI. Zonder Scatterfix gebruikt de nieuwe
-ontvangstpipeline geen Python-helper.
+TSscatterFix wordt meegecompileerd uit de vastgelegde C-broncode in
+[third_party/tsscatterfix](third_party/tsscatterfix/README.md). Er is geen externe
+TSscatterfix-checkout, Python-helper of extra UDP-poort nodig. De oorspronkelijke
+MPEG-TS blijft ongewijzigd naar de gekozen player, UDP-uitvoer of het TS-bestand
+gaan. De parallelle herstelthread levert direct RGB24-afbeeldingen aan GTK.
+
+Het compacte paneel naast **Received video** toont de afbeelding met behoud van
+beeldverhouding. Daaronder staan geschatte voortgang, herstelfase, provider,
+servicenaam en aantallen headers, keyframes en afbeeldingen. Het percentage is
+een schatting op basis van ontvangen informatie, geen resterende tijd.
+H.264 en H.265 worden automatisch herkend. Het paneel is alleen zichtbaar als
+**TSscatterFix** aan staat; uitschakelen, Stop en herstart wissen het beeld en de gegevens.
+Bij opnieuw inschakelen begint reconstructie met nieuwe TS-data. Uitgeschakeld
+blijft alleen de TS-doorgifte actief; er wordt geen hersteldata verzameld of gedecodeerd.
+
+Herstel draait op een eigen thread met maximaal 4 MiB wachtende TS-data. Bij
+achterstand wordt uitsluitend die herstelbuffer overgeslagen en de parser
+opnieuw gesynchroniseerd; de player behoudt alle bytes. Een fout in reconstructie
+verschijnt in het paneel en stopt de speler niet. Analyse gebeurt maximaal twee
+keer per seconde, ook als een onvolledige PES blijft staan bij wegvallend signaal.
+Stop onderbreekt de aanvoer direct; de interface blijft reageren terwijl een
+lopende herstelanalyse wordt afgerond. De herstelbibliotheek bewaart standaard
+maximaal 8 MiB aan PES/kandidaten naast de TS-wachtrij en beeldbuffers.
+Oude `[paths] scatterfix`- en `[scatterfix]`-instellingen worden genegeerd.
 
 Tijdens ontvangst zijn de parameterkeuzes geblokkeerd. Stop ruimt alle gestarte
-procesgroepen op, inclusief subprocessen van de decoder of Scatterfix. Na een
+procesgroepen op, inclusief subprocessen van de decoder, en stopt de herstelthreads. Na een
 korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
@@ -184,7 +208,8 @@ van DSP-werk en maakt een volgende start onafhankelijk van oude decoderstatus.
 | `dvbt-iq` | IQ uit de pipe lezen en in de begrensde invoerring plaatsen |
 | `dvbt-ofdm` | Resampling, timing/AFC, FFT, pilots en equalizing |
 | `dvbt-fec` | Deinterleaving, doorlopende Viterbi, Reed–Solomon, TS-validatie en uitvoer |
-| Renderer | Video/audio afspelen of Scatterfix verwerken |
+| Renderer | Oorspronkelijke video/audio afspelen |
+| TSscatterFix | Parallelle TS-kopie verwerken; RGB-beeld en status aan GTK doorgeven |
 
 De OS-scheduler kan deze threads/processen over de beschikbare cores verdelen;
 er is geen vaste core-affiniteit of realtimescheduling. De FEC-keten behoudt
@@ -248,20 +273,19 @@ doorvoertests, geen langdurige RF- of belastingstest.
 
 Pas `linrad-dvb.ini` aan voor de programmapaden en opstartopties:
 
-- `[paths]`: C-ontvanger, `leandvb`, Scatterfix en `cvlc`.
+- `[paths]`: C-ontvanger, `leandvb` en externe renderers.
   Een oude `rbdvbt_rx`-padinstelling wordt genegeerd.
 - `[linrad]`: IPv4-adres, UDP-poort (50000), headerlengte (24), samplerate,
   IQ-formaat (`s16` of `u8`) en extra ontvangeropties.
-- `[leandvb]`, `[rbdvbt_rx]`, `[scatterfix]`, `[cvlc]`: extra argumenten.
+- `[leandvb]`, `[rbdvbt_rx]`, `[cvlc]`: extra argumenten.
   `[rbdvbt_rx]` configureert nu de ingebouwde decoder; `--live` en
   `--resample-to-dvbt-rate` worden automatisch toegevoegd. Een oude `--gui`
   opent geen extra DVB-T-vensters meer.
-- `[scatterfix]`: lokaal UDP-adres en poort, standaard `127.0.0.1:1235`.
+- `[session] scatterfix`: ingebouwde parallelle reconstructie aan/uit.
 
 Paden met een slash zijn relatief aan de map van het configuratiebestand;
 losse programmanamen worden in `PATH` gezocht. Processen starten met die map
-als werkmap, zodat bijvoorbeeld het Scatterfix-modelpad hetzelfde werkt vanaf
-elke startmap. De standaardconfiguratie wordt gevonden naast de map `build`,
+als werkmap, zodat relatieve paden hetzelfde werken vanaf elke startmap. De standaardconfiguratie wordt gevonden naast de map `build`,
 onafhankelijk van de werkmap van de terminal. Een eigen bestand selecteer je met:
 
 ```bash
@@ -313,7 +337,7 @@ make test
 `--run` start dezelfde pipeline zonder GUI en stopt met Ctrl+C. Zonder deze
 vlag worden eventuele commandoregelparameters de beginwaarden van de GUI.
 `--print-pipeline` toont de argumenten zonder ontvangers of VLC te starten; de
-UDP-pijl in de Scatterfix-weergave is een beschrijving, geen shellcommando.
+parallelle TSscatterFix-tak in de weergave is een beschrijving, geen shellcommando.
 
 De regressietests gebruiken Python 3 als testhulpmiddel. Ze vergelijken alle
 s16-waarden met de oorspronkelijke Python-conversie, controleren de
@@ -994,9 +1018,9 @@ of geluid. Het rechterkader behoudt ook dan zijn afmetingen. Stel het IPv4-adres
 van de externe player en de doelpoort in; standaard is dit `127.0.0.1:1234`.
 Open in de ontvangende VLC `udp://@:1234`, of in FFplay `udp://0.0.0.0:1234`.
 De externe player bepaalt zelf zijn venstergrootte. De ontvangen MPEG-TS wordt
-ongewijzigd doorgestuurd, zonder hercoderen. Bij ScatterFix gaat de herstelde stream
-naar de ingebouwde player en/of de gekozen UDP-bestemming. Gebruik voor de
-UDP-uitvoer een andere poort dan de ScatterFix-invoer (standaard 1235).
+ongewijzigd doorgestuurd, zonder hercoderen. TSscatterFix krijgt een parallelle
+kopie en toont de herstelde afbeelding in zijn eigen paneel. De player en
+UDP-uitvoer blijven de oorspronkelijke stream ontvangen.
 
 De ingebouwde weergave gebruikt libVLC-videocallbacks en GTK; ook onder Wayland
 en op een GTK-testdisplay is geen apart VLC-venster nodig. Dit gebruikt
@@ -1004,13 +1028,13 @@ softwaredecodering en schaalt het beeld in de applicatie.
 
 Een eigen programma krijgt de transportstream op stdin. Geef bij **Programma / pad**
 alleen het uitvoerbare bestand op en vul de opties bij **Argumenten** in.
-`{input}` wordt vervangen door `-` voor stdin of `udp://host:port` bij Scatterfix.
+`{input}` wordt vervangen door `-` voor stdin.
 Gebruik de invoersyntaxis die het gekozen programma ondersteunt; een programma
-dat stdin zonder argument leest, kan lege argumenten gebruiken. Met Scatterfix
-is `{input}` nodig voor de UDP-invoer. Argumenten worden zonder shell uitgevoerd.
+dat stdin zonder argument leest, kan lege argumenten gebruiken. Argumenten
+worden zonder shell uitgevoerd.
 
 **MPEG-TS-bestand** schrijft de decoderuitvoer rechtstreeks naar de opgegeven
-bestandsnaam, zonder speler of Scatterfix. Relatieve paden zijn relatief aan
+bestandsnaam. TSscatterFix kan ook hierbij parallel werken. Relatieve paden zijn relatief aan
 de INI-map. De doelmap moet bestaan en het bestand moet nieuw zijn; een bestaand
 bestand wordt niet overschreven. Stop sluit de opname. De bytes worden ongewijzigd
 opgeslagen: de ontvanger voegt geen ontbrekende TS-pakketten toe.
@@ -1028,6 +1052,6 @@ voor bestandsuitvoer `[renderer] output_file`. VLC gebruikt de bestaande
 `[cvlc] args`; `[paths] vlc` is standaard `vlc`.
 FFplay gebruikt `[paths] ffplay` (standaard `ffplay`) en eigen opties in
 `[ffplay] args` (standaard `-hide_banner -loglevel warning -autoexit -f mpegts`).
-Het leest MPEG-TS via `pipe:0` of via `udp://host:port` bij Scatterfix.
+Het leest de oorspronkelijke MPEG-TS via `pipe:0`, ook met TSscatterFix aan.
 Installeer ffplay als het nog niet op het systeem staat; bestaande INI-bestanden
 krijgen de nieuwe standaardwaarden automatisch.
