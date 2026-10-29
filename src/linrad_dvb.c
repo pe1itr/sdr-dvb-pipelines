@@ -1269,6 +1269,9 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"linrad_dvb","about-title");
     about_label(box,"linrad_dvb is een softwareprogramma voor radioamateurs die digitale "
         "amateurtelevisie bij zwakke signalen ontvangen (weak signal).",NULL);
+    about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
+        "elements in static test patterns from fragments of the received "
+        "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
     about_label(box,"Gemaakt door Rob Hardenberg, PE1ITR.",NULL);
     /* Compiler timestamps identify this executable, not the date it is opened. */
     about_label(box,"Builddatum: " __DATE__ " · " __TIME__,"about-meta");
