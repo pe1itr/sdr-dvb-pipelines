@@ -3,7 +3,8 @@
 #include <gtk/gtk.h>
 #include "ts_info.h"
 typedef struct {
-    GtkWidget *buttons[2], *dialog, *tabs, *services, *eit, *page, *status[2];
+    GtkWidget *buttons[2], *dialogs[2], *services[2], *eit, *page, *status[2];
+    GtkWidget *station, *clock, *page_number;
     TsInfoBackend *backend; /* borrowed; detached before pipeline destruction */
     TsInfoSnapshot snapshot;
     gboolean updating;

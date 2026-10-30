@@ -42,13 +42,13 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     double width=gtk_widget_get_allocated_width(area),height=gtk_widget_get_allocated_height(area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) return FALSE;
-    /* Teletext uses non-square pixels. Display the complete page as a classic
-     * 4:3 screen; nearest-neighbour sampling preserves the character grid. */
-    double w=MIN(width,height*4/3),h=w*3/4;
+    /* The containing screen keeps the TV's 4:3 proportions, including the
+     * header and information bar. Preserve every broadcast row and use
+     * nearest-neighbour sampling for the character grid. */
     cairo_surface_t *surface=cairo_image_surface_create_for_data(
         (unsigned char *)g_bytes_get_data(s->page,NULL),CAIRO_FORMAT_RGB24,s->width,s->height,s->width*4);
-    cairo_save(cr); cairo_translate(cr,(width-w)/2,(height-h)/2);
-    cairo_scale(cr,w/s->width,h/s->height); cairo_set_source_surface(cr,surface,0,0);
+    cairo_save(cr);
+    cairo_scale(cr,width/s->width,height/s->height); cairo_set_source_surface(cr,surface,0,0);
     cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_NEAREST);
     cairo_paint(cr); cairo_restore(cr); cairo_surface_destroy(surface);
     return FALSE;
@@ -58,15 +58,24 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         memcmp(s->services,v->snapshot.services,sizeof(s->services));
     if (catalog) {
         v->updating=TRUE;
-        gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(v->services));
-        for (unsigned i=0;i<s->count;i++) {
-            char id[12]; g_snprintf(id,sizeof(id),"%u",s->services[i].id);
-            char *name=g_strdup_printf("%s · service %u",*s->services[i].name ? s->services[i].name : "Unnamed",s->services[i].id);
-            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(v->services),id,name); g_free(name);
-            if (s->services[i].id==s->selected) gtk_combo_box_set_active(GTK_COMBO_BOX(v->services),i);
+        for (unsigned window=0;window<2;window++) {
+            gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(v->services[window]));
+            for (unsigned i=0;i<s->count;i++) {
+                char id[12]; g_snprintf(id,sizeof(id),"%u",s->services[i].id);
+                char *name=g_strdup_printf("%s · service %u",*s->services[i].name ? s->services[i].name : "Unnamed",s->services[i].id);
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(v->services[window]),id,name); g_free(name);
+                if (s->services[i].id==s->selected) gtk_combo_box_set_active(GTK_COMBO_BOX(v->services[window]),i);
+            }
+            gtk_widget_set_sensitive(v->services[window],s->count>1);
         }
-        gtk_widget_set_sensitive(v->services,s->count>1); v->updating=FALSE;
+        v->updating=FALSE;
+        const char *station="TELETEXT";
+        for (unsigned i=0;i<s->count;i++)
+            if (s->services[i].id==s->selected && *s->services[i].name) station=s->services[i].name;
+        gtk_label_set_text(GTK_LABEL(v->station),station);
     }
+    char *clock=local_time(g_get_real_time()/G_USEC_PER_SEC,"%H:%M:%S");
+    gtk_label_set_text(GTK_LABEL(v->clock),clock); g_free(clock);
     if (force || memcmp(s->events,v->snapshot.events,sizeof(s->events))) {
         char *text=event_text(s);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->eit)),text,-1); g_free(text);
@@ -108,37 +117,36 @@ static void hide_dialog(GtkDialog *dialog, gint response, gpointer data) {
 static void open_information(GtkButton *button, gpointer data) {
     TsInfoView *v=data;
     v->next_tick=0; ts_info_view_tick(v,v->backend);
-    gtk_widget_show_all(v->dialog);
-    gtk_notebook_set_current_page(GTK_NOTEBOOK(v->tabs),GTK_WIDGET(button)==v->buttons[1] ? 1 : 0);
-    gtk_window_present(GTK_WINDOW(v->dialog));
+    GtkWidget *dialog=v->dialogs[GTK_WIDGET(button)==v->buttons[1] ? 1 : 0];
+    gtk_widget_show_all(dialog);
+    gtk_window_present(GTK_WINDOW(dialog));
 }
 void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
-    v->dialog=gtk_dialog_new_with_buttons("EIT / Teletext",parent,GTK_DIALOG_DESTROY_WITH_PARENT,
-        "Close",GTK_RESPONSE_CLOSE,NULL);
-    gtk_widget_set_name(v->dialog,"ts-information");
-    gtk_window_set_default_size(GTK_WINDOW(v->dialog),680,610);
-    g_signal_connect(v->dialog,"response",G_CALLBACK(hide_dialog),v);
-    g_signal_connect(v->dialog,"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
-    GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(v->dialog));
-    gtk_container_set_border_width(GTK_CONTAINER(content),8); gtk_box_set_spacing(GTK_BOX(content),8);
-    GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
-    gtk_box_pack_start(GTK_BOX(row),gtk_label_new("Information for"),FALSE,FALSE,0);
-    v->services=gtk_combo_box_text_new(); gtk_box_pack_start(GTK_BOX(row),v->services,TRUE,TRUE,0);
-    gtk_widget_set_tooltip_text(v->services,"Select the service whose information is shown; this does not change the player.");
-    gtk_box_pack_start(GTK_BOX(content),row,FALSE,FALSE,0);
-    g_signal_connect(v->services,"changed",G_CALLBACK(service_changed),v);
-    v->tabs=gtk_notebook_new(); gtk_box_pack_start(GTK_BOX(content),v->tabs,TRUE,TRUE,0);
     for (unsigned i=0;i<2;i++) {
+        v->dialogs[i]=gtk_dialog_new_with_buttons(i ? "Teletext" : "EIT",parent,GTK_DIALOG_DESTROY_WITH_PARENT,
+            "Close",GTK_RESPONSE_CLOSE,NULL);
+        gtk_widget_set_name(v->dialogs[i],i ? "teletext-information" : "eit-information");
+        gtk_window_set_default_size(GTK_WINDOW(v->dialogs[i]),680,610);
+        g_signal_connect(v->dialogs[i],"response",G_CALLBACK(hide_dialog),v);
+        g_signal_connect(v->dialogs[i],"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+        GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(v->dialogs[i]));
+        gtk_container_set_border_width(GTK_CONTAINER(content),8); gtk_box_set_spacing(GTK_BOX(content),8);
+        GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
+        gtk_box_pack_start(GTK_BOX(row),gtk_label_new("Information for"),FALSE,FALSE,0);
+        v->services[i]=gtk_combo_box_text_new(); gtk_box_pack_start(GTK_BOX(row),v->services[i],TRUE,TRUE,0);
+        gtk_widget_set_tooltip_text(v->services[i],"Select the service for both information windows; this does not change the player.");
+        gtk_box_pack_start(GTK_BOX(content),row,FALSE,FALSE,0);
+        g_signal_connect(v->services[i],"changed",G_CALLBACK(service_changed),v);
         v->buttons[i]=gtk_button_new_with_label(i ? "Teletext" : "EIT");
         gtk_style_context_add_class(gtk_widget_get_style_context(v->buttons[i]),"information-button");
         gtk_box_pack_start(GTK_BOX(bar),v->buttons[i],FALSE,FALSE,0);
         g_signal_connect(v->buttons[i],"clicked",G_CALLBACK(open_information),v);
         GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);
-        gtk_container_set_border_width(GTK_CONTAINER(box),8);
+        gtk_box_pack_start(GTK_BOX(content),box,TRUE,TRUE,0);
         v->status[i]=gtk_label_new(""); gtk_label_set_xalign(GTK_LABEL(v->status[i]),0);
-        gtk_label_set_line_wrap(GTK_LABEL(v->status[i]),TRUE);
-        gtk_box_pack_start(GTK_BOX(box),v->status[i],FALSE,FALSE,0);
         if (!i) {
+            gtk_label_set_line_wrap(GTK_LABEL(v->status[i]),TRUE);
+            gtk_box_pack_start(GTK_BOX(box),v->status[i],FALSE,FALSE,0);
             GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
             gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
             v->eit=gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(v->eit),FALSE);
@@ -147,17 +155,39 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
             gtk_text_view_set_left_margin(GTK_TEXT_VIEW(v->eit),8); gtk_text_view_set_right_margin(GTK_TEXT_VIEW(v->eit),8);
             gtk_container_add(GTK_CONTAINER(scroll),v->eit); gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
         } else {
+            GtkWidget *aspect=gtk_aspect_frame_new(NULL,.5,.5,4.0/3.0,FALSE);
+            gtk_frame_set_shadow_type(GTK_FRAME(aspect),GTK_SHADOW_NONE);
+            gtk_box_pack_start(GTK_BOX(box),aspect,TRUE,TRUE,0);
+            GtkWidget *screen=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
+            gtk_widget_set_name(screen,"teletext-screen");
+            gtk_container_add(GTK_CONTAINER(aspect),screen);
+            GtkWidget *header=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,16);
+            gtk_widget_set_name(header,"teletext-header");
+            v->station=gtk_label_new("TELETEXT");
+            gtk_label_set_xalign(GTK_LABEL(v->station),0);
+            gtk_label_set_ellipsize(GTK_LABEL(v->station),PANGO_ELLIPSIZE_END);
+            gtk_box_pack_start(GTK_BOX(header),v->station,TRUE,TRUE,0);
+            v->clock=gtk_label_new("");
+            gtk_widget_set_tooltip_text(v->clock,"Local time");
+            gtk_box_pack_start(GTK_BOX(header),v->clock,FALSE,FALSE,0);
+            v->page_number=gtk_label_new("P100");
+            gtk_widget_set_name(v->page_number,"teletext-page-number");
+            atk_object_set_name(gtk_widget_get_accessible(v->page_number),"Page 100");
+            gtk_box_pack_end(GTK_BOX(header),v->page_number,FALSE,FALSE,0);
+            gtk_box_pack_start(GTK_BOX(screen),header,FALSE,FALSE,0);
+            gtk_widget_set_name(v->status[i],"teletext-status");
+            gtk_label_set_ellipsize(GTK_LABEL(v->status[i]),PANGO_ELLIPSIZE_END);
+            gtk_box_pack_start(GTK_BOX(screen),v->status[i],FALSE,FALSE,0);
             v->page=gtk_drawing_area_new(); gtk_widget_set_size_request(v->page,320,240);
-            gtk_box_pack_start(GTK_BOX(box),v->page,TRUE,TRUE,0);
+            gtk_box_pack_start(GTK_BOX(screen),v->page,TRUE,TRUE,0);
             g_signal_connect(v->page,"draw",G_CALLBACK(draw_page),v);
             atk_object_set_name(gtk_widget_get_accessible(v->page),"Teletext page 100");
         }
-        gtk_notebook_append_page(GTK_NOTEBOOK(v->tabs),box,gtk_label_new(i ? "Teletext · 100" : "EIT"));
     }
     ts_info_view_reset(v);
 }
 void ts_info_view_tick(TsInfoView *v, TsInfoBackend *backend) {
-    if (!v->dialog) return;
+    if (!v->dialogs[0]) return;
     gint64 now=g_get_monotonic_time();
     if (backend==v->backend && now<v->next_tick) return;
     v->backend=backend; v->next_tick=now+250000;
@@ -165,11 +195,13 @@ void ts_info_view_tick(TsInfoView *v, TsInfoBackend *backend) {
 }
 void ts_info_view_reset(TsInfoView *v) {
     v->backend=NULL; v->next_tick=0;
-    if (!v->dialog) return;
+    if (!v->dialogs[0]) return;
     TsInfoSnapshot s={0}; update(v,&s,TRUE);
 }
 void ts_info_view_destroy(TsInfoView *v) {
     ts_info_snapshot_clear(&v->snapshot); v->backend=NULL;
-    if (v->dialog) gtk_widget_destroy(v->dialog);
-    v->dialog=NULL;
+    for (unsigned i=0;i<2;i++) {
+        if (v->dialogs[i]) gtk_widget_destroy(v->dialogs[i]);
+        v->dialogs[i]=NULL;
+    }
 }

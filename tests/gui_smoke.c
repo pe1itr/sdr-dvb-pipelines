@@ -266,14 +266,17 @@ static void exercise_scatter_view(App *a) {
 
 static void exercise_information(App *a) {
     TsInfoView *v=&a->information;
+    g_assert_true(v->dialogs[0]!=v->dialogs[1]);
     for (int i=1;i>=0;i--) {
         g_assert_true(gtk_widget_get_parent(v->buttons[i])==gtk_widget_get_parent(a->scatter_box));
         g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
         gtk_button_clicked(GTK_BUTTON(v->buttons[i]));
-        g_assert_true(gtk_widget_get_visible(v->dialog));
-        g_assert_cmpint(gtk_notebook_get_current_page(GTK_NOTEBOOK(v->tabs)),==,i);
-        gtk_dialog_response(GTK_DIALOG(v->dialog),GTK_RESPONSE_CLOSE);
-        g_assert_false(gtk_widget_get_visible(v->dialog));
+        g_assert_true(gtk_widget_get_visible(v->dialogs[i]));
+        g_assert_false(gtk_widget_get_visible(v->dialogs[!i]));
+        g_assert_cmpstr(gtk_window_get_title(GTK_WINDOW(v->dialogs[i])),==,i ? "Teletext" : "EIT");
+        assert_no_tabs(v->dialogs[i]);
+        gtk_dialog_response(GTK_DIALOG(v->dialogs[i]),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(v->dialogs[i]));
     }
     char *path=g_build_filename(a->directory,"information.ts",NULL), *bytes=NULL; gsize size;
     g_assert_true(g_file_get_contents(path,&bytes,&size,NULL)); g_free(path);
@@ -290,20 +293,39 @@ static void exercise_information(App *a) {
     for (unsigned i=0;i<2;i++)
         g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
     gtk_button_clicked(GTK_BUTTON(v->buttons[1]));
-    g_assert_cmpint(gtk_notebook_get_current_page(GTK_NOTEBOOK(v->tabs)),==,1);
+    gtk_button_clicked(GTK_BUTTON(v->buttons[0]));
+    g_assert_true(gtk_widget_get_visible(v->dialogs[0]));
+    g_assert_true(gtk_widget_get_visible(v->dialogs[1]));
+    g_assert_true(gtk_widget_get_toplevel(v->eit)==v->dialogs[0]);
+    g_assert_true(gtk_widget_get_toplevel(v->page)==v->dialogs[1]);
+    gtk_dialog_response(GTK_DIALOG(v->dialogs[0]),GTK_RESPONSE_CLOSE);
+    g_assert_true(gtk_widget_get_visible(v->dialogs[1]));
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->page_number)),==,"P100");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->station)),==,v->snapshot.services[0].name);
+    g_assert_cmpuint(strlen(gtk_label_get_text(GTK_LABEL(v->clock))),==,8);
     /* Exercise the actual Cairo page drawing and save a visual check. */
-    GtkRequisition minimum,natural; gtk_widget_get_preferred_size(v->dialog,&minimum,&natural);
-    GtkAllocation allocation={0,0,720,640}; gtk_widget_size_allocate(v->dialog,&allocation);
+    GtkRequisition minimum,natural; gtk_widget_get_preferred_size(v->dialogs[1],&minimum,&natural);
+    GtkAllocation allocation={0,0,720,640}; gtk_widget_size_allocate(v->dialogs[1],&allocation);
+    gint page_x,page_y,number_x,number_y,status_x,status_y;
+    g_assert_true(gtk_widget_translate_coordinates(v->page,v->dialogs[1],0,0,&page_x,&page_y));
+    g_assert_true(gtk_widget_translate_coordinates(v->page_number,v->dialogs[1],0,0,&number_x,&number_y));
+    g_assert_true(gtk_widget_translate_coordinates(v->status[1],v->dialogs[1],0,0,&status_x,&status_y));
+    g_assert_cmpint(number_y,<,status_y);
+    g_assert_cmpint(status_y,<,page_y);
+    g_assert_cmpint(number_x,>,page_x+gtk_widget_get_allocated_width(v->page)/2);
     const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
     if (screenshot) {
         cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,720,640);
-        cairo_t *cr=cairo_create(surface); gtk_widget_draw(v->dialog,cr);
+        cairo_t *cr=cairo_create(surface); gtk_widget_draw(v->dialogs[1],cr);
         char *dir=g_path_get_dirname(screenshot), *file=g_build_filename(dir,"teletext-smoke.png",NULL);
         g_assert_cmpint(cairo_surface_write_to_png(surface,file),==,CAIRO_STATUS_SUCCESS);
         g_free(dir); g_free(file); cairo_destroy(cr); cairo_surface_destroy(surface);
     }
-    gtk_combo_box_set_active_id(GTK_COMBO_BOX(v->services),"2");
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(v->services[1]),"2");
     g_assert_cmpint(v->snapshot.selected,==,2);
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(v->services[0])),==,"2");
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(v->services[0]),"1");
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(v->services[1])),==,"1");
     g_assert_null(v->snapshot.page); g_assert_false(v->snapshot.events[0].valid);
     for (unsigned i=0;i<2;i++)
         g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));
@@ -319,7 +341,11 @@ static void exercise_information(App *a) {
     TsInfoSnapshot after={0}; ts_info_backend_snapshot(backend,&after);
     g_assert_cmpuint(after.count,==,0); g_assert_null(after.page);
     ts_info_snapshot_clear(&after); ts_info_backend_free(backend); g_free(bytes);
-    gtk_dialog_response(GTK_DIALOG(v->dialog),GTK_RESPONSE_CLOSE);
+    for (unsigned i=0;i<2;i++) {
+        g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(v->services[i])),==,-1);
+        gtk_dialog_response(GTK_DIALOG(v->dialogs[i]),GTK_RESPONSE_CLOSE);
+    }
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->station)),==,"TELETEXT");
 }
 
 static gboolean exercise(gpointer data) {

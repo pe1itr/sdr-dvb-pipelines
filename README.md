@@ -197,20 +197,22 @@ Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.
 Elke knop is grijs zolang er nog geen inhoud beschikbaar is en wordt groen zodra
 voor de gekozen service EIT-programmainformatie of teletekstpagina 100 is ontvangen.
 De tooltip vermeldt de laatste ontvangsttijd. Beide knoppen blijven aanklikbaar.
-Ze openen hetzelfde niet-modale informatievenster, direct op het betreffende tabblad;
-sluiten van dit venster onderbreekt de ontvangst niet.
+Elke knop opent een eigen niet-modaal venster zonder tabbladen. Beide vensters kunnen
+tegelijk openstaan; sluiten van een venster onderbreekt de ontvangst niet.
 
 **EIT** toont het huidige en volgende programma uit de actual-transportstream
 present/following-tabel, met titel, korte en uitgebreide beschrijving en tijden in
-de lokale tijdzone. Het tabblad **Teletext · 100** toont een klassieke zwarte 4:3-pagina
-met de uitgezonden kleuren, vaste tekenposities, blokgrafiek, dubbele tekenhoogte en
-paginakop. De pagina schaalt als geheel met het venster mee. Ontvangen subpagina's
+de lokale tijdzone. Het venster **Teletext** toont een klassiek zwart 4:3-tv-scherm.
+Bovenaan staan de zendernaam, een lokale klok en rechts het paginanummer **P100**.
+Een blauwe informatiebalk toont de ontvangststatus, met daaronder de pagina in de
+uitgezonden kleuren, vaste tekenposities, blokgrafiek, dubbele tekenhoogte en
+oorspronkelijke paginakop. De pagina schaalt met het venster mee. Ontvangen subpagina's
 van pagina 100 volgen de uitzending; er is geen paginabrowser.
 
 De informatie wordt ook verzameld als het venster gesloten is, bij DVB-S/S2/T,
 alle renderers en met Scatterfix uitgeschakeld. Bij meerdere services kiest de
 ontvanger aanvankelijk de eerste service uit de PAT; in de popup kun je een andere
-service kiezen. Die keuze geldt alleen voor de informatie en verandert de player niet.
+service kiezen. Die keuze geldt voor beide informatievensters en verandert de player niet.
 De servicekeuze vermeldt naam en service-ID om verwarring met een externe player te
 voorkomen. Er worden maximaal 32 services bijgehouden.
 
@@ -233,7 +235,8 @@ meldt de popup dat de decoder ontbreekt en blijft EIT beschikbaar.
 `make test-ts-info` test de SI-parser en teletekstdecoder met gegenereerde
 transportstreams, inclusief tekstcoderingen, uitgebreide beschrijvingen,
 servicewissels, pakketverlies en pagina-updates. De GTK-smoketest controleert de
-knoppen, popup, servicekeuze en reset tijdens achtergrondverwerking.
+afzonderlijke vensters zonder tabbladen, de teletekstkop, servicekeuze en reset tijdens
+achtergrondverwerking.
 
 ### Ingebouwde DVB-T-decoder en verdeling van het werk
 
