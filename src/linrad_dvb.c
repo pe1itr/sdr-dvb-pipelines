@@ -22,6 +22,7 @@
 #include "dvbt_backend.h"
 #include "scatter_view.h"
 #include "ts_info_view.h"
+#include "usb_receiver.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -54,6 +55,9 @@ typedef struct {
     ScatterView scatter_view;
     TsInfoView information;
     ScatterBackend *scatter_backend;
+    UsbReceiver *usb_receiver;
+    GtkWidget *usb_toggle, *fm_toggle, *fm_data_toggle, *usb_port, *usb_status, *tci_dialog;
+    GtkWidget *pcm_udp_enabled, *pcm_udp_host, *pcm_udp_port;
 } App;
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
@@ -404,6 +408,7 @@ static gboolean force_stop(gpointer data) {
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
     a->stopping = TRUE;
+    usb_receiver_source(a->usb_receiver,a->iq_view.center,a->iq_view.rate,FALSE);
     ts_info_view_reset(&a->information);
     scatter_backend_stop(a->scatter_backend);
     scatter_view_reset(&a->scatter_view);
@@ -561,6 +566,9 @@ static void start_pipeline(App *a) {
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
         env = g_environ_unsetenv(env, "LINRAD_DECODER_MONITOR_PORT");
+        env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
+        if (i == 0 && a->usb_receiver)
+            env = g_environ_setenv(env,"LINRAD_USB_TAP",usb_receiver_tap_path(a->usb_receiver),TRUE);
         if (i == 1 && a->standard == 2 && a->decoder_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->decoder_view.port);
             env = g_environ_setenv(env, "LINRAD_DECODER_MONITOR_PORT", port, TRUE);
@@ -840,6 +848,102 @@ static void show_config(GtkWidget *widget, gpointer data);
 static void show_mode(GtkWidget *widget, gpointer data);
 static void show_renderer(GtkWidget *widget, gpointer data);
 static void show_about(GtkWidget *widget, gpointer data);
+static void show_tci(GtkWidget *widget, gpointer data);
+
+static void usb_source_refresh(App *a) {
+    const char *section=sources[a->source];
+    double center=g_key_file_get_double(a->config,section,"frequency",NULL)
+        +g_key_file_get_double(a->config,section,"lo_offset",NULL);
+    double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
+    usb_receiver_source(a->usb_receiver,center,rate,a->running && !a->stopping);
+}
+static void monitor_refresh(App *a) {
+    a->iq_view.usb_enabled=usb_receiver_running(a->usb_receiver);
+    a->iq_view.monitor_mode=usb_receiver_mode(a->usb_receiver);
+    a->iq_view.usb_frequency=usb_receiver_frequency(a->usb_receiver);
+    gtk_widget_set_sensitive(a->usb_port,!a->iq_view.usb_enabled);
+    gtk_widget_queue_draw(a->iq_view.area);
+}
+static void usb_toggled(GtkToggleButton *button, gpointer data) {
+    App *a=data;
+    gboolean active=gtk_toggle_button_get_active(button);
+    MonitorMode mode=GTK_WIDGET(button)==a->fm_data_toggle ? MONITOR_FM_DATA :
+        GTK_WIDGET(button)==a->fm_toggle ? MONITOR_FM : MONITOR_USB;
+    MonitorMode previous=usb_receiver_mode(a->usb_receiver);
+    if (active) {
+        usb_source_refresh(a);
+        GError *error=NULL;
+        gboolean ok=usb_receiver_set_mode(a->usb_receiver,mode);
+        if (!ok) g_set_error_literal(&error,G_FILE_ERROR,G_FILE_ERROR_INVAL,
+            "The selected channel does not fit in the IQ spectrum; adjust monitor frequency or input sample rate.");
+        if (ok) {
+            char *host=setting(a,"usb","tci_bind"), *device=setting(a,"usb","audio_device");
+            unsigned port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->usb_port));
+            ok=usb_receiver_start(a->usb_receiver,host,port,device,&error);
+            g_free(host); g_free(device);
+        }
+        if (!ok) {
+            usb_receiver_set_mode(a->usb_receiver,previous);
+            g_signal_handlers_block_by_func(button,usb_toggled,a);
+            gtk_toggle_button_set_active(button,FALSE);
+            g_signal_handlers_unblock_by_func(button,usb_toggled,a);
+            gtk_label_set_text(GTK_LABEL(a->usb_status),error->message);
+            status(a,error->message); g_clear_error(&error); monitor_refresh(a); return;
+        }
+        /* Switch DSP in the existing receiver. Keep the speaker, TCI clients
+         * and DVB processes alive while changing modulation. */
+        GtkWidget *buttons[]={a->usb_toggle,a->fm_toggle,a->fm_data_toggle};
+        for (unsigned i=0;i<G_N_ELEMENTS(buttons);++i) {
+            GtkWidget *other=buttons[i];
+            if (other==GTK_WIDGET(button)) continue;
+            g_signal_handlers_block_by_func(other,usb_toggled,a);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(other),FALSE);
+            g_signal_handlers_unblock_by_func(other,usb_toggled,a);
+        }
+    } else {
+        usb_receiver_stop(a->usb_receiver);
+        gtk_label_set_text(GTK_LABEL(a->usb_status),"USB / FM / FM-DATA off");
+    }
+    monitor_refresh(a);
+    gtk_widget_set_tooltip_text(a->usb_toggle,"USB (U) · 3 kHz · Page Up / Page Down: -100 / +100 Hz");
+    gtk_widget_set_tooltip_text(a->fm_toggle,"FM (F) · 12.5 kHz · Page Up / Page Down: -2.5 / +2.5 kHz");
+    gtk_widget_set_tooltip_text(a->fm_data_toggle,"FM-DATA (D) · 20 kHz · flat audio · Page Up / Page Down: -2.5 / +2.5 kHz");
+}
+static void usb_port_changed(GtkSpinButton *spin, gpointer data) {
+    App *a=data;
+    g_key_file_set_integer(a->config,"usb","tci_port",gtk_spin_button_get_value_as_int(spin));
+}
+static void usb_tune(App *a, double frequency) {
+    if (!a->usb_receiver) return;
+    usb_source_refresh(a);
+    if (!usb_receiver_tune(a->usb_receiver,frequency)) {
+        status(a,"Monitor tuning limit reached within the current IQ spectrum"); return;
+    }
+    a->iq_view.usb_frequency=frequency;
+    gtk_widget_queue_draw(a->iq_view.area);
+}
+static void usb_tune_step(App *a, int direction) {
+    usb_source_refresh(a);
+    double step=usb_receiver_mode(a->usb_receiver)==MONITOR_USB ? 100 : 2500;
+    usb_tune(a,usb_receiver_frequency(a->usb_receiver)+direction*step);
+}
+
+static gboolean usb_spectrum_clicked(GtkWidget *widget, GdkEventButton *event, gpointer data) {
+    App *a=data;
+    if (!usb_receiver_running(a->usb_receiver) || event->type!=GDK_BUTTON_PRESS || event->button!=1 ||
+        (event->state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK))) return FALSE;
+    /* Use the same plot bounds and displayed frequency scale as iq_view_draw.
+     * Axes, waterfall and overlaid controls do not select a USB frequency. */
+    double left=65, right=gtk_widget_get_allocated_width(widget)-40;
+    double height=gtk_widget_get_allocated_height(widget), top=height/2+25, bottom=height-30;
+    double rate=a->iq_view.rate;
+    if (!isfinite(event->x) || !isfinite(event->y) || !isfinite(rate) || rate<=0 ||
+        right<=left || bottom<=top || event->x<left || event->x>right || event->y<top || event->y>bottom)
+        return FALSE;
+    double frequency=a->iq_view.center-rate/2+(event->x-left)/(right-left)*rate;
+    usb_tune(a,round(frequency));
+    return TRUE;
+}
 
 static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data) {
     App *a = data; (void)widget;
@@ -849,13 +953,31 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
         case GDK_KEY_i: show_config(NULL,a); return TRUE;
         case GDK_KEY_m: show_mode(NULL,a); return TRUE;
         case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
+        case GDK_KEY_t: show_tci(NULL,a); return TRUE;
         case GDK_KEY_a: show_about(NULL,a); return TRUE;
         default: return FALSE;
         }
     }
     switch (gdk_keyval_to_lower(event->keyval)) {
+    case GDK_KEY_Page_Up: case GDK_KEY_KP_Page_Up:
+        usb_tune_step(a,-1); return TRUE;
+    case GDK_KEY_Page_Down: case GDK_KEY_KP_Page_Down:
+        usb_tune_step(a,1); return TRUE;
+    case GDK_KEY_u:
+        if (a->usb_toggle) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle),
+            !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+        return TRUE;
+    case GDK_KEY_f:
+        if (a->fm_toggle) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_toggle),
+            !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+        return TRUE;
+    case GDK_KEY_d:
+        if (a->fm_data_toggle) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle),
+            !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle)));
+        return TRUE;
     case GDK_KEY_m:
         video_view_set_muted(&a->video_view, !a->video_view.muted);
+        usb_receiver_set_muted(a->usb_receiver,a->video_view.muted);
         return TRUE;
     case GDK_KEY_r:
         if (a->running && !a->stopping && a->scatter && a->scatter_backend) {
@@ -870,11 +992,18 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
     if (event->keyval == GDK_KEY_w || event->keyval == GDK_KEY_W) { save_settings(a); return TRUE; }
     if (event->keyval == GDK_KEY_bracketleft) { filter_step(a, -1); return TRUE; }
     if (event->keyval == GDK_KEY_bracketright) { filter_step(a, 1); return TRUE; }
+    /* Up/down remain dedicated SDR gain controls. */
+    if (event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_KP_Up) {
+        if (hardware_source(a)) gain_step(a,1);
+        return hardware_source(a);
+    }
+    if (event->keyval == GDK_KEY_Down || event->keyval == GDK_KEY_KP_Down) {
+        if (hardware_source(a)) gain_step(a,-1);
+        return hardware_source(a);
+    }
     if (!hardware_source(a)) return FALSE;
     /* Handle before GTK propagates to focused entries: plain arrows tune
      * throughout this window; modified arrows retain normal editing behavior. */
-    if (event->keyval == GDK_KEY_Up || event->keyval == GDK_KEY_KP_Up) { gain_step(a, 1); return TRUE; }
-    if (event->keyval == GDK_KEY_Down || event->keyval == GDK_KEY_KP_Down) { gain_step(a, -1); return TRUE; }
     if (event->keyval == GDK_KEY_Left || event->keyval == GDK_KEY_KP_Left) { tune_step(a, -1); return TRUE; }
     if (event->keyval == GDK_KEY_Right || event->keyval == GDK_KEY_KP_Right) { tune_step(a, 1); return TRUE; }
     return FALSE;
@@ -1059,6 +1188,19 @@ static gboolean monitor_tick(gpointer data) {
         a->iq_view.rows = 0; a->iq_view.last_frame = 0;
     }
     a->iq_view.center = center; a->iq_view.rate = rate;
+    usb_source_refresh(a);
+    a->iq_view.usb_enabled=usb_receiver_running(a->usb_receiver);
+    a->iq_view.monitor_mode=usb_receiver_mode(a->usb_receiver);
+    a->iq_view.usb_frequency=usb_receiver_frequency(a->usb_receiver);
+    if (a->usb_status && usb_receiver_running(a->usb_receiver)) {
+        char message[512]; usb_receiver_status(a->usb_receiver,message,sizeof(message));
+        gtk_label_set_text(GTK_LABEL(a->usb_status),message);
+        MonitorMode mode=a->iq_view.monitor_mode;
+        char *tip=g_strdup_printf("%s · Page Up / Page Down: %s\n%s",monitor_name(mode),
+            mode==MONITOR_USB ? "-100 / +100 Hz" : "-2.5 / +2.5 kHz",message);
+        GtkWidget *button=mode==MONITOR_FM_DATA ? a->fm_data_toggle : mode==MONITOR_FM ? a->fm_toggle : a->usb_toggle;
+        gtk_widget_set_tooltip_text(button,tip); g_free(tip);
+    }
     iq_view_receive(&a->iq_view);
     return G_SOURCE_CONTINUE;
 }
@@ -1090,6 +1232,11 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    const char *usb_keys[]={"tci_bind","tci_port","audio_device","pcm_udp_enabled","pcm_udp_host","pcm_udp_port"};
+    const char *usb_values[]={"127.0.0.1","40031","default","false","127.0.0.1","7355"};
+    for (unsigned i=0;i<G_N_ELEMENTS(usb_keys);++i)
+        if (!g_key_file_has_key(a->config,"usb",usb_keys[i],NULL))
+            g_key_file_set_string(a->config,"usb",usb_keys[i],usb_values[i]);
     const char *udp_keys[] = {"udp_enabled", "udp_host", "udp_port"};
     const char *udp_values[] = {"false", "127.0.0.1", "1234"};
     for (unsigned i = 0; i < G_N_ELEMENTS(udp_keys); ++i)
@@ -1361,9 +1508,14 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
     const char *shortcuts[][2]={
         {"Key","Description"},
-        {"Alt+I / Alt+M / Alt+R / Alt+A","Open Input / Mode / Renderer / About"},
+        {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+A","Open Input / Mode / Renderer / TCI / About"},
         {"R","Reset TSscatterFix reconstruction"},
-        {"M","Mute / unmute the embedded player"},
+        {"M","Mute / unmute speakers (DVB and USB / FM / FM-DATA); TCI audio continues"},
+        {"U","USB receiver (3 kHz), speaker and TCI on/off"},
+        {"F","FM receiver (12.5 kHz), speaker and TCI on/off"},
+        {"D","FM-DATA receiver (20 kHz), flat audio to speaker and TCI on/off"},
+        {"Page Up / Page Down","Tune monitor down / up: USB 100 Hz, FM / FM-DATA 2.5 kHz"},
+        {"Click spectrum","Tune the active USB / FM / FM-DATA monitor at the clicked frequency"},
         {"← / →","Decrease / increase receive frequency"},
         {"↑ / ↓","Increase / decrease gain"},
         {"[ / ]","Narrow / widen the IQ bandpass filter"},
@@ -1509,6 +1661,78 @@ static void show_renderer(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->renderer_dialog));
 }
 
+static void show_tci(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data; gtk_widget_show_all(a->tci_dialog);
+    gtk_window_present(GTK_WINDOW(a->tci_dialog));
+}
+
+static void pcm_udp_destination_changed(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    g_key_file_set_string(a->config,"usb","pcm_udp_host",gtk_entry_get_text(GTK_ENTRY(a->pcm_udp_host)));
+    g_key_file_set_integer(a->config,"usb","pcm_udp_port",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->pcm_udp_port)));
+}
+static void pcm_udp_toggled(GtkToggleButton *button, gpointer data) {
+    App *a=data;
+    gboolean enabled=gtk_toggle_button_get_active(button);
+    gtk_spin_button_update(GTK_SPIN_BUTTON(a->pcm_udp_port));
+    const char *host=gtk_entry_get_text(GTK_ENTRY(a->pcm_udp_host));
+    unsigned port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->pcm_udp_port));
+    GError *error=NULL;
+    if (!usb_receiver_set_pcm_udp(a->usb_receiver,enabled,host,port,&error)) {
+        enabled=usb_receiver_pcm_udp_enabled(a->usb_receiver);
+        g_signal_handlers_block_by_func(button,pcm_udp_toggled,a);
+        gtk_toggle_button_set_active(button,enabled);
+        g_signal_handlers_unblock_by_func(button,pcm_udp_toggled,a);
+        gtk_label_set_text(GTK_LABEL(a->usb_status),error->message);
+        status(a,error->message); g_clear_error(&error);
+    }
+    g_key_file_set_boolean(a->config,"usb","pcm_udp_enabled",enabled);
+    pcm_udp_destination_changed(NULL,a);
+    gtk_widget_set_sensitive(a->pcm_udp_host,!enabled);
+    gtk_widget_set_sensitive(a->pcm_udp_port,!enabled);
+}
+static void create_tci(App *a, const char *error) {
+    GtkWidget *grid;
+    a->tci_dialog=settings_dialog(a,"TCI · USB / FM / FM-DATA receiver",&grid);
+    a->usb_port=spin(grid,"TCI port",0,1,65535,1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->usb_port),integer_setting(a,"usb","tci_port",1,65535));
+    GtkWidget *hint=gtk_label_new("Switch USB / FM / FM-DATA off to change the port. Press W in the main window to save.\n"
+        "USB (U), FM (F) or FM-DATA (D) enables the speaker and TCI. Click the spectrum to tune.\n"
+        "Page Up / Down: lower / higher frequency; USB 100 Hz, FM / FM-DATA 2.5 kHz.");
+    gtk_label_set_line_wrap(GTK_LABEL(hint),TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(hint),60);
+    gtk_label_set_xalign(GTK_LABEL(hint),0);
+    gtk_grid_attach(GTK_GRID(grid),hint,0,1,2,1);
+    a->usb_status=gtk_label_new(error ? error : "USB / FM / FM-DATA off");
+    gtk_label_set_line_wrap(GTK_LABEL(a->usb_status),TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(a->usb_status),60);
+    gtk_label_set_xalign(GTK_LABEL(a->usb_status),0);
+    gtk_grid_attach(GTK_GRID(grid),a->usb_status,0,2,2,1);
+    a->pcm_udp_enabled=gtk_check_button_new_with_label("Send PCM audio via UDP");
+    gtk_grid_attach(GTK_GRID(grid),a->pcm_udp_enabled,0,3,2,1);
+    a->pcm_udp_host=entry_field(grid,"PCM destination IPv4",4,a,"usb","pcm_udp_host");
+    a->pcm_udp_port=spin(grid,"PCM UDP port",5,1,65535,1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->pcm_udp_port),integer_setting(a,"usb","pcm_udp_port",1,65535));
+    GtkWidget *pcm_hint=gtk_label_new("48 kHz · mono · signed 16-bit little-endian · raw UDP audio\n"
+        "Dire Wolf: FM for 1200 AFSK; FM-DATA for 9600 G3RUH.\n"
+        "M mutes speakers only; TCI and PCM audio continue.\n"
+        "PCM follows the active USB / FM / FM-DATA receiver.\n"
+        "Switch PCM off to edit its destination. Press W in the main window to save.");
+    gtk_label_set_line_wrap(GTK_LABEL(pcm_hint),TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(pcm_hint),60);
+    gtk_label_set_xalign(GTK_LABEL(pcm_hint),0);
+    gtk_grid_attach(GTK_GRID(grid),pcm_hint,0,6,2,1);
+    g_signal_connect(a->pcm_udp_host,"changed",G_CALLBACK(pcm_udp_destination_changed),a);
+    g_signal_connect(a->pcm_udp_port,"value-changed",G_CALLBACK(pcm_udp_destination_changed),a);
+    g_signal_connect(a->pcm_udp_enabled,"toggled",G_CALLBACK(pcm_udp_toggled),a);
+    gtk_widget_set_sensitive(a->pcm_udp_enabled,a->usb_receiver!=NULL);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->pcm_udp_enabled),
+        g_key_file_get_boolean(a->config,"usb","pcm_udp_enabled",NULL));
+    g_signal_connect(a->usb_port,"value-changed",G_CALLBACK(usb_port_changed),a);
+    g_signal_connect(a->tci_dialog,"response",G_CALLBACK(hide_dialog),a);
+    g_signal_connect(a->tci_dialog,"delete-event",G_CALLBACK(hide_dialog_close),a);
+}
+
 static void renderer_selection_changed(GtkWidget *widget, gpointer data) {
     App *a=data;
     selection_changed(widget, data);
@@ -1635,12 +1859,18 @@ static void gui(App *a) {
     gtk_window_set_position(GTK_WINDOW(a->window), GTK_WIN_POS_CENTER);
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(a->window), root);
+    GError *usb_error=NULL;
+    a->usb_receiver=usb_receiver_new(&usb_error);
     GtkWidget *menu = gtk_menu_bar_new();
     GtkWidget *config_item = gtk_menu_item_new_with_label("Input"), *about_item = gtk_menu_item_new_with_label("About");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), config_item);
     GtkWidget *mode_item = gtk_menu_item_new_with_label("Mode"), *renderer_item = gtk_menu_item_new_with_label("Renderer");
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mode_item);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), renderer_item);
+    GtkWidget *tci_item=gtk_menu_item_new_with_label("TCI");
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu),tci_item);
+    gtk_widget_set_tooltip_text(tci_item,"Open TCI · Alt+T");
+    g_signal_connect(tci_item,"activate",G_CALLBACK(show_tci),a);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), about_item);
     gtk_widget_set_tooltip_text(config_item, "Open Input · Alt+I");
     gtk_widget_set_tooltip_text(mode_item, "Open Mode · Alt+M");
@@ -1687,6 +1917,8 @@ static void gui(App *a) {
     gtk_grid_set_row_homogeneous(GTK_GRID(a->dashboard), TRUE);
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
     GtkWidget *view = iq_view_create(&a->iq_view, a->config);
+    gtk_widget_add_events(a->iq_view.area,GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(a->iq_view.area,"button-press-event",G_CALLBACK(usb_spectrum_clicked),a);
     a->filter_box = a->iq_view.filter_toggle;
     a->scatter_box = gtk_toggle_button_new_with_label("TSscatterFix");
     gtk_widget_set_name(a->scatter_box,"spectrum-scatter");
@@ -1694,6 +1926,30 @@ static void gui(App *a) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
     ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls);
+    a->usb_toggle=gtk_toggle_button_new_with_label("USB");
+    gtk_widget_set_name(a->usb_toggle,"spectrum-usb");
+    atk_object_set_name(gtk_widget_get_accessible(a->usb_toggle),"USB receiver on/off");
+    gtk_widget_set_tooltip_text(a->usb_toggle,usb_error ? usb_error->message :
+        "USB (U) · 3 kHz · Page Up / Page Down: -100 / +100 Hz");
+    gtk_widget_set_sensitive(a->usb_toggle,a->usb_receiver!=NULL);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->usb_toggle,FALSE,FALSE,0);
+    g_signal_connect(a->usb_toggle,"toggled",G_CALLBACK(usb_toggled),a);
+    a->fm_toggle=gtk_toggle_button_new_with_label("FM");
+    gtk_widget_set_name(a->fm_toggle,"spectrum-fm");
+    atk_object_set_name(gtk_widget_get_accessible(a->fm_toggle),"FM receiver on/off");
+    gtk_widget_set_tooltip_text(a->fm_toggle,usb_error ? usb_error->message :
+        "FM (F) · 12.5 kHz · Page Up / Page Down: -2.5 / +2.5 kHz");
+    gtk_widget_set_sensitive(a->fm_toggle,a->usb_receiver!=NULL);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->fm_toggle,FALSE,FALSE,0);
+    g_signal_connect(a->fm_toggle,"toggled",G_CALLBACK(usb_toggled),a);
+    a->fm_data_toggle=gtk_toggle_button_new_with_label("FM-DATA");
+    gtk_widget_set_name(a->fm_data_toggle,"spectrum-fm-data");
+    atk_object_set_name(gtk_widget_get_accessible(a->fm_data_toggle),"FM-DATA receiver on/off");
+    gtk_widget_set_tooltip_text(a->fm_data_toggle,usb_error ? usb_error->message :
+        "FM-DATA (D) · 20 kHz · flat audio · Page Up / Page Down: -2.5 / +2.5 kHz");
+    gtk_widget_set_sensitive(a->fm_data_toggle,a->usb_receiver!=NULL);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->fm_data_toggle,FALSE,FALSE,0);
+    g_signal_connect(a->fm_data_toggle,"toggled",G_CALLBACK(usb_toggled),a);
     gtk_widget_set_hexpand(view, TRUE); gtk_widget_set_vexpand(view, TRUE);
     gtk_grid_attach(GTK_GRID(a->dashboard), view, 0, 0, 1, 1);
     a->lower = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
@@ -1718,6 +1974,8 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(receiver_row), scatter_view_create(&a->scatter_view), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
     create_mode_renderer(a);
+    create_tci(a,usb_error ? usb_error->message : NULL);
+    g_clear_error(&usb_error);
     populate_rates(a); populate_fecs(a);
     a->status = gtk_label_new("");
     gtk_widget_set_no_show_all(a->status, TRUE);
@@ -1755,6 +2013,7 @@ static void gui(App *a) {
     monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); gtk_main();
     g_source_remove(decoder_timer);
     g_source_remove(a->iq_view.timer);
+    usb_receiver_free(a->usb_receiver); a->usb_receiver=NULL;
     decoder_view_stop(&a->decoder_view);
     video_view_destroy(&a->video_view);
     scatter_view_reset(&a->scatter_view);
@@ -1762,6 +2021,7 @@ static void gui(App *a) {
     ts_info_view_destroy(&a->information);
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
+    gtk_widget_destroy(a->tci_dialog);
     gtk_widget_destroy(a->config_dialog);
     gtk_widget_destroy(a->window);
 }

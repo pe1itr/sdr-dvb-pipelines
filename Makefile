@@ -10,6 +10,10 @@ GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0)
 GTK_LIBS := $(shell pkg-config --libs gtk+-3.0)
 GTK_CFLAGS += $(shell pkg-config --cflags libvlc)
 GTK_LIBS += $(shell pkg-config --libs libvlc)
+USB_CFLAGS := $(shell pkg-config --cflags alsa samplerate)
+USB_LIBS := $(shell pkg-config --libs alsa samplerate)
+GTK_CFLAGS += $(USB_CFLAGS)
+GTK_LIBS += $(USB_LIBS)
 GLIB_CFLAGS := $(shell pkg-config --cflags glib-2.0)
 FILTER_CFLAGS := $(shell pkg-config --cflags fftw3f)
 FILTER_LIBS := $(shell pkg-config --libs fftw3f)
@@ -38,8 +42,9 @@ $(BUILD_DIR)/scatter/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SCATTER_DIR)/src/*
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SCATTER_CFLAGS) -c $< -o $@
 
-GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c
-GUI_HEADERS := src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
+GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
+GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
+GUI_HEADERS += src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
 	mkdir -p $(@D)
@@ -59,11 +64,11 @@ $(BUILD_DIR):
 $(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
-$(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(JSON_CFLAGS) $(FILTER_CFLAGS) $< src/iq_file.c src/iq_bandfilter.c src/iq_monitor.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(JSON_CFLAGS) $(FILTER_CFLAGS) $< src/iq_file.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
-$(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c src/iq_monitor.c src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/tune_control.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< src/iq_bandfilter.c src/iq_monitor.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/tune_control.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 package: all
 	cp third_party/rbdvbt/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
@@ -82,8 +87,8 @@ test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/sdr_to_stdout: src/sdr_to_stdout.c src/iq_monitor.c src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/tune_control.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd) src/sdr_to_stdout.c src/iq_output.c src/iq_bandfilter.c src/iq_monitor.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/sdr_to_stdout: src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/tune_control.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd) src/sdr_to_stdout.c src/iq_output.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_iq_output.c src/iq_output.c -o $@ $(LDFLAGS) -pthread $(LDLIBS)
@@ -112,8 +117,8 @@ test-tune-control: $(BUILD_DIR)/test_tune_control
 
 test: test-tune-control
 
-$(BUILD_DIR)/bandfilter_probe: tests/bandfilter_probe.c src/iq_bandfilter.c src/iq_bandfilter.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) tests/bandfilter_probe.c src/iq_bandfilter.c src/iq_monitor.c -o $@ $(LDFLAGS) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/bandfilter_probe: tests/bandfilter_probe.c src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/iq_monitor.h src/usb_tap.c src/usb_tap.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) tests/bandfilter_probe.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 .PHONY: test-bandfilter
 test-bandfilter: $(BUILD_DIR)/bandfilter_probe
@@ -121,8 +126,8 @@ test-bandfilter: $(BUILD_DIR)/bandfilter_probe
 
 test: test-bandfilter
 
-$(BUILD_DIR)/monitor_probe: tests/monitor_probe.c src/iq_monitor.c src/iq_monitor.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) tests/monitor_probe.c src/iq_monitor.c -o $@ $(LDFLAGS) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/monitor_probe: tests/monitor_probe.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) tests/monitor_probe.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 .PHONY: test-iq-monitor
 test-iq-monitor: $(BUILD_DIR)/monitor_probe
@@ -167,3 +172,15 @@ $(BUILD_DIR)/ts_info_relay: tests/ts_info_relay.c src/scatter_backend.c src/scat
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(SCATTER_CFLAGS) tests/ts_info_relay.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GLIB_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
 
 test-ts-info: $(BUILD_DIR)/ts_info_relay
+
+$(BUILD_DIR)/usb_demod_probe: tests/usb_demod_probe.c src/usb_demod.c src/usb_demod.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(USB_CFLAGS) tests/usb_demod_probe.c src/usb_demod.c -o $@ $(LDFLAGS) $(USB_LIBS) -lm $(LDLIBS)
+
+$(BUILD_DIR)/usb_receiver_probe: tests/usb_receiver_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c src/usb_tap.c src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(USB_CFLAGS) tests/usb_receiver_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(USB_LIBS) -pthread -lm $(LDLIBS)
+
+.PHONY: test-usb
+test-usb: all $(BUILD_DIR)/usb_demod_probe $(BUILD_DIR)/usb_receiver_probe
+	python3 tests/test_usb.py
+
+test: test-usb

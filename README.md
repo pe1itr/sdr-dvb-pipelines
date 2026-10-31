@@ -76,7 +76,8 @@ blijven beschikbaar voor de oudere experimenten.
 
 Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
 GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD, FFmpeg
-(`libavcodec`, `libavformat`, `libavutil`, `libswscale`), libzvbi (`zvbi-0.2`) en libVLC 3
+(`libavcodec`, `libavformat`, `libavutil`, `libswscale`), libzvbi (`zvbi-0.2`), ALSA,
+libsamplerate en libVLC 3
 (inclusief de VLC-codecplugins)):
 
 ```bash
@@ -86,6 +87,8 @@ make
 
 Voor libzvbi zijn ook de ontwikkelbestanden nodig: `sudo dnf install zvbi-devel`
 op Fedora, of `sudo apt install libzvbi-dev` op Debian/Ubuntu.
+Voor USB-audio zijn `alsa-lib-devel libsamplerate-devel` (Fedora) of
+`libasound2-dev libsamplerate0-dev` (Debian/Ubuntu) nodig.
 
 De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
@@ -1080,6 +1083,154 @@ Vanaf de opdrachtregel kan dit ook:
 ./build/linrad_dvb --iq-file /pad/naar/opname.iq --run
 ```
 
+### USB/FM/FM-DATA-monitor voor bakens, spraak en packet
+
+Naast **Teletekst** staan **USB**, **FM** en **FM-DATA**. Met **U/u**, **F/f**
+en **D/d** schakel je de bijbehorende stand aan of uit. Er is één parallelle
+audio-ontvanger: er kan maar één stand tegelijk aanstaan. Omschakelen bewaart de afstemfrequentie,
+de speakerverbinding en de TCI-clients. De actieve knop licht oranje op.
+
+- **USB:** Upper Side Band, **3 kHz** breed vanaf de beatfrequentie.
+  De spectrumlijnen staan op de beatfrequentie en **+3 kHz**.
+- **FM:** smalband communicatie-FM, **12,5 kHz** breed rond de draaggolf,
+  met nominale piekdeviatie **±2,5 kHz**, een spraakfilter van circa 300–3000 Hz
+  en 75 µs de-emphasis. Het spectrum toont de middenfrequentie en de grenzen
+  op **−6,25 en +6,25 kHz**. Dit is een open monitor zonder squelch.
+- **FM-DATA:** **20 kHz** breed rond de draaggolf, met spectrumgrenzen op
+  **−10 en +10 kHz**. Vlakke discriminatoraudio zonder spraakfilters,
+  de-emphasis, audio-AGC of squelch, inclusief behoud van DC. Vaste versterking
+  geeft ±0,25 bij ±5 kHz deviatie; de uitgang heeft begrenzing op ±0,95.
+  RF-filtering en anti-aliasfiltering bij resampling blijven actief.
+  Dit is een uitgang voor externe modemsoftware, geen ingebouwde packetdecoder.
+
+**FM-N/FM-W** verwijzen naar narrow/wide FM; de audioverwerking verschilt per
+programma. [SDR Console](https://www.sdr-radio.com/modes) gebruikt bijvoorbeeld
+Wide FM zonder de-emphasis. Hier geeft **FM-DATA** expliciet het vlakke audiopad
+aan. Een bredere spraak-FM-stand alleen is onvoldoende voor 9600-baud
+packet. De vaste 20 kHz is een uitgangspunt voor G3RUH-signalen; de benodigde
+RF-bandbreedte hangt af van de deviatie en pulsfiltering van de zender.
+De externe modem moet TCI-audio ondersteunen, of via een afzonderlijke audiobrug
+worden aangesloten. Dire Wolf kan bijvoorbeeld de discriminatoraudio decoderen,
+maar heeft hiermee niet automatisch een rechtstreekse TCI-ingang.
+
+De afstemfrequentie staat links van de midden-/beatfrequentielijn. Klik met de
+linkermuisknop in het spectrum om de ingeschakelde monitor daar af te stemmen.
+**Page Up** stemt lager af (naar links), **Page Down** hoger (naar rechts):
+**100 Hz per stap bij USB**, **2,5 kHz per stap bij FM en FM-DATA**. **↑ / ↓** blijven de
+SDR-gain bedienen. Klikken en de afstemtoetsen veranderen alleen de monitor;
+SDR-frequentie, DVB-filterbreedte en DVB-processen blijven behouden.
+Bij het veranderen van de SDR-middenfrequentie volgt de monitor met dezelfde
+afstand tot het midden. Bij Linrad moet de middenfrequentie in **Input** kloppen;
+de LO-offset wordt meegenomen voor directe SDR-bronnen.
+
+Alle drie standen geven audio naar de standaard speakeruitgang (ALSA, eventueel
+via PipeWire/PulseAudio) en naar TCI. **M/m dempt uitsluitend de speakers**:
+zowel de ingebouwde DVB-player als de USB/FM/FM-DATA-monitor. De audio naar **TCI en PCM UDP wordt niet gedempt**. De mute-instelling blijft behouden
+bij omschakelen tussen de drie standen; de TCI-verbinding blijft open.
+UDP-uitvoer en TS-opnames behouden eveneens hun audio.
+
+De monitor gebruikt de IQ-bron die met **Start SDR** of **Play file** loopt.
+Zonder actieve bron blijft TCI bereikbaar en staat in het TCI-venster
+**Waiting for IQ**. De volledige monitorband moet in het beschikbare IQ-spectrum
+passen. FM vereist minstens **12.500 IQ-samples/s**, FM-DATA **24.000**;
+bij een te smalle bron of afstelling blijft een mislukte omschakeling in de vorige stand.
+
+TCI is standaard bereikbaar op **`ws://127.0.0.1:40031`**. De poort is aanpasbaar
+via **TCI**, direct na **Renderer** (ook **Alt+T**), wanneer de monitor uitstaat.
+**W** in het hoofdvenster bewaart de instelling. Voor bijvoorbeeld MSHV kies je
+**TCI Client RX1**, host `127.0.0.1`, poort `40031`, en **TCI Client Input** als
+audio-input. TCI geeft de frequentie, modus (**USB** of **NFM**, ook voor FM-DATA) en filtergrenzen
+door. Clients kunnen binnen het IQ-spectrum afstemmen; de modulatie kies je
+met de USB/FM/FM-DATA-knoppen. De server is uitsluitend voor ontvangst.
+
+De optionele INI-sectie is:
+
+```ini
+[usb]
+tci_bind=127.0.0.1
+tci_port=40031
+audio_device=default
+pcm_udp_enabled=false
+pcm_udp_host=127.0.0.1
+pcm_udp_port=7355
+```
+
+Voor een TCI-client op een andere computer stel je `tci_bind` in op het lokale
+LAN-adres van deze computer. TCI gebruikt WebSocket zonder authenticatie of TLS;
+gebruik dit alleen binnen een vertrouwd netwerk. `audio_device` kan een andere
+ALSA-uitgang zijn. Als de speakeruitgang ontbreekt, meldt de monitorstatus dat en
+blijft TCI-audio beschikbaar.
+
+De monitortak kopieert IQ **vóór** het DVB-bandfilter naar een begrensde buffer.
+Demodulatie, speaker en TCI draaien in een aparte thread. De bron wacht nooit op
+die buffer: bij achterstand vallen alleen monitorblokken weg, zichtbaar in de
+status in het TCI-venster en de tooltip van de actieve USB/FM/FM-DATA-knop.
+Trage TCI-clients worden afzonderlijk verbroken. De monitor uitschakelen sluit de speaker en de TCI-poort; de DVB-processen blijven draaien. Deze extra
+verwerking kost wel CPU-tijd en geheugenbandbreedte, vooral bij hoge IQ-rates.
+
+De TCI-implementatie volgt de RX-audiowerking van `tci-radio-bridge` en het
+[TCI-protocol](https://github.com/ExpertSDR3/TCI). Standaard wordt mono float32
+audio op 48 kHz verstuurd na `audio_start:0;`, met een 64-byte little-endian
+TCI-header. Stereo met identieke kanalen en int16 zijn ook beschikbaar.
+USB en spraak-FM ondersteunen daarnaast 24/12 kHz. **FM-DATA gebruikt altijd
+48 kHz** om aliasing door ongefilterde decimatie te voorkomen. Bij omschakelen
+meldt de server de nieuwe samplerate aan bestaande clients; verzoeken om
+24/12 kHz krijgen in FM-DATA de werkelijke waarde 48 kHz terug.
+`make test-usb` controleert USB-zijband- en aliasonderdrukking, FM-demodulatie,
+AM-onderdrukking, het spraakfilter, de vlakke FM-DATA-respons en DC,
+live omschakelen, TCI-audio tijdens speaker-mute,
+resampling, frequentie via WebSocket, trage clients en ongewijzigde DVB-IQ bij een volle monitorbuffer.
+Als Dire Wolf-tools `gen_packets` en `atest` aanwezig zijn, controleert de test ook
+het decoderen van een gegenereerd 9600-baud G3RUH-packet na FM-modulatie en
+FM-DATA-demodulatie, zonder foutcorrectie van ongeldige CRC's.
+Met `direwolf` en `gen_packets` test hij bovendien de volledige route van
+synthetische IQ via FM/1200 AFSK en FM-DATA/9600 G3RUH naar PCM UDP en de echte
+Dire Wolf-decoder, terwijl de speaker gedempt is.
+
+### PCM UDP naar Dire Wolf
+
+Open **TCI** (**Alt+T**) en vink **Send PCM audio via UDP** aan. Standaard is
+de bestemming **127.0.0.1:7355**; de optie staat aanvankelijk uit. Het doeladres
+is een numeriek IPv4-adres. Schakel PCM tijdelijk uit om adres of poort te
+wijzigen; de monitor en TCI hoeven daarvoor niet uit. **W** in het hoofdvenster
+bewaart ook deze instellingen.
+
+De uitgang volgt de geselecteerde monitorstand, ook bij live omschakelen:
+
+| Ontvangst | Stand in Linrad DVB | Dire Wolf |
+| --- | --- | --- |
+| 1200-baud Bell 202 AFSK-packet | **FM (F)** | `-B 1200` / `MODEM 1200` |
+| 9600-baud G3RUH-packet | **FM-DATA (D)** | `-B 9600` / `MODEM 9600` |
+
+Ook **USB** kan audio naar dezelfde uitgang sturen. Er is één monitor en dus
+één audiostroom; de baudrate stel je in de externe modem in. Voor Dire Wolf
+zijn geen TCI-bridge en geen virtuele geluidskaart nodig. Start de SDR of een
+IQ-bestand, schakel de gewenste monitorstand in en stem de zender af.
+
+Vanuit deze projectmap kun je het meegeleverde ontvangstvoorbeeld gebruiken:
+
+```bash
+# Gebruik FM in Linrad DVB:
+direwolf -c direwolf-pcm.conf -B 1200
+
+# Of gebruik FM-DATA in Linrad DVB:
+direwolf -c direwolf-pcm.conf -B 9600
+```
+
+Start één van beide opdrachten. Het bestand `direwolf-pcm.conf` bevat alleen
+ontvangstinstellingen voor 48 kHz mono-audio; het zet geen beacon, IGate of
+KISS/AGW-server aan. Pas bij een andere UDP-poort ook `ADEVICE UDP:7355 null`
+aan. TCI blijft op zijn eigen poort **40031** werken.
+
+PCM UDP levert **48.000 samples/s, mono, signed 16-bit little-endian**, zonder
+WAV-, TCI- of RTP-header: **480 samples / 960 bytes per datagram** (10 ms).
+De uitgang volgt het audiopad van de gekozen stand en heeft geen eigen
+spraakfilters of versterkingsregeling. **M** beïnvloedt alleen de speakers.
+Bij uitgeschakelde monitor of ontbrekende IQ stopt de stroom; de aangevinkte
+optie blijft klaarstaan voor de volgende ontvangst. UDP verzendt zonder op een
+ontvanger te wachten en zonder hertransmissie. Verzendfouten staan in de
+monitorstatus; verlies verderop in het netwerk is hiermee niet meetbaar.
+
 ### Renderer en rechtstreeks MPEG-TS opslaan
 
 Via **Renderer** kies je **Embedded player (right panel)**, **UDP stream (external player)**,
@@ -1089,7 +1240,8 @@ de knop naast **BW** in het spectrum.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
 
 De ingebouwde player toont beeld in het vaste rechterkader en speelt geluid af.
-Met **M** (of **m**) in het hoofdvenster schakel je mute aan of uit. Het videokader
+Met **M** (of **m**) in het hoofdvenster schakel je speaker-mute aan of uit
+voor de ingebouwde DVB-player en de USB/FM/FM-DATA-monitor; TCI-audio blijft doorlopen. Het videokader
 toont **Muted (M)** zolang het geluid gedempt is. De keuze blijft tijdens deze
 app-sessie behouden, ook na Stop/Start. UDP-uitvoer en TS-opnames behouden hun audio;
 externe players bedienen hun eigen geluid.

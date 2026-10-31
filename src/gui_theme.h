@@ -60,6 +60,10 @@ static void apply_receiver_theme(void) {
         "#spectrum-bw label, #spectrum-scatter label { background-color: transparent; }"
         "#spectrum-bw:checked, #spectrum-scatter:checked { background-color: #b52323; border-color: #ff7070; color: #ffffff; }"
         "#spectrum-bw:checked:hover, #spectrum-scatter:checked:hover { background-color: #d02b2b; }"
+        "#spectrum-usb, #spectrum-fm, #spectrum-fm-data { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; border-color: #666666; outline-style: none; }"
+        "#spectrum-usb label, #spectrum-fm label, #spectrum-fm-data label { background-color: transparent; }"
+        "#spectrum-usb:checked, #spectrum-fm:checked, #spectrum-fm-data:checked { background-color: #7a4a08; border-color: #ffcc66; color: #ffffff; }"
+        "#spectrum-usb:checked:hover, #spectrum-fm:checked:hover, #spectrum-fm-data:checked:hover { background-color: #966014; }"
         /* Keep window decorations light, including inactive windows. Override
          * the white foreground and black label backgrounds used in the body. */
         "headerbar, .titlebar {"

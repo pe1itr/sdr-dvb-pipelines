@@ -166,14 +166,16 @@ static void exercise_menu_shortcuts(App *a) {
         g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
         g_assert_true(handled);
         g_assert_cmpint(a->video_view.muted,==,!upper);
+        g_assert_cmpint(usb_receiver_muted(a->usb_receiver),==,!upper);
         g_assert_cmpstr(gtk_frame_get_label(GTK_FRAME(a->video_view.container)),==,
             upper ? "Received video" : "Received video · Muted (M)");
         event.state=GDK_CONTROL_MASK;
         g_assert_false(tuning_key(a->window,&event,a));
         g_assert_cmpint(a->video_view.muted,==,!upper);
+        g_assert_cmpint(usb_receiver_muted(a->usb_receiver),==,!upper);
     }
-    const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r};
-    GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog};
+    const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r,GDK_KEY_t};
+    GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog,a->tci_dialog};
     gtk_window_set_focus(GTK_WINDOW(a->window),a->power_button);
     for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) for (unsigned upper=0;upper<2;++upper) {
         GdkEventKey event={.keyval=upper ? gdk_keyval_to_upper(keys[i]) : keys[i]};
@@ -199,6 +201,276 @@ static void exercise_menu_shortcuts(App *a) {
         g_idle_add(close_about,&seen);
         g_signal_emit_by_name(a->window,"key-press-event",&event,&handled);
         g_assert_true(handled); g_assert_true(seen);
+    }
+}
+
+static gboolean usb_preview(gpointer data) {
+    App *a=data;
+    /* Let GTK complete layout and the toggle highlight before capturing. */
+    int width=gtk_widget_get_allocated_width(a->window), height=gtk_widget_get_allocated_height(a->window);
+    cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,width,height);
+    cairo_t *cr=cairo_create(surface);
+    gtk_widget_draw(a->window,cr);
+    char *dir=g_path_get_dirname(g_getenv("LINRAD_GUI_SCREENSHOT"));
+    char *path=g_build_filename(dir,a->iq_view.monitor_mode==MONITOR_FM ? "fm-smoke.png" : "usb-smoke.png",NULL);
+    g_assert_cmpint(cairo_surface_write_to_png(surface,path),==,CAIRO_STATUS_SUCCESS);
+    g_free(dir); g_free(path); cairo_destroy(cr); cairo_surface_destroy(surface);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle),FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_toggle),FALSE);
+    return G_SOURCE_REMOVE;
+}
+
+static void exercise_usb_clicks(App *a, gboolean enabled) {
+    monitor_tick(a);
+    double left=65, right=gtk_widget_get_allocated_width(a->iq_view.area)-40;
+    double height=gtk_widget_get_allocated_height(a->iq_view.area);
+    GdkEventButton click={.type=GDK_BUTTON_PRESS,.button=1,.y=height-45};
+    double source_frequency=g_key_file_get_double(a->config,"linrad","frequency",NULL);
+    for (unsigned i=0;i<2;++i) {
+        double fraction=i ? .75 : .25;
+        click.x=left+fraction*(right-left);
+        double before=usb_receiver_frequency(a->usb_receiver);
+        gboolean handled=FALSE;
+        g_signal_emit_by_name(a->iq_view.area,"button-press-event",&click,&handled);
+        g_assert_cmpint(handled,==,enabled);
+        double expected=enabled ? round(a->iq_view.center+(fraction-.5)*a->iq_view.rate) : before;
+        g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,expected);
+        g_assert_cmpfloat(a->iq_view.usb_frequency,==,expected);
+        g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","frequency",NULL),==,source_frequency);
+    }
+    double before=usb_receiver_frequency(a->usb_receiver);
+    click.x=left-1;
+    g_assert_false(usb_spectrum_clicked(a->iq_view.area,&click,a));
+    click.x=(left+right)/2; click.y=10; /* Waterfall is not the spectrum. */
+    g_assert_false(usb_spectrum_clicked(a->iq_view.area,&click,a));
+    click.y=height-10; /* Frequency axis. */
+    g_assert_false(usb_spectrum_clicked(a->iq_view.area,&click,a));
+    click.y=height-45; click.button=3;
+    g_assert_false(usb_spectrum_clicked(a->iq_view.area,&click,a));
+    click.button=1; click.state=GDK_CONTROL_MASK;
+    g_assert_false(usb_spectrum_clicked(a->iq_view.area,&click,a));
+    click.state=0; click.x=right;
+    /* The 3 kHz USB passband must still fit within the captured spectrum. */
+    g_assert_cmpint(usb_spectrum_clicked(a->iq_view.area,&click,a),==,enabled);
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
+}
+
+static void exercise_fm(App *a) {
+    GPid source=a->stages[0].pid, decoder=a->stages[1].pid;
+    double frequency=g_key_file_get_double(a->config,"linrad","frequency",NULL);
+    double rate=g_key_file_get_double(a->config,"linrad","sample_rate",NULL);
+    double bandwidth=g_key_file_get_double(a->config,"linrad","filter_bandwidth",NULL);
+    GList *buttons=gtk_container_get_children(GTK_CONTAINER(a->iq_view.filter_controls));
+    GList *fm=g_list_find(buttons,a->fm_toggle);
+    g_assert_nonnull(fm); g_assert_nonnull(fm->prev); g_assert_true(fm->prev->data==a->usb_toggle);
+    g_list_free(buttons);
+    GdkEventKey key={.keyval=GDK_KEY_f,.state=GDK_CONTROL_MASK};
+    g_assert_false(tuning_key(a->window,&key,a)); key.state=0;
+    g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_FM);
+    g_assert_cmpint(a->iq_view.monitor_mode,==,MONITOR_FM);
+    double before=usb_receiver_frequency(a->usb_receiver);
+    key.keyval=GDK_KEY_Page_Down; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before+2500);
+    key.keyval=GDK_KEY_Page_Up; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
+    exercise_usb_clicks(a,TRUE);
+    key.keyval=GDK_KEY_m; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_true(usb_receiver_muted(a->usb_receiver));
+    key.keyval=GDK_KEY_u; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_true(usb_receiver_running(a->usb_receiver));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_USB);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_true(usb_receiver_muted(a->usb_receiver));
+    /* Reject FM if the IQ source is too narrow, keeping USB selected. */
+    g_key_file_set_double(a->config,"linrad","sample_rate",8138);
+    key.keyval=GDK_KEY_F; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_USB);
+    g_key_file_set_double(a->config,"linrad","sample_rate",rate);
+    g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_FM);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    /* DATA is exclusive too, retains mute and has symmetric 20 kHz tuning. */
+    key.keyval=GDK_KEY_d; key.state=GDK_CONTROL_MASK;
+    g_assert_false(tuning_key(a->window,&key,a)); key.state=0;
+    g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_FM_DATA);
+    g_assert_cmpint(a->iq_view.monitor_mode,==,MONITOR_FM_DATA);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle)));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    g_assert_true(usb_receiver_muted(a->usb_receiver));
+    before=usb_receiver_frequency(a->usb_receiver);
+    key.keyval=GDK_KEY_Page_Up; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before-2500);
+    key.keyval=GDK_KEY_Page_Down; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
+    exercise_usb_clicks(a,TRUE);
+    key.keyval=GDK_KEY_D; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle)));
+    key.keyval=GDK_KEY_u; g_assert_true(tuning_key(a->window,&key,a));
+    key.keyval=GDK_KEY_d; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    key.keyval=GDK_KEY_f; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle)));
+    /* Voice FM fits a 16 kHz source, DATA must reject that transition. */
+    g_key_file_set_double(a->config,"linrad","sample_rate",16000);
+    key.keyval=GDK_KEY_d; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle)));
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_cmpint(usb_receiver_mode(a->usb_receiver),==,MONITOR_FM);
+    g_key_file_set_double(a->config,"linrad","sample_rate",rate);
+    key.keyval=GDK_KEY_M; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(usb_receiver_muted(a->usb_receiver));
+    key.keyval=GDK_KEY_F; g_assert_true(tuning_key(a->window,&key,a));
+    g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->fm_toggle)));
+    g_assert_cmpint(a->stages[0].pid,==,source); g_assert_cmpint(a->stages[1].pid,==,decoder);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","frequency",NULL),==,frequency);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","filter_bandwidth",NULL),==,bandwidth);
+}
+
+static void exercise_pcm_udp(App *a) {
+    GPid source=a->stages[0].pid, decoder=a->stages[1].pid;
+    g_assert_true(gtk_widget_is_ancestor(a->pcm_udp_enabled,a->tci_dialog));
+    g_assert_false(usb_receiver_pcm_udp_enabled(a->usb_receiver));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_data_toggle),TRUE);
+    gtk_entry_set_text(GTK_ENTRY(a->pcm_udp_host),"invalid address");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->pcm_udp_enabled),TRUE);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->pcm_udp_enabled)));
+    g_assert_false(usb_receiver_pcm_udp_enabled(a->usb_receiver));
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status)),"PCM UDP"));
+    g_assert_true(usb_receiver_running(a->usb_receiver));
+    gtk_entry_set_text(GTK_ENTRY(a->pcm_udp_host),"127.0.0.1");
+    /* Exercise a custom destination and an enable while already receiving. */
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->pcm_udp_port),7356);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->pcm_udp_enabled),TRUE);
+    g_assert_true(usb_receiver_pcm_udp_enabled(a->usb_receiver));
+    g_assert_false(gtk_widget_get_sensitive(a->pcm_udp_host));
+    g_assert_false(gtk_widget_get_sensitive(a->pcm_udp_port));
+    g_assert_true(g_key_file_get_boolean(a->config,"usb","pcm_udp_enabled",NULL));
+    save_settings(a);
+    App restored={.window=a->window,.config=g_key_file_new(),.usb_receiver=usb_receiver_new(NULL)};
+    g_assert_nonnull(restored.usb_receiver);
+    g_assert_true(g_key_file_load_from_file(restored.config,a->config_path,G_KEY_FILE_NONE,NULL));
+    create_tci(&restored,NULL);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(restored.pcm_udp_enabled)));
+    g_assert_true(usb_receiver_pcm_udp_enabled(restored.usb_receiver));
+    g_assert_false(usb_receiver_running(restored.usb_receiver));
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(restored.pcm_udp_host)),==,"127.0.0.1");
+    g_assert_cmpint(gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(restored.pcm_udp_port)),==,7356);
+    gtk_widget_destroy(restored.tci_dialog);
+    usb_receiver_free(restored.usb_receiver); g_key_file_unref(restored.config);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_toggle),TRUE);
+    g_assert_true(usb_receiver_pcm_udp_enabled(a->usb_receiver));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_toggle),FALSE);
+    g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_assert_true(usb_receiver_pcm_udp_enabled(a->usb_receiver)); /* Armed for next start. */
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->pcm_udp_enabled),FALSE);
+    g_assert_false(usb_receiver_pcm_udp_enabled(a->usb_receiver));
+    g_assert_true(gtk_widget_get_sensitive(a->pcm_udp_host));
+    g_assert_true(gtk_widget_get_sensitive(a->pcm_udp_port));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->pcm_udp_port),7355);
+    save_settings(a);
+    g_assert_cmpint(a->stages[0].pid,==,source); g_assert_cmpint(a->stages[1].pid,==,decoder);
+}
+
+static void exercise_usb(App *a) {
+    g_assert_nonnull(a->usb_receiver);
+    g_assert_true(gtk_widget_get_parent(a->usb_toggle)==a->iq_view.filter_controls);
+    g_assert_true(gtk_widget_is_ancestor(a->usb_port,a->tci_dialog));
+    GList *buttons=gtk_container_get_children(GTK_CONTAINER(a->iq_view.filter_controls));
+    GList *usb=g_list_find(buttons,a->usb_toggle);
+    g_assert_nonnull(usb); g_assert_nonnull(usb->prev);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(usb->prev->data)),==,"Teletext");
+    g_list_free(buttons);
+    GPid source=a->stages[0].pid, decoder=a->stages[1].pid;
+    double frequency=g_key_file_get_double(a->config,"linrad","frequency",NULL);
+    double bandwidth=g_key_file_get_double(a->config,"linrad","filter_bandwidth",NULL);
+    g_key_file_set_string(a->config,"usb","audio_device","null");
+    int fd=socket(AF_INET,SOCK_STREAM,0);
+    struct sockaddr_in address={.sin_family=AF_INET,.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
+    g_assert_cmpint(bind(fd,(struct sockaddr *)&address,sizeof(address)),==,0);
+    socklen_t length=sizeof(address);
+    g_assert_cmpint(getsockname(fd,(struct sockaddr *)&address,&length),==,0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->usb_port),ntohs(address.sin_port));
+    /* A busy port must only reject USB, leaving the running DVB pipeline intact. */
+    GdkEventKey event={.keyval=GDK_KEY_u};
+    g_assert_true(tuning_key(a->window,&event,a));
+    g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    close(fd);
+    for (unsigned upper=0;upper<2;++upper) {
+        event.keyval=upper ? GDK_KEY_U : GDK_KEY_u;
+        g_assert_true(tuning_key(a->window,&event,a));
+        g_assert_cmpint(usb_receiver_running(a->usb_receiver),==,!upper);
+        g_assert_cmpint(a->iq_view.usb_enabled,==,!upper);
+        g_assert_cmpint(gtk_widget_get_sensitive(a->usb_port),==,upper);
+        exercise_usb_clicks(a,!upper);
+        event.state=GDK_CONTROL_MASK;
+        g_assert_false(tuning_key(a->window,&event,a)); event.state=0;
+        g_assert_true(a->running); g_assert_false(a->stopping);
+        g_assert_cmpint(a->stages[0].pid,==,source);
+        g_assert_cmpint(a->stages[1].pid,==,decoder);
+    }
+    g_assert_true(usb_receiver_tune(a->usb_receiver,frequency+1000));
+    g_assert_false(usb_receiver_tune(a->usb_receiver,frequency+1e9));
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","frequency",NULL),==,frequency);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","filter_bandwidth",NULL),==,bandwidth);
+    GtkWidget *focus=gtk_window_get_focus(GTK_WINDOW(a->window));
+    monitor_tick(a);
+    const guint usb_keys[]={GDK_KEY_Page_Up,GDK_KEY_Page_Down,GDK_KEY_KP_Page_Up,GDK_KEY_KP_Page_Down};
+    for (unsigned i=0;i<G_N_ELEMENTS(usb_keys);++i) {
+        gtk_window_set_focus(GTK_WINDOW(a->window),i<2 ? a->power_button : a->usb_toggle);
+        double before=usb_receiver_frequency(a->usb_receiver);
+        event.keyval=usb_keys[i];
+        g_assert_true(tuning_key(a->window,&event,a));
+        g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before+(i%2 ? 100 : -100));
+        event.state=GDK_CONTROL_MASK;
+        g_assert_false(tuning_key(a->window,&event,a)); event.state=0;
+        g_assert_cmpint(a->stages[0].pid,==,source);
+        g_assert_cmpint(a->stages[1].pid,==,decoder);
+        g_assert_cmpfloat(g_key_file_get_double(a->config,"linrad","frequency",NULL),==,frequency);
+    }
+    int source_index=a->source;
+    a->source=1; /* Up/down must still send hardware gain with the USB button focused. */
+    double gain=g_key_file_get_double(a->config,"hackrf","gain",NULL);
+    g_key_file_set_double(a->config,"hackrf","gain",40);
+    int control[2], saved_tune_fd=a->tune_fd;
+    g_assert_cmpint(pipe(control),==,0); a->tune_fd=control[1];
+    gtk_window_set_focus(GTK_WINDOW(a->window),a->usb_toggle);
+    double before=usb_receiver_frequency(a->usb_receiver);
+    event.keyval=GDK_KEY_Up;
+    g_assert_true(tuning_key(a->window,&event,a));
+    char command[64]={0};
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"gain 41.0\n");
+    event.keyval=GDK_KEY_Down;
+    g_assert_true(tuning_key(a->window,&event,a));
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"gain 40.0\n");
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
+    close(control[0]); close(control[1]); a->tune_fd=saved_tune_fd;
+    g_key_file_set_double(a->config,"hackrf","gain",gain);
+    a->source=source_index;
+    event.keyval=GDK_KEY_Up;
+    g_assert_false(tuning_key(a->window,&event,a));
+    g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
+    monitor_tick(a);
+    g_assert_cmpfloat(a->iq_view.usb_frequency,==,before);
+    gtk_window_set_focus(GTK_WINDOW(a->window),focus);
+    exercise_fm(a);
+    exercise_pcm_udp(a);
+    if (g_getenv("LINRAD_GUI_SCREENSHOT")) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->fm_toggle),TRUE);
+        g_timeout_add(80,usb_preview,a);
     }
 }
 
@@ -694,6 +966,7 @@ static gboolean exercise(gpointer data) {
         g_assert_false(gtk_widget_get_sensitive(a->renderer_panel));
         g_assert_true(gtk_widget_is_sensitive(a->scatter_box));
         GPid decoder_pid = a->stages[1].pid;
+        exercise_usb(a);
         ScatterBackend *backend = a->scatter_backend;
         for (unsigned upper = 0; upper < 2; ++upper) {
             g_mutex_lock(&backend->mutex);
@@ -763,6 +1036,8 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
         g_assert_true(a->video_view.player == player);
         g_assert_cmpint(a->stages[1].pid, ==, decoder_pid);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle),TRUE);
+        g_assert_true(usb_receiver_running(a->usb_receiver));
         window_close(a->window, NULL, a);
         return G_SOURCE_REMOVE;
     }

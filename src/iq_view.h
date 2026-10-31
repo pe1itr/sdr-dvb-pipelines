@@ -1,6 +1,7 @@
 #ifndef IQ_VIEW_H
 #define IQ_VIEW_H
 #include "iq_monitor.h"
+#include "usb_demod.h"
 #include <math.h>
 #include <sys/socket.h>
 #define IQ_VIEW_ROWS 180
@@ -12,6 +13,9 @@ typedef struct {
     float history[IQ_VIEW_ROWS][IQ_MONITOR_BINS];
     double bandwidth, center, rate, floor, span;
     gboolean enabled, active;
+    gboolean usb_enabled;
+    MonitorMode monitor_mode;
+    double usb_frequency;
     gint64 last_frame;
 } IQView;
 static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
@@ -93,6 +97,32 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_fill(cr);
         cairo_set_source_rgb(cr,v->enabled ? .3 : .65,v->enabled ? .8 : .65,v->enabled ? 1 : .65);
         cairo_move_to(cr,tx,ty); cairo_show_text(cr,text);
+        if (v->usb_enabled && isfinite(v->usb_frequency)) {
+            double beat=left+(v->usb_frequency-low)/rate*(right-left);
+            double lower=left+(v->usb_frequency+monitor_low(v->monitor_mode)-low)/rate*(right-left);
+            double upper=left+(v->usb_frequency+monitor_high(v->monitor_mode)-low)/rate*(right-left);
+            cairo_save(cr);
+            cairo_rectangle(cr,left,top,right-left,bottom-top); cairo_clip(cr);
+            cairo_set_source_rgba(cr,1,.8,.4,.12);
+            cairo_rectangle(cr,lower,top,upper-lower,bottom-top); cairo_fill(cr);
+            cairo_set_source_rgb(cr,1,.8,.4); cairo_set_line_width(cr,1);
+            cairo_move_to(cr,beat,top); cairo_line_to(cr,beat,bottom); cairo_stroke(cr);
+            const double dash[]={4,3}; cairo_set_dash(cr,dash,2,0);
+            if (v->monitor_mode!=MONITOR_USB) {
+                cairo_move_to(cr,lower,top); cairo_line_to(cr,lower,bottom);
+            }
+            cairo_move_to(cr,upper,top); cairo_line_to(cr,upper,bottom); cairo_stroke(cr);
+            cairo_set_dash(cr,NULL,0,0);
+            /* USB dial is the lower edge; FM dial is the channel center. */
+            g_snprintf(text,sizeof(text),"%s %.6f MHz",monitor_name(v->monitor_mode),v->usb_frequency/1e6);
+            cairo_text_extents(cr,text,&ext);
+            tx=beat-6-ext.width-ext.x_bearing; ty=top+44;
+            cairo_set_source_rgba(cr,0,0,0,.85);
+            cairo_rectangle(cr,tx+ext.x_bearing-3,ty+ext.y_bearing-3,ext.width+6,ext.height+6);
+            cairo_fill(cr); cairo_set_source_rgb(cr,1,.8,.4);
+            cairo_move_to(cr,tx,ty); cairo_show_text(cr,text);
+            cairo_restore(cr);
+        }
     }
     /* Keep the waterfall edge and tick baseline visible before data arrives. */
     cairo_save(cr);
@@ -176,7 +206,7 @@ static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     v->span=iq_view_saved_level(config,"range_db",100,10,160);
     v->area=gtk_drawing_area_new(); gtk_widget_set_size_request(v->area,600,280);
     gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ monitor could not open a local socket" :
-        "Waterfall: newest at the top. IQ before filtering; blue → green → yellow = more power. Frequency in MHz.");
+        "Waterfall: newest at the top. IQ before filtering; blue → green → yellow = more power. Frequency in MHz. Click the spectrum to tune the active USB / FM / FM-DATA receiver.");
     g_signal_connect(v->area,"draw",G_CALLBACK(iq_view_draw),v);
     GtkWidget *overlay=gtk_overlay_new();
     gtk_container_add(GTK_CONTAINER(overlay),v->area);

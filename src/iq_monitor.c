@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stddef.h>
 #include "iq_monitor.h"
+#include "usb_tap.h"
 #include <fftw3.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -11,6 +12,7 @@
 /* Optional, best-effort local telemetry. Never waits for the GUI. Eight
  * contiguous Hann FFTs per update, at most ten updates per input second. */
 void iq_monitor_feed(const unsigned char *iq, size_t samples, int u8, double rate) {
+    usb_tap_feed(iq,samples,u8,rate);
     static int initialized, fd = -1, used, averages;
     static size_t skip;
     static struct sockaddr_in address;
