@@ -854,7 +854,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
         }
     }
     switch (gdk_keyval_to_lower(event->keyval)) {
-    case GDK_KEY_u:
+    case GDK_KEY_m:
         video_view_set_muted(&a->video_view, !a->video_view.muted);
         return TRUE;
     case GDK_KEY_r:
@@ -1363,7 +1363,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"Key","Description"},
         {"Alt+I / Alt+M / Alt+R / Alt+A","Open Input / Mode / Renderer / About"},
         {"R","Reset TSscatterFix reconstruction"},
-        {"U","Mute / unmute the embedded player"},
+        {"M","Mute / unmute the embedded player"},
         {"← / →","Decrease / increase receive frequency"},
         {"↑ / ↓","Increase / decrease gain"},
         {"[ / ]","Narrow / widen the IQ bandpass filter"},

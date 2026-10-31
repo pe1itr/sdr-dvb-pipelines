@@ -187,7 +187,7 @@ void video_view_set_muted(VideoView *v, gboolean muted) {
     v->muted = muted;
     if (v->player) libvlc_audio_set_mute(v->player, muted);
     if (v->container) gtk_frame_set_label(GTK_FRAME(v->container),
-        muted ? "Received video · Muted (U)" : "Received video");
+        muted ? "Received video · Muted (M)" : "Received video");
 }
 
 void video_view_stop(VideoView *v) {

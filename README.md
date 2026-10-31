@@ -1089,8 +1089,8 @@ de knop naast **BW** in het spectrum.
 Stop de ontvangst voordat je de uitvoer wijzigt. **W** bewaart de keuze in de INI.
 
 De ingebouwde player toont beeld in het vaste rechterkader en speelt geluid af.
-Met **U** (of **u**) in het hoofdvenster schakel je mute aan of uit. Het videokader
-toont **Muted (U)** zolang het geluid gedempt is. De keuze blijft tijdens deze
+Met **M** (of **m**) in het hoofdvenster schakel je mute aan of uit. Het videokader
+toont **Muted (M)** zolang het geluid gedempt is. De keuze blijft tijdens deze
 app-sessie behouden, ook na Stop/Start. UDP-uitvoer en TS-opnames behouden hun audio;
 externe players bedienen hun eigen geluid.
 Vink **Also send video/audio via UDP** aan om tegelijk een externe player te voeden.
