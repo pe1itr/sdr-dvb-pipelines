@@ -30,7 +30,7 @@ class FileReplayTests(unittest.TestCase):
                 self.assertEqual(p.stdout, data)
                 self.assertGreaterEqual(elapsed, .38)
                 self.assertLess(elapsed, 2)
-                self.assertIn(b'einde bestand', p.stderr)
+                self.assertIn(b'end of file', p.stderr)
 
     def test_float_conversion_and_invalid_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,7 +169,7 @@ class FilePipelineTests(unittest.TestCase):
             p = subprocess.run([UI, '--config', config, '--iq-file', iq, '--run'],
                                capture_output=True, timeout=6)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertIn(b'volledig afgespeeld', p.stderr)
+            self.assertIn(b'playback complete', p.stderr)
             self.assertEqual(Path(tmp, 'received.ts').read_bytes(), data + b'TAIL')
 
 

@@ -54,6 +54,17 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     double rate=v->rate;
     if(rate>0) {
+        /* Mark every 25 kHz on the waterfall's absolute frequency axis. */
+        double low=v->center-rate/2, high=v->center+rate/2;
+        cairo_save(cr);
+        cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
+        cairo_set_source_rgb(cr,1,1,1); cairo_set_line_width(cr,1);
+        for (double frequency=ceil(low/25000)*25000; frequency<=high; frequency+=25000) {
+            double x=trunc(left+(frequency-low)/rate*(right-left))+.5;
+            cairo_move_to(cr,x,wf+wh); cairo_line_to(cr,x,wf+wh+6);
+        }
+        cairo_stroke(cr);
+        cairo_restore(cr);
         for(int j=0;j<=4;++j) {
             double x=left+(right-left)*j/4;
             g_snprintf(text,sizeof(text),"%.6f",(v->center+(j/4.0-.5)*rate)/1e6);
@@ -74,7 +85,7 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_stroke(cr);
         /* Right-align the bandwidth just inside the right filter boundary;
          * recompute its position on every draw so it follows the moving line. */
-        g_snprintf(text,sizeof(text),"BW %.0f Hz%s",v->bandwidth,v->enabled ? "" : " (uit)");
+        g_snprintf(text,sizeof(text),"BW %.0f Hz%s",v->bandwidth,v->enabled ? "" : " (off)");
         cairo_text_extents_t ext; cairo_text_extents(cr,text,&ext);
         double tx=center+half-6-ext.width-ext.x_bearing, ty=top+18;
         cairo_set_source_rgba(cr,0,0,0,.85);
@@ -83,8 +94,16 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_set_source_rgb(cr,v->enabled ? .3 : .65,v->enabled ? .8 : .65,v->enabled ? 1 : .65);
         cairo_move_to(cr,tx,ty); cairo_show_text(cr,text);
     }
+    /* Keep the waterfall edge and tick baseline visible before data arrives. */
+    cairo_save(cr);
+    cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
+    cairo_set_source_rgb(cr,.4,.4,.4); cairo_set_line_width(cr,1);
+    double baseline=trunc(wf+wh)+.5;
+    cairo_move_to(cr,left,baseline); cairo_line_to(cr,right,baseline);
+    cairo_stroke(cr);
+    cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8);
-    cairo_move_to(cr,left,top-10); cairo_show_text(cr,"Spectrum · ontvangstfrequentie (MHz)");
+    cairo_move_to(cr,left,top-10); cairo_show_text(cr,"Spectrum · receive frequency (MHz)");
     return FALSE;
 }
 static void iq_view_receive(IQView *v) {
@@ -109,8 +128,8 @@ static void iq_view_level_refresh(IQView *v) {
         gboolean span=i>=2, up=i%2==0;
         double value=span ? v->span : v->floor;
         gtk_widget_set_sensitive(v->level_buttons[i], up ? value<(span ? 160 : -10) : value>(span ? 10 : -200));
-        char *tip=g_strdup_printf("%s %s (5 dB) · nu %.0f %s",
-            span ? "Bereik" : "Ondergrens", up ? "verhogen" : "verlagen", value, span ? "dB" : "dBFS/Hz");
+        char *tip=g_strdup_printf("%s %s (5 dB) · currently %.0f %s",
+            up ? "Increase" : "Decrease", span ? "range" : "floor", value, span ? "dB" : "dBFS/Hz");
         gtk_widget_set_tooltip_text(v->level_buttons[i],tip); g_free(tip);
     }
     gtk_widget_queue_draw(v->area);
@@ -156,8 +175,8 @@ static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     v->floor=iq_view_saved_level(config,"floor_dbfs_hz",-160,-200,-10);
     v->span=iq_view_saved_level(config,"range_db",100,10,160);
     v->area=gtk_drawing_area_new(); gtk_widget_set_size_request(v->area,600,280);
-    gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ-monitor kon geen lokale socket openen" :
-        "Waterval: nieuwste boven. IQ vóór het filter; blauw → groen → geel = meer vermogen. Frequentie in MHz.");
+    gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ monitor could not open a local socket" :
+        "Waterfall: newest at the top. IQ before filtering; blue → green → yellow = more power. Frequency in MHz.");
     g_signal_connect(v->area,"draw",G_CALLBACK(iq_view_draw),v);
     GtkWidget *overlay=gtk_overlay_new();
     gtk_container_add(GTK_CONTAINER(overlay),v->area);
@@ -167,7 +186,7 @@ static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay),v->span_controls);
     v->filter_toggle=gtk_toggle_button_new_with_label("BW");
     gtk_widget_set_name(v->filter_toggle,"spectrum-bw");
-    atk_object_set_name(gtk_widget_get_accessible(v->filter_toggle),"IQ-bandfilter aan/uit");
+    atk_object_set_name(gtk_widget_get_accessible(v->filter_toggle),"IQ bandpass filter on/off");
     v->filter_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,4);
     gtk_box_pack_start(GTK_BOX(v->filter_controls),v->filter_toggle,FALSE,FALSE,0);
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay),v->filter_controls);
@@ -178,7 +197,7 @@ static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
         gtk_container_add(GTK_CONTAINER(button),icon);
         gtk_style_context_add_class(gtk_widget_get_style_context(button),"spectrum-arrow");
         atk_object_set_name(gtk_widget_get_accessible(button),
-            (const char *[]) {"Ondergrens verhogen", "Ondergrens verlagen", "Bereik verhogen", "Bereik verlagen"}[i]);
+            (const char *[]) {"Increase floor", "Decrease floor", "Increase range", "Decrease range"}[i]);
         g_object_set_data(G_OBJECT(button),"level-index",GINT_TO_POINTER(i));
         g_signal_connect(button,"clicked",G_CALLBACK(iq_view_level_clicked),v);
         gtk_box_pack_start(GTK_BOX(i<2 ? v->floor_controls : v->span_controls),button,FALSE,FALSE,0);

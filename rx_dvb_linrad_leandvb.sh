@@ -15,11 +15,18 @@ PROFILETEXT11="Direct van Afedri DVB-S2 125k (low sdr samplerate)"
 PROFILETEXT12="Direct van Afedri DVB-S2 125k (low sdr samplerate) with TS info test"
 PROFILETEXT13="RTL_SDR DVB-S2 SR 125k"
 PROFILETEXT14="HackRF 436 DVB-S2 SR 125k"
-PROFILETEXT14="HackRF 437 DVB-S2 SR 333k"
+PROFILETEXT15="HackRF 437 DVB-S2 SR 333k"
 PROFILETEXT16="HackRF PI6EHV DVB-S2 8PSK SR 5M FEC 3/4 - WERKT NIET!!"
 PROFILETEXT17="SDR-IQ 436 DVB-S2 SR 125k FEC 1/2"
 PROFILETEXT18="SDR-IQ 436 DVB-S2 SR 66k FEC 2/3"
 PROFILETEXT19="SDR-IQ 436 DVB-S2 SR 35k FEC 2/3 (very low sdr samplerate)"
+PROFILETEXT20="DVB-T SR 333k FEC 2/3 via linrad"
+PROFILETEXT21="DVB-T SR 333k FEC 2/3 via linrad and recording"
+PROFILETEXT22="DVB-T SR 250k FEC 2/3 via RTL_SDR"
+PROFILETEXT23="RTL SDR TSscatterfix"
+PROFILETEXT24="Linrad Afedri TSscatterfix 436 DVB-S SR 125k FEC 1/2"
+PROFILETEXT25="Linrad Afedri TSscatterfix 436 DVB-S2 SR 125k FEC 1/2"
+PROFILETEXT25="6m"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -48,6 +55,13 @@ while [[ $# -gt 0 ]]; do
       echo "17: " $PROFILETEXT17
       echo "18: " $PROFILETEXT18
       echo "19: " $PROFILETEXT19
+      echo "20: " $PROFILETEXT20
+      echo "21: " $PROFILETEXT21
+      echo "22: " $PROFILETEXT22
+      echo "23: " $PROFILETEXT23
+      echo "24: " $PROFILETEXT24
+      echo "25: " $PROFILETEXT25
+      echo "26: " $PROFILETEXT26
       exit
       ;;
     *)
@@ -59,7 +73,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19) ;;
+  1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26) ;;
   *)
     echo "Ongeldige --profile: $PROFILE"
     exit 1
@@ -97,7 +111,7 @@ case "$PROFILE" in
     SAMPLERATE=1010526
     SYMBOLRATE=125000
     ./linrad_udp_to_stdout_v2.py \
-    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 100 --modcods 0x10 --framesizes 1 \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 --modcods 0x10 --framesizes 1 \
     | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=300 --live-caching=300 --network-caching=300 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
     ;;
    5)
@@ -227,8 +241,121 @@ case "$PROFILE" in
     ./soapy_sdriq_to_stdout_v2.py -f $FREQ -r $SAMPLERATE -g 10 --u8 --scale 128 \
     | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 3 --modcods 0x40 --framesizes 1 \
     | cvlc --avcodec-hw=none fd://0 --demux=ts --file-caching=1500 --live-caching=1500 --network-caching=1500 --clock-jitter=0 --clock-synchro=0 --drop-late-frames --skip-frames --zoom=3
-    ;;              
-  *)
+    ;;
+   20)
+    echo $PROFILETEXT20
+    SAMPLERATE=1010526
+    SYMBOLRATE=250000
+    LIVESYMBOLS=64
+    SESSION=$(date +%Y%m%d_%H%M%S)
+    RXLOG="rx_${SESSION}.log"
+    ./linrad_udp_to_stdout_v2.py \
+    | .././dvbt-rx/build/rbdvbt_rx --stdin --live --input-format s16 --sample-rate $SAMPLERATE --afc --sr $SYMBOLRATE --gi 1/32 --fec 1/2 --resample-to-dvbt-rate \
+    --live-symbols $LIVESYMBOLS --probe-symbols $LIVESYMBOLS --stdout-ts --wait-video-start --status-json /tmp/rx_status.json  --loglevel info --gui 2> "$RXLOG" \
+    | ffplay -f mpegts -loglevel error -
+    ;;
+   21)
+    echo $PROFILETEXT21
+    SAMPLERATE=1010526
+    SYMBOLRATE=150000
+    LIVESYMBOLS=128
+    SESSION=$(date +%Y%m%d_%H%M%S)
+    RXLOG="rx_${SESSION}.log"
+    ./linrad_udp_to_stdout_v3.py --record-iq --record-stdout \
+    | .././dvbt-rx/build/rbdvbt_rx --stdin --live --input-format s16 --sample-rate $SAMPLERATE --afc --sr $SYMBOLRATE --gi 1/32 --fec 1/2 --resample-to-dvbt-rate \
+    --live-symbols $LIVESYMBOLS --probe-symbols $LIVESYMBOLS --stdout-ts --wait-video-start --status-json /tmp/rx_status.json  --loglevel info --gui 2> "$RXLOG" \
+    | ffplay -f mpegts -loglevel error -
+    ;;
+   22)
+    echo $PROFILETEXT22
+    SAMPLERATE=1010526
+    SYMBOLRATE=150000
+    SESSION=$(date +%Y%m%d_%H%M%S)
+    RXLOG="rx_${SESSION}.log"
+    rtl_sdr -f 437000000 -s $SAMPLERATE -g 0 - \
+    | .././dvbt-rx/build/rbdvbt_rx --stdin --live --input-format u8 --sample-rate $SAMPLERATE --sr $SYMBOLRATE --gi 1/32 --fec 1/2 --resample-to-dvbt-rate \
+    --live-symbols 64 --probe-symbols 64 --stdout-ts --wait-video-start --udp-out 127.0.0.1:10000 --status-json /tmp/rx_status.json  --loglevel info --gui 2> "$RXLOG" \
+    | ffplay -f mpegts -loglevel error -
+    ;;
+   23)
+    echo "$PROFILETEXT23"
+    FREQ=436000000
+    SAMPLERATE=2400000
+    SYMBOLRATE=125000
+    rtl_sdr -f $FREQ -s $SAMPLERATE -g 20 - \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 50 \
+    | ../TSscatterfix/tools/contest_live.py \
+      --work-dir ../TSscatterfix/temp/live \
+      --model ../TSscatterfix/temp/linrad_fragments_5way_conf/model_combined.json \
+      --udp-output 127.0.0.1:1235 \
+      --output-fps 10 \
+      --output-size 640x360 \
+      --startup-interval 0.7 \
+      --interval 1 \
+      --startup-analysis-packets 50 \
+      --analysis-packets 150 \
+      --min-packets 150
+    ;;
+   24)
+    echo "$PROFILETEXT24"
+    FREQ=436000000
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v2.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S --sr $SYMBOLRATE --cr 1/2 --inbuf 262144 --sampler rrc --rrc-steps 8 --fastlock --hq -v --gui  \
+    | ../TSscatterfix/tools/contest_live.py \
+      --work-dir ../TSscatterfix/temp/live \
+      --model ../TSscatterfix/temp/linrad_fragments_5way_conf/model_combined.json \
+      --udp-output 127.0.0.1:1235 \
+      --output-fps 1 \
+      --codec auto \
+      --output-size 640x360 \
+      --startup-interval 0.7 \
+      --interval 1 \
+      --startup-analysis-packets 20 \
+      --analysis-packets 150 \
+      --min-packets 20
+    ;;
+   25)
+    echo "$PROFILETEXT25"
+    FREQ=436000000
+    SAMPLERATE=1010526
+    SYMBOLRATE=125000
+    ./linrad_udp_to_stdout_v3.py \
+    | .././leansdr/src/apps/leandvb --s16 -f $SAMPLERATE --standard DVB-S2 --sr $SYMBOLRATE --gui --fastlock --sampler rrc --rrc-steps 8 --ldpc-bf 20 --modcods 0x10 --framesizes 1 \
+    | ../TSscatterfix/tools/contest_live.py \
+      --work-dir ../TSscatterfix/temp/live \
+      --model ../TSscatterfix/temp/linrad_fragments_5way_conf/model_combined.json \
+      --udp-output 127.0.0.1:1235 \
+      --output-fps 1 \
+      --output-size 640x360 \
+      --startup-interval 0.7 \
+      --interval 1 \
+      --startup-analysis-packets 20 \
+      --analysis-packets 150 \
+      --min-packets 20
+    ;;
+   26)
+    echo "$PROFILETEXT26"
+    FREQ=145446000
+    SAMPLERATE=2048000
+    SYMBOLRATE=125000
+    rtl_sdr -f $FREQ -s $SAMPLERATE -g 30 - \
+    | .././leansdr/src/apps/leandvb --u8 -f $SAMPLERATE --standard DVB-S --sr $SYMBOLRATE --cr 1/2 --inbuf 262144 --sampler rrc --rrc-steps 8 --fastlock --hq -v --gui \
+    | ../TSscatterfix/tools/contest_live.py \
+      --work-dir ../TSscatterfix/temp/live \
+      --model ../TSscatterfix/temp/linrad_fragments_5way_conf/model_combined.json \
+      --udp-output 127.0.0.1:1235 \
+      --output-fps 1 \
+      --codec auto \
+      --output-size 640x360 \
+      --startup-interval 0.7 \
+      --interval 1 \
+      --startup-analysis-packets 20 \
+      --analysis-packets 150 \
+      --min-packets 20
+    ;;
+   *)
     echo "default"
     ;;
 esac

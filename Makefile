@@ -29,7 +29,10 @@ SCATTER_DIR := third_party/tsscatterfix
 SCATTER_SOURCES := $(addprefix $(SCATTER_DIR)/src/,recovery.c media.c rank_model.c psi.c ts_packet.c)
 SCATTER_OBJECTS := $(patsubst $(SCATTER_DIR)/src/%.c,$(BUILD_DIR)/scatter/%.o,$(SCATTER_SOURCES))
 SCATTER_CFLAGS := -I$(SCATTER_DIR)/src $(shell pkg-config --cflags libavcodec libavformat libavutil libswscale)
-SCATTER_LIBS := $(shell pkg-config --libs libavcodec libavformat libavutil libswscale)
+TELETEXT_CFLAGS ?= $(shell pkg-config --cflags zvbi-0.2)
+TELETEXT_LIBS ?= $(shell pkg-config --libs zvbi-0.2)
+SCATTER_CFLAGS += $(TELETEXT_CFLAGS)
+SCATTER_LIBS := $(shell pkg-config --libs libavcodec libavformat libavutil libswscale) $(TELETEXT_LIBS)
 
 $(BUILD_DIR)/scatter/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SCATTER_DIR)/src/*.h)
 	mkdir -p $(@D)

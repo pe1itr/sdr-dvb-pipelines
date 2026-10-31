@@ -3,6 +3,20 @@
 #include <stdio.h>
 #include <string.h>
 
+static void write_frame(const TsInfoSnapshot *s, GBytes *frame, const char *suffix) {
+    const char *base=g_getenv("TELETEXT_PPM");
+    if (!base || !frame) return;
+    char *path=g_strconcat(base,suffix,NULL);
+    FILE *file=fopen(path,"wb"); g_assert_nonnull(file); g_free(path);
+    fprintf(file,"P6\n%d %d\n255\n",s->width,s->height);
+    gsize n; const guint8 *data=g_bytes_get_data(frame,&n);
+    for (gsize i=0;i<n;i+=4) {
+        guint32 pixel; memcpy(&pixel,data+i,4);
+        guint8 rgb[]={pixel>>16,pixel>>8,pixel}; fwrite(rgb,1,3,file);
+    }
+    fclose(file);
+}
+
 static void report(const TsInfoSnapshot *s) {
     struct json_object *out=json_object_new_object(), *events=json_object_new_array(), *services=json_object_new_array();
     json_object_object_add(out,"selected",json_object_new_int(s->selected));
@@ -44,16 +58,10 @@ static void report(const TsInfoSnapshot *s) {
             if (pixel==0xffff00) colors|=8;
         }
         json_object_object_add(out,"colors",json_object_new_int(colors));
-        const char *path=g_getenv("TELETEXT_PPM");
-        if (path) {
-            FILE *file=fopen(path,"wb"); g_assert_nonnull(file);
-            fprintf(file,"P6\n%d %d\n255\n",s->width,s->height);
-            for (gsize i=0;i<n;i+=4) {
-                guint32 pixel; memcpy(&pixel,data+i,4);
-                guint8 rgb[]={pixel>>16,pixel>>8,pixel}; fwrite(rgb,1,3,file);
-            }
-            fclose(file);
-        }
+        write_frame(s,s->page,"");
+        write_frame(s,s->page_flash_off,".off");
+        write_frame(s,s->page_reveal,".reveal");
+        write_frame(s,s->page_reveal_flash_off,".reveal-off");
     }
     puts(json_object_to_json_string_ext(out,JSON_C_TO_STRING_PLAIN)); json_object_put(out);
 }

@@ -20,6 +20,7 @@ typedef struct {
     TsInfoEvent events[2];
     gint64 eit_received, teletext_received; /* wall-clock microseconds */
     GBytes *page; /* immutable native Cairo RGB24 pixels */
+    GBytes *page_flash_off, *page_reveal, *page_reveal_flash_off;
     int width, height;
 } TsInfoSnapshot;
 void ts_info_snapshot_clear(TsInfoSnapshot *s);

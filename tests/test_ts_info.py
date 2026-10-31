@@ -3,6 +3,7 @@
 import collections
 import datetime
 import json
+import os
 import pathlib
 import struct
 import subprocess
@@ -73,7 +74,7 @@ class Stream:
         body = struct.pack('>HHBB', 42, 1, 1, 0x4e) + (b'' if empty else event)
         return self.table(0x12, section(0x4f if other else 0x4e, service, body, version, number, 1))
 
-    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200):
+    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200, rows=None, national=0, flags=0, unit_id=2, field=1):
         # Hamming(8,4), odd parity, and DVB transmission bit order.
         ham = [0x15, 0x02, 0x49, 0x5e, 0x64, 0x73, 0x38, 0x2f,
                0xd0, 0xc7, 0x8c, 0x9b, 0xa1, 0xb6, 0xfd, 0xea]
@@ -83,7 +84,7 @@ class Stream:
         def parity(value):
             return value | (0x80 if value.bit_count() % 2 == 0 else 0)
         def header(number):
-            fields = [number & 15, (number >> 4) & 15, 0, 8, 0, 0, 0, 0]
+            fields = [number & 15, (number >> 4) & 15, 0, 8, 0, 0, flags, national << 1]
             return address(0) + bytes(ham[x] for x in fields) + bytes(parity(x) for x in b'PE1ITR   TELETEXT 100   18:30:00 '.ljust(32)[:32])
         lines = [header(page)]
         for row in range(1, 25):
@@ -95,6 +96,8 @@ class Stream:
                 text = b'\x11' + bytes([0x7f]) * 12 + b'\x12' + bytes([0x7f]) * 12
             else:
                 text = b' '
+            if rows is not None:
+                text = rows.get(row, b" ")
             lines.append(address(row) + bytes(parity(x) for x in text.ljust(40)[:40]))
         lines.append(header(page+1))  # terminates previous page
         lines += [header(page+1)] * ((-len(lines)) % 3)
@@ -104,8 +107,8 @@ class Stream:
             for i, line in enumerate(lines[at:at+3]):
                 assert len(line) == 42, (len(line), line)
                 rev = bytes(int(f'{x:08b}'[::-1], 2) for x in line)
-                data += bytes([2, 44, 0x27+i, 0xe4]) + rev
-            pes = b'\0\0\1\xbd\0\xb2\x80\0\x24' + b'\xff' * 36 + data
+                data += bytes([unit_id, 44, 0xc0 | (field << 5) | (7+i), 0xe4]) + rev
+            pes = b'\0\0\1\xbd\0\xb2\x84\0\x24' + b'\xff' * 36 + data
             assert len(pes) == 184
             output += self.packet(pid, pes)
         return output
@@ -122,6 +125,115 @@ class InformationTests(unittest.TestCase):
                     path = pathlib.Path(tmp, f'{i}.ts'); path.write_bytes(action); args.append(str(path))
             result = subprocess.run(args, check=True, capture_output=True, text=True, timeout=15)
             return [json.loads(line) for line in result.stdout.splitlines()]
+
+    def frames(self, rows, **options):
+        t=Stream()
+        data=t.pat()+t.pmt()+t.teletext(rows=rows, **options)+t.teletext(rows=rows, **options)
+        with tempfile.TemporaryDirectory() as tmp:
+            source=pathlib.Path(tmp, 'page.ts'); source.write_bytes(data)
+            target=pathlib.Path(tmp, 'page.ppm')
+            result=subprocess.run([PROBE, source], env=dict(os.environ, TELETEXT_PPM=str(target)),
+                                  check=True, capture_output=True, text=True)
+            info=json.loads(result.stdout)
+            self.assertEqual((info['width'], info['height']), (480, 250))
+            frames=[]
+            for suffix in ('', '.off', '.reveal', '.reveal-off'):
+                header, size, maximum, pixels=pathlib.Path(str(target)+suffix).read_bytes().split(b'\n',3)
+                self.assertEqual((header,size,maximum), (b'P6',b'480 250',b'255'))
+                self.assertEqual(len(pixels),480*250*3)
+                frames.append(pixels)
+            return frames
+
+    @staticmethod
+    def cell(frame, row, col, width=1, height=1):
+        return b''.join(frame[((row*10+y)*480+col*12)*3:((row*10+y)*480+(col+width)*12)*3]
+                        for y in range(height*10))
+
+    def test_conceal_and_flash_are_independent(self):
+        on, off, reveal, reveal_off=self.frames({1:b'\x01\x08X\x09Y\x18Z', 2:b'Z'})
+        black=bytes(12*10*3)
+        self.assertNotEqual(self.cell(on,1,2),black)
+        self.assertEqual(self.cell(off,1,2),black)
+        self.assertEqual(self.cell(on,1,4),self.cell(off,1,4))
+        self.assertNotEqual(self.cell(off,1,4),black)
+        self.assertEqual(self.cell(on,1,6),black)
+        self.assertNotEqual(self.cell(reveal,1,6),black)
+        self.assertEqual(self.cell(reveal,1,6),self.cell(reveal_off,1,6))
+        self.assertEqual(self.cell(off,1,2),self.cell(reveal_off,1,2))
+        self.assertNotEqual(self.cell(on,2,0),black)  # attributes reset on each row
+
+    def test_mosaic_hold_separation_and_background_timing(self):
+        on, *_=self.frames({1:b'\x11\x7f\x1e\x12\x1f ', 2:b'\x11\x7f\x1a\x7f',
+                            3:b'\x01\x1d \x1c '})
+        red=bytes((255,0,0))*120; green=bytes((0,255,0))*120; black=bytes(360)
+        for col in (1,2,3): self.assertEqual(self.cell(on,1,col),red)
+        self.assertEqual(self.cell(on,1,4),green)  # release is set-after
+        self.assertEqual(self.cell(on,1,5),black)
+        self.assertEqual(self.cell(on,2,1),red)
+        separated=self.cell(on,2,3)
+        self.assertNotEqual(separated,red)
+        self.assertIn(bytes((255,0,0)),separated)
+        self.assertEqual(self.cell(on,3,1),red)  # new background is set-at
+        self.assertEqual(self.cell(on,3,3),black)
+
+    def test_double_dimensions_and_broadcast_bottom_row(self):
+        on, *_=self.frames({1:b' A', 3:b'\x0dA', 6:b'\x0eA', 9:b'\x0fA', 24:b'BOTTOM ROW'})
+        normal=self.cell(on,1,1)
+        pixels=[normal[y*36:(y+1)*36] for y in range(10)]
+        self.assertEqual(self.cell(on,3,1,height=2),b''.join(row*2 for row in pixels))
+        wide=[b''.join(row[x:x+3]*2 for x in range(0,36,3)) for row in pixels]
+        self.assertEqual(self.cell(on,6,1,width=2),b''.join(wide))
+        self.assertEqual(self.cell(on,9,1,width=2,height=2),b''.join(row*2 for row in wide))
+        self.assertNotEqual(self.cell(on,24,0,width=10),bytes(3600))
+
+    def test_national_charset_and_header_suppression(self):
+        english, *_=self.frames({1:b'#[]'}, national=0)
+        german, *_=self.frames({1:b'#[]'}, national=4)
+        self.assertNotEqual(self.cell(english,1,0,width=3), self.cell(german,1,0,width=3))
+        suppressed, *_=self.frames({1:b'TEXT'}, flags=1)  # C7 suppress header
+        self.assertEqual(self.cell(suppressed,0,0,width=40),bytes(14400))
+        self.assertNotEqual(self.cell(suppressed,1,0,width=4),bytes(1440))
+        inhibited, *_=self.frames({1:b'TEXT'},flags=8)  # C10 inhibit display
+        self.assertEqual(inhibited,bytes(480*250*3))
+
+    def test_dvb_subtitle_units_and_second_field(self):
+        normal=self.frames({1:b'TEXT'})
+        subtitle=self.frames({1:b'TEXT'},unit_id=3,field=0)
+        self.assertEqual(normal,subtitle)
+
+    def test_dvb_multits_pes_stuffing_duplicates_and_loss(self):
+        t=Stream()
+        original=t.teletext()+t.teletext()
+        packets=[original[i:i+188] for i in range(0,len(original),188)]
+        multi=[]
+        for i in range(0,len(packets),2):
+            # Six text units and one stuffing unit: a PES spanning two TS packets.
+            header=bytearray(packets[i][4:49]); header[4:6]=struct.pack('>H',362)
+            payload=header+b'\x1f'+packets[i][50:]+packets[i+1][50:]+b'\xff\x2c'+b'\xff'*44
+            self.assertEqual(len(payload),368)
+            first=t.packet(0x200,payload[:184]); second=t.packet(0x200,payload[184:],False)
+            multi.append(first+first+second)  # legal retransmission of an identical TS packet
+        result,=self.run_streams(t.pat()+t.pmt()+b''.join(multi))
+        self.assertEqual((result['width'],result['height'],result['colors']), (480,250,15))
+        # An incomplete PES must not leak into the next one after a continuity gap.
+        t=Stream(); initial=t.pat()+t.pmt()
+        header=bytearray(packets[0][4:49]); header[4:6]=struct.pack('>H',362)
+        partial=t.packet(0x200,(header+b'\x10'+packets[0][50:])[:184])
+        t.cc[0x200]=(t.cc[0x200]+1)%16
+        before,after=self.run_streams(initial+partial,t.teletext()+t.teletext())
+        self.assertFalse(before['teletext_received'])
+        self.assertEqual(after['width'],480)
+
+    def test_invalid_dvb_payload_does_not_publish_a_page(self):
+        # Mutate every PES so none of its headers/rows can contribute a page.
+        for offset, value in ((4+45,0x20),(4+47,43),(4+49,0),(4+8,35)):
+            with self.subTest(offset=offset):
+                t=Stream(); page=bytearray(t.teletext()+t.teletext())
+                for start in range(0,len(page),188): page[start+offset]=value
+                initial, recovered=self.run_streams(t.pat()+t.pmt()+page,
+                                                     t.teletext()+t.teletext())
+                self.assertFalse(initial['teletext_received'])
+                self.assertEqual(recovered['width'],480)
 
     def test_background_relay_toggles_reset_and_overflow(self):
         t=Stream()
@@ -215,7 +327,7 @@ class InformationTests(unittest.TestCase):
         result=self.run_streams(t.pat()+t.pmt()+t.teletext(0x101),
             t.teletext()+t.teletext(), t.teletext(message='UPDATED PAGE')+t.teletext(message='UPDATED PAGE'),
             '--gap', t.pmt(False)+t.packet(0x1fff, b''))
-        self.assertTrue(result[0]['decoder'], 'Test requires FFmpeg with libzvbi')
+        self.assertTrue(result[0]['decoder'], 'Test requires libzvbi')
         self.assertTrue(result[0]['teletext'])
         self.assertFalse(result[0]['teletext_received'])
         self.assertGreater(result[1]['width'], 400)

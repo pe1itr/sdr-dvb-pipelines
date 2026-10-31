@@ -13,7 +13,7 @@ static void assert_no_tabs(GtkWidget *widget) {
 
 static gboolean constellation_green_at(DecoderView *v, double re, double im) {
     int w=gtk_widget_get_allocated_width(v->area), h=gtk_widget_get_allocated_height(v->area);
-    double size=MIN(w,h), scale=size*.43/1.6;
+    double size=MIN(w,h), scale=size/(4*.70710678);
     int x=floor((w-size)/2+size/2+re*scale), y=floor((h-size)/2+size/2-im*scale);
     cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_ARGB32,w,h);
     cairo_t *cr=cairo_create(surface);
@@ -81,7 +81,7 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"—");
     decoder_view_stop(v); close(sender);
     decoder_view_tick(v,FALSE,"DVB-S2");
-    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"weergave volgt"));
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"display coming soon"));
     g_assert_cmpint(abs(gtk_widget_get_allocated_width(v->area)-gtk_widget_get_allocated_height(v->area)),<=,1);
 }
 
@@ -104,7 +104,7 @@ static void exercise_file_selection(App *a) {
     g_assert_cmpint(a->sr, ==, 40000);
     g_assert_cmpfloat(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->rate_box)), ==, 250000);
     g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->file_path)), ==, path);
-    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Start bestand");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Play file");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)), ==, "144.600000 MHz");
     g_assert_false(gtk_widget_get_sensitive(a->frequency_box));
     g_assert_false(gtk_widget_get_sensitive(a->gain_display));
@@ -136,12 +136,14 @@ static gboolean close_about(gpointer data) {
         if (GTK_IS_DIALOG(p->data) && gtk_widget_get_visible(p->data) &&
             !g_strcmp0(gtk_window_get_title(GTK_WINDOW(p->data)),"About · Linrad DVB")) {
             *seen=TRUE;
+            GtkAllocation allocation;
+            gtk_widget_get_allocation(p->data,&allocation);
+            int content_height;
+            gtk_widget_get_preferred_height_for_width(p->data,allocation.width,NULL,&content_height);
+            /* Check the actual window, without shrinking it for the screenshot. */
+            g_assert_cmpint(allocation.height,<=,content_height+24);
             const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
             if (screenshot) {
-                GtkRequisition minimum,natural;
-                gtk_widget_get_preferred_size(p->data,&minimum,&natural);
-                GtkAllocation allocation={0,0,MAX(580,minimum.width),natural.height};
-                gtk_widget_size_allocate(p->data,&allocation);
                 cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,allocation.width,allocation.height);
                 cairo_t *cr=cairo_create(surface);
                 gtk_widget_draw(p->data,cr);
@@ -300,19 +302,22 @@ static void exercise_information(App *a) {
     g_assert_true(gtk_widget_get_toplevel(v->page)==v->dialogs[1]);
     gtk_dialog_response(GTK_DIALOG(v->dialogs[0]),GTK_RESPONSE_CLOSE);
     g_assert_true(gtk_widget_get_visible(v->dialogs[1]));
-    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->page_number)),==,"P100");
-    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->station)),==,v->snapshot.services[0].name);
-    g_assert_cmpuint(strlen(gtk_label_get_text(GTK_LABEL(v->clock))),==,8);
-    /* Exercise the actual Cairo page drawing and save a visual check. */
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal)));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),TRUE);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal)));
+    /* Only the broadcast raster belongs inside the 4:3 screen. */
+    GtkWidget *aspect=gtk_widget_get_parent(v->page);
+    g_assert_true(GTK_IS_ASPECT_FRAME(aspect));
+    g_assert_true(gtk_bin_get_child(GTK_BIN(aspect))==v->page);
+    g_assert_false(gtk_widget_is_ancestor(v->status[1],aspect));
+    g_assert_false(gtk_widget_is_ancestor(v->reveal,aspect));
     GtkRequisition minimum,natural; gtk_widget_get_preferred_size(v->dialogs[1],&minimum,&natural);
     GtkAllocation allocation={0,0,720,640}; gtk_widget_size_allocate(v->dialogs[1],&allocation);
-    gint page_x,page_y,number_x,number_y,status_x,status_y;
+    gint page_x,page_y,status_x,status_y;
     g_assert_true(gtk_widget_translate_coordinates(v->page,v->dialogs[1],0,0,&page_x,&page_y));
-    g_assert_true(gtk_widget_translate_coordinates(v->page_number,v->dialogs[1],0,0,&number_x,&number_y));
     g_assert_true(gtk_widget_translate_coordinates(v->status[1],v->dialogs[1],0,0,&status_x,&status_y));
-    g_assert_cmpint(number_y,<,status_y);
-    g_assert_cmpint(status_y,<,page_y);
-    g_assert_cmpint(number_x,>,page_x+gtk_widget_get_allocated_width(v->page)/2);
+    g_assert_cmpint(status_y,>=,page_y+gtk_widget_get_allocated_height(v->page));
+    g_assert_cmpint(abs(3*gtk_widget_get_allocated_width(v->page)-4*gtk_widget_get_allocated_height(v->page)),<=,4);
     const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
     if (screenshot) {
         cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,720,640);
@@ -345,7 +350,7 @@ static void exercise_information(App *a) {
         g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(v->services[i])),==,-1);
         gtk_dialog_response(GTK_DIALOG(v->dialogs[i]),GTK_RESPONSE_CLOSE);
     }
-    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->station)),==,"TELETEXT");
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal)));
 }
 
 static gboolean exercise(gpointer data) {
@@ -632,7 +637,7 @@ static gboolean exercise(gpointer data) {
         event.keyval = GDK_KEY_W;
         g_signal_emit_by_name(a->window, "key-press-event", &event, &handled);
         g_assert_true(handled);
-        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status)), "Instellingen opgeslagen"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status)), "Settings saved"));
         App restored = {.tune_fd = -1};
         restored.config = g_key_file_new();
         g_assert_true(g_key_file_load_from_file(restored.config, a->config_path, G_KEY_FILE_NONE, NULL));
@@ -669,7 +674,7 @@ static gboolean exercise(gpointer data) {
         char *original_path = a->config_path;
         a->config_path = g_build_filename(original_path, "cannot-write.ini", NULL);
         save_settings(a);
-        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status)), "Opslaan mislukt"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status)), "Save failed"));
         g_free(a->config_path); a->config_path = original_path;
 
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 0);
@@ -721,7 +726,7 @@ static gboolean exercise(gpointer data) {
         g_assert_true(a->scatter_backend == backend);
         g_assert_true(gtk_widget_is_sensitive(a->filter_box));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stop SDR · actief");
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stop SDR · running");
         g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->power_button), "receiver-running"));
         ++phase;
     } else if (phase == 1) {
@@ -729,7 +734,7 @@ static gboolean exercise(gpointer data) {
         exercise_screenshot(a, GDK_KEY_P, "-DVB-T-BW250000-437125kHz.png");
         gtk_button_clicked(GTK_BUTTON(a->power_button));
         g_assert_false(gtk_widget_get_sensitive(a->power_button));
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "SDR stopt…");
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stopping SDR…");
         ++phase;
     } else if (phase == 2 && !a->running) {
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Start SDR");

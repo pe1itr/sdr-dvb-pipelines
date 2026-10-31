@@ -29,7 +29,7 @@ static gboolean number(json_object *obj, const char *key, double *out, GError **
     if (!value) return TRUE;
     if ((!json_object_is_type(value,json_type_int) && !json_object_is_type(value,json_type_double)) ||
         !isfinite(json_object_get_double(value))) {
-        g_set_error(error,file_error(),1,"JSON-veld %s moet een eindig getal zijn",key); return FALSE;
+        g_set_error(error,file_error(),1,"JSON field %s must be a finite number",key); return FALSE;
     }
     *out=json_object_get_double(value); return TRUE;
 }
@@ -38,7 +38,7 @@ static gboolean integer(json_object *obj, const char *key, int low, int high, in
     double value=0;
     if (!number(obj,key,&value,error)) return FALSE;
     if (value<low || value>high || value!=floor(value)) {
-        g_set_error(error,file_error(),1,"JSON-veld %s ligt buiten %d..%d",key,low,high); return FALSE;
+        g_set_error(error,file_error(),1,"JSON field %s is outside %d..%d",key,low,high); return FALSE;
     }
     *out=(int)value; return TRUE;
 }
@@ -46,7 +46,7 @@ static gboolean text_field(json_object *obj, const char *key, char *out, size_t 
     if (!member(obj,key)) return TRUE;
     const char *value=string(obj,key);
     if (!value || !*value || strlen(value)>=size) {
-        g_set_error(error,file_error(),1,"Ongeldig JSON-veld %s",key); return FALSE;
+        g_set_error(error,file_error(),1,"Invalid JSON field %s",key); return FALSE;
     }
     g_strlcpy(out,value,size); return TRUE;
 }
@@ -63,7 +63,7 @@ static char *sidecar(const char *path) {
 static json_object *read_json(const char *path, GError **error) {
     struct stat st;
     if (stat(path,&st) || !S_ISREG(st.st_mode) || st.st_size>1024*1024) {
-        invalid(error,"JSON-bestand ontbreekt, is geen gewoon bestand of is groter dan 1 MiB"); return NULL;
+        invalid(error,"JSON file is missing, is not a regular file or exceeds 1 MiB"); return NULL;
     }
     char *data=NULL; gsize length;
     if (!g_file_get_contents(path,&data,&length,error)) return NULL;
@@ -75,7 +75,7 @@ static json_object *read_json(const char *path, GError **error) {
     if (json_tokener_get_error(tok)!=json_tokener_success || end!=length ||
         !obj || !json_object_is_type(obj,json_type_object)) {
         if (obj) json_object_put(obj);
-        obj=NULL; g_set_error(error,file_error(),1,"Ongeldig JSON-object: %s",path);
+        obj=NULL; g_set_error(error,file_error(),1,"Invalid JSON object: %s",path);
     }
     json_tokener_free(tok); g_free(data); return obj;
 }
@@ -118,7 +118,7 @@ static gboolean dvb_metadata(json_object *obj, IQFileInfo *info, GError **error)
         if (!integer(config,"fec",0,10,&fec,error)) return FALSE;
         const char *label=fec==3 ? "1/2" : fec==4 ? "3/5" : fec==5 ? "2/3" :
             fec==6 ? "3/4" : fec==8 ? "5/6" : fec==10 ? "7/8" : NULL;
-        if (!label) return invalid(error,"Onbekende FEC-code in zendermetadata");
+        if (!label) return invalid(error,"Unknown FEC code in transmitter metadata");
         g_strlcpy(info->fec,label,sizeof(info->fec));
     }
     if (!strcmp(info->standard,"DVB-T")) {
@@ -142,7 +142,7 @@ gboolean iq_file_read_info(const char *path, IQFileInfo *info, GError **error) {
     memset(info,0,sizeof(*info)); info->path=g_canonicalize_filename(path,NULL);
     struct stat st;
     if (stat(info->path,&st) || !S_ISREG(st.st_mode) || !st.st_size) {
-        invalid(error,"Kies een bestaand, niet-leeg IQ-bestand"); goto fail;
+        invalid(error,"Select an existing, non-empty IQ file"); goto fail;
     }
     from_filename(info->path,info);
     info->metadata_path=sidecar(info->path);
@@ -174,19 +174,19 @@ gboolean iq_file_read_info(const char *path, IQFileInfo *info, GError **error) {
         if (format && (!strcmp(format,"s16") || !strcmp(format,"cs16_le"))) normalized="s16";
         if (format && (!strcmp(format,"u8") || !strcmp(format,"cu8"))) normalized="u8";
         if (format && (!strcmp(format,"cf32") || !strcmp(format,"fc32") || !strcmp(format,"cf32_le"))) normalized="cf32";
-        if (!normalized) ok=invalid(error,"IQ-formaat niet ondersteund (s16, u8 of cf32 vereist)");
+        if (!normalized) ok=invalid(error,"Unsupported IQ format (s16, u8 or cf32 required)");
         else g_strlcpy(info->format,normalized,sizeof(info->format));
     }
     const char *order=string(obj,"byte_order"), *layout=string(obj,"layout");
     if (ok && ((member(obj,"byte_order") && (!order || strcmp(order,"little"))) ||
                (member(obj,"layout") && (!layout || strcmp(layout,"IQ")))))
-        ok=invalid(error,"Alleen little-endian IQ-volgorde wordt ondersteund");
+        ok=invalid(error,"Only little-endian IQ ordering is supported");
     if (ok && member(params,"frequency_mhz")) {
         ok=number(params,"frequency_mhz",&info->frequency,error);
         info->frequency*=1e6; info->has_frequency=TRUE;
     }
     if (ok && member(obj,"center_frequency_hz")) { ok=number(obj,"center_frequency_hz",&info->frequency,error); info->has_frequency=TRUE; }
-    if (ok && (info->frequency<0 || info->frequency>1e12)) ok=invalid(error,"Ongeldige ontvangstfrequentie in metadata");
+    if (ok && (info->frequency<0 || info->frequency>1e12)) ok=invalid(error,"Invalid receive frequency in metadata");
     json_object_put(obj);
     if (ok) return TRUE;
 fail:
@@ -194,13 +194,13 @@ fail:
 }
 gboolean iq_file_validate(const char *path, const char *format, int header_bytes, guint64 *samples, GError **error) {
     int stride=!strcmp(format,"s16") ? 4 : !strcmp(format,"u8") ? 2 : !strcmp(format,"cf32") ? 8 : 0;
-    if (!stride || header_bytes<0) return invalid(error,"Ongeldig IQ-formaat of headerlengte");
+    if (!stride || header_bytes<0) return invalid(error,"Invalid IQ format or header length");
     struct stat st;
-    if (stat(path,&st) || !S_ISREG(st.st_mode)) return invalid(error,"IQ-bestand niet gevonden of geen gewoon bestand");
+    if (stat(path,&st) || !S_ISREG(st.st_mode)) return invalid(error,"IQ file not found or not a regular file");
     if (st.st_size<=header_bytes || (st.st_size-header_bytes)%stride)
-        return invalid(error,"IQ-bestand is leeg of bevat een onvolledig I/Q-sample");
+        return invalid(error,"IQ file is empty or contains an incomplete I/Q sample");
     FILE *file=fopen(path,"rb");
-    if (!file) { g_set_error(error,file_error(),errno,"IQ-bestand niet leesbaar: %s",g_strerror(errno)); return FALSE; }
+    if (!file) { g_set_error(error,file_error(),errno,"Cannot read IQ file: %s",g_strerror(errno)); return FALSE; }
     fclose(file);
     *samples=(st.st_size-header_bytes)/stride; return TRUE;
 }

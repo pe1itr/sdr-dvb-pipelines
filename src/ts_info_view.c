@@ -42,13 +42,19 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     double width=gtk_widget_get_allocated_width(area),height=gtk_widget_get_allocated_height(area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) return FALSE;
-    /* The containing screen keeps the TV's 4:3 proportions, including the
-     * header and information bar. Preserve every broadcast row and use
-     * nearest-neighbour sampling for the character grid. */
+    GBytes *frame=s->page;
+    gboolean reveal=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal));
+    if (reveal) frame=v->flash_on ? s->page_reveal : s->page_reveal_flash_off;
+    else if (!v->flash_on) frame=s->page_flash_off;
+    if (!frame) frame=s->page;
+    /* Keep a TV-shaped page even if a layout allocates a different aspect.
+     * UI controls never consume rows or alter character proportions. */
+    double w=MIN(width,height*4.0/3.0), h=w*3.0/4.0;
     cairo_surface_t *surface=cairo_image_surface_create_for_data(
-        (unsigned char *)g_bytes_get_data(s->page,NULL),CAIRO_FORMAT_RGB24,s->width,s->height,s->width*4);
+        (unsigned char *)g_bytes_get_data(frame,NULL),CAIRO_FORMAT_RGB24,s->width,s->height,s->width*4);
     cairo_save(cr);
-    cairo_scale(cr,width/s->width,height/s->height); cairo_set_source_surface(cr,surface,0,0);
+    cairo_translate(cr,(width-w)/2,(height-h)/2);
+    cairo_scale(cr,w/s->width,h/s->height); cairo_set_source_surface(cr,surface,0,0);
     cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_NEAREST);
     cairo_paint(cr); cairo_restore(cr); cairo_surface_destroy(surface);
     return FALSE;
@@ -69,13 +75,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
             gtk_widget_set_sensitive(v->services[window],s->count>1);
         }
         v->updating=FALSE;
-        const char *station="TELETEXT";
-        for (unsigned i=0;i<s->count;i++)
-            if (s->services[i].id==s->selected && *s->services[i].name) station=s->services[i].name;
-        gtk_label_set_text(GTK_LABEL(v->station),station);
     }
-    char *clock=local_time(g_get_real_time()/G_USEC_PER_SEC,"%H:%M:%S");
-    gtk_label_set_text(GTK_LABEL(v->clock),clock); g_free(clock);
     if (force || memcmp(s->events,v->snapshot.events,sizeof(s->events))) {
         char *text=event_text(s);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->eit)),text,-1); g_free(text);
@@ -84,7 +84,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
     for (unsigned i=0;i<2;i++) {
         char *status;
         if (i==1 && !s->teletext_decoder && v->backend)
-            status=g_strdup("Teletext decoder unavailable (FFmpeg needs libzvbi)");
+            status=g_strdup("Teletext decoder unavailable (libzvbi initialization failed)");
         else if (i==1 && !ready[i])
             status=g_strdup(s->teletext_announced ? "Waiting for Teletext page 100" :
                 s->pmt_seen ? "No Teletext announced for this service" : "Waiting for service information");
@@ -99,6 +99,8 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         atk_object_set_description(gtk_widget_get_accessible(v->buttons[i]),ready[i] ? "Information available" : "Waiting for information");
     }
     gboolean image_changed=force || s->page!=v->snapshot.page;
+    if (force || s->selected!=v->snapshot.selected || !s->page)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),FALSE);
     ts_info_snapshot_clear(&v->snapshot); v->snapshot=*s; memset(s,0,sizeof(*s));
     if (image_changed) gtk_widget_queue_draw(v->page);
 }
@@ -120,6 +122,17 @@ static void open_information(GtkButton *button, gpointer data) {
     GtkWidget *dialog=v->dialogs[GTK_WIDGET(button)==v->buttons[1] ? 1 : 0];
     gtk_widget_show_all(dialog);
     gtk_window_present(GTK_WINDOW(dialog));
+}
+/* Conventional slow Teletext flash: one second, 3/4 on and 1/4 off.
+ * Use monotonic time so system-clock adjustments cannot stop the animation. */
+static gboolean flash_tick(gpointer data) {
+    TsInfoView *v=data;
+    gboolean on=(g_get_monotonic_time()%G_USEC_PER_SEC)<750000;
+    if (on!=v->flash_on) {
+        v->flash_on=on;
+        if (v->snapshot.page && gtk_widget_get_visible(v->dialogs[1])) gtk_widget_queue_draw(v->page);
+    }
+    return G_SOURCE_CONTINUE;
 }
 void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
     for (unsigned i=0;i<2;i++) {
@@ -158,32 +171,24 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
             GtkWidget *aspect=gtk_aspect_frame_new(NULL,.5,.5,4.0/3.0,FALSE);
             gtk_frame_set_shadow_type(GTK_FRAME(aspect),GTK_SHADOW_NONE);
             gtk_box_pack_start(GTK_BOX(box),aspect,TRUE,TRUE,0);
-            GtkWidget *screen=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
-            gtk_widget_set_name(screen,"teletext-screen");
-            gtk_container_add(GTK_CONTAINER(aspect),screen);
-            GtkWidget *header=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,16);
-            gtk_widget_set_name(header,"teletext-header");
-            v->station=gtk_label_new("TELETEXT");
-            gtk_label_set_xalign(GTK_LABEL(v->station),0);
-            gtk_label_set_ellipsize(GTK_LABEL(v->station),PANGO_ELLIPSIZE_END);
-            gtk_box_pack_start(GTK_BOX(header),v->station,TRUE,TRUE,0);
-            v->clock=gtk_label_new("");
-            gtk_widget_set_tooltip_text(v->clock,"Local time");
-            gtk_box_pack_start(GTK_BOX(header),v->clock,FALSE,FALSE,0);
-            v->page_number=gtk_label_new("P100");
-            gtk_widget_set_name(v->page_number,"teletext-page-number");
-            atk_object_set_name(gtk_widget_get_accessible(v->page_number),"Page 100");
-            gtk_box_pack_end(GTK_BOX(header),v->page_number,FALSE,FALSE,0);
-            gtk_box_pack_start(GTK_BOX(screen),header,FALSE,FALSE,0);
-            gtk_widget_set_name(v->status[i],"teletext-status");
+            v->page=gtk_drawing_area_new();
+            gtk_widget_set_name(v->page,"teletext-screen");
+            gtk_widget_set_size_request(v->page,320,240);
+            gtk_container_add(GTK_CONTAINER(aspect),v->page);
+            GtkWidget *controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
+            gtk_box_pack_start(GTK_BOX(box),controls,FALSE,FALSE,0);
             gtk_label_set_ellipsize(GTK_LABEL(v->status[i]),PANGO_ELLIPSIZE_END);
-            gtk_box_pack_start(GTK_BOX(screen),v->status[i],FALSE,FALSE,0);
-            v->page=gtk_drawing_area_new(); gtk_widget_set_size_request(v->page,320,240);
-            gtk_box_pack_start(GTK_BOX(screen),v->page,TRUE,TRUE,0);
+            gtk_box_pack_start(GTK_BOX(controls),v->status[i],TRUE,TRUE,0);
+            v->reveal=gtk_check_button_new_with_label("Reveal");
+            gtk_widget_set_tooltip_text(v->reveal,"Show concealed Teletext text");
+            gtk_box_pack_end(GTK_BOX(controls),v->reveal,FALSE,FALSE,0);
+            g_signal_connect_swapped(v->reveal,"toggled",G_CALLBACK(gtk_widget_queue_draw),v->page);
             g_signal_connect(v->page,"draw",G_CALLBACK(draw_page),v);
             atk_object_set_name(gtk_widget_get_accessible(v->page),"Teletext page 100");
         }
     }
+    v->flash_on=TRUE;
+    v->flash_timer=g_timeout_add(50,flash_tick,v);
     ts_info_view_reset(v);
 }
 void ts_info_view_tick(TsInfoView *v, TsInfoBackend *backend) {
@@ -199,6 +204,7 @@ void ts_info_view_reset(TsInfoView *v) {
     TsInfoSnapshot s={0}; update(v,&s,TRUE);
 }
 void ts_info_view_destroy(TsInfoView *v) {
+    if (v->flash_timer) { g_source_remove(v->flash_timer); v->flash_timer=0; }
     ts_info_snapshot_clear(&v->snapshot); v->backend=NULL;
     for (unsigned i=0;i<2;i++) {
         if (v->dialogs[i]) gtk_widget_destroy(v->dialogs[i]);

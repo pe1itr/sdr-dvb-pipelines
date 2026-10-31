@@ -4,7 +4,9 @@
 #include "ts_info.h"
 typedef struct {
     GtkWidget *buttons[2], *dialogs[2], *services[2], *eit, *page, *status[2];
-    GtkWidget *station, *clock, *page_number;
+    GtkWidget *reveal;
+    guint flash_timer;
+    gboolean flash_on;
     TsInfoBackend *backend; /* borrowed; detached before pipeline destruction */
     TsInfoSnapshot snapshot;
     gboolean updating;

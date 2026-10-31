@@ -19,8 +19,8 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
     cairo_move_to(cr,left+size/2,top); cairo_line_to(cr,left+size/2,top+size);
     cairo_move_to(cr,left,top+size/2); cairo_line_to(cr,left+size,top+size/2);
     cairo_stroke(cr);
-    /* Match the original receiver's scale and ideal QPSK reference crosses. */
-    double scale=size*.43/1.6;
+    /* Place ideal QPSK symbols (+/-1/sqrt(2)) at the quadrant centres. */
+    double scale=size/(4*.70710678);
     cairo_set_source_rgb(cr,.65,.65,.65);
     for (int re=-1;re<=1;re+=2) for (int im=-1;im<=1;im+=2) {
         double x=floor(left+size/2+re*.70710678*scale)+.5;
@@ -54,7 +54,7 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
     }
     cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8); cairo_set_font_size(cr,12);
-    cairo_move_to(cr,left+6,top+16); cairo_show_text(cr,fresh ? "Q" : "Geen actuele constellatie");
+    cairo_move_to(cr,left+6,top+16); cairo_show_text(cr,fresh ? "Q" : "No current constellation");
     cairo_move_to(cr,left+size-14,top+size/2-6); cairo_show_text(cr,"I");
     return FALSE;
 }
@@ -111,7 +111,7 @@ static GtkWidget *name_field(GtkWidget *grid, int row, const char *name) {
 GtkWidget *decoder_view_create(DecoderView *v) {
     v->fd=-1;
     GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
-    GtkWidget *square=gtk_aspect_frame_new("Constellatie",0,0,1,FALSE);
+    GtkWidget *square=gtk_aspect_frame_new("Constellation",0,0,1,FALSE);
     gtk_widget_set_size_request(square,228,248);
     gtk_widget_set_valign(square,GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(row),square,FALSE,FALSE,0);
@@ -119,7 +119,7 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     gtk_widget_set_size_request(v->area,220,220);
     gtk_container_add(GTK_CONTAINER(square),v->area);
     g_signal_connect(v->area,"draw",G_CALLBACK(draw_constellation),v);
-    GtkWidget *frame=gtk_frame_new("Service-info"), *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
+    GtkWidget *frame=gtk_frame_new("Service info"), *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
     v->service_frame=frame;
     gtk_container_set_border_width(GTK_CONTAINER(box),8);
     gtk_container_add(GTK_CONTAINER(frame),box);
@@ -144,18 +144,18 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     v->cfo=field(grid,0,1,"CFO","Hz",TRUE);
     v->buffer=field(grid,3,1,"Buffer","%",TRUE);
     v->rms=field(grid,0,2,"IQ RMS","dBFS",TRUE);
-    v->peak=field(grid,3,2,"Piek","dBFS",TRUE);
-    gtk_widget_set_tooltip_text(v->buffer,"Vulling van de OFDM → FEC-wachtrij; de taak die verwerkt wordt telt niet mee.");
+    v->peak=field(grid,3,2,"Peak","dBFS",TRUE);
+    gtk_widget_set_tooltip_text(v->buffer,"OFDM → FEC queue fill level; excludes the task currently being processed.");
     v->service=name_field(grid,3,"Service");
     v->provider=name_field(grid,4,"Provider");
     v->modulation=name_field(grid,5,"Mode");
     v->fec=field(grid,0,6,"FEC","",FALSE);
     v->guard=field(grid,3,6,"GI","",FALSE);
     v->packets=field(grid,0,7,"TS","",TRUE);
-    v->written=field(grid,3,7,"Uit","",TRUE);
-    v->rs_ok=field(grid,0,8,"RS goed","",TRUE);
-    v->rs_errors=field(grid,3,8,"RS fout","",TRUE);
-    v->cc_errors=field(grid,0,9,"CC-fouten","",TRUE);
+    v->written=field(grid,3,7,"Output","",TRUE);
+    v->rs_ok=field(grid,0,8,"RS OK","",TRUE);
+    v->rs_errors=field(grid,3,8,"RS errors","",TRUE);
+    v->cc_errors=field(grid,0,9,"CC errors","",TRUE);
     GtkWidget *empty=gtk_label_new("");
     gtk_style_context_add_class(gtk_widget_get_style_context(empty),"decoder-caption");
     gtk_grid_attach(GTK_GRID(grid),empty,3,9,3,1);
@@ -235,8 +235,8 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     DecoderStatus *s=&v->status;
     gboolean supported=!strcmp(mode,"DVB-T");
     char text[512];
-    g_snprintf(text,sizeof(text),"%s · %s",mode,!supported ? "ingebouwde weergave volgt" :
-        !active ? "gestopt" : fresh ? "live" : "wachten op decoderstatus");
+    g_snprintf(text,sizeof(text),"%s · %s",mode,!supported ? "built-in display coming soon" :
+        !active ? "stopped" : fresh ? "live" : "waiting for decoder status");
     gtk_label_set_text(GTK_LABEL(v->state),text);
     const char *names[]={"OFDM", "FEC", "TS", "Service"};
     for (int i=0;i<4;++i) {

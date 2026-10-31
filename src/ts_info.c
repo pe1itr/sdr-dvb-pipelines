@@ -1,5 +1,5 @@
 #include "ts_info.h"
-#include <libavcodec/avcodec.h>
+#include <libzvbi.h>
 #include <string.h>
 
 /* Only five PIDs are assembled, and all allocations/queues have fixed bounds. */
@@ -19,7 +19,8 @@ struct TsInfoParser {
     TsInfoService pending[TS_INFO_SERVICES];
     unsigned pending_count;
     guint8 pat_sections[256];
-    AVCodecContext *teletext;
+    vbi_decoder *teletext;
+    double teletext_time;
 };
 
 static guint16 u16(const guint8 *p) { return ((guint16)p[0]<<8)|p[1]; }
@@ -31,22 +32,34 @@ static guint32 crc32(const guint8 *data, gsize size) {
     }
     return crc;
 }
-void ts_info_snapshot_clear(TsInfoSnapshot *s) {
+static void page_clear(TsInfoSnapshot *s) {
     g_clear_pointer(&s->page,g_bytes_unref);
+    g_clear_pointer(&s->page_flash_off,g_bytes_unref);
+    g_clear_pointer(&s->page_reveal,g_bytes_unref);
+    g_clear_pointer(&s->page_reveal_flash_off,g_bytes_unref);
+    s->width=s->height=0;
+}
+void ts_info_snapshot_clear(TsInfoSnapshot *s) {
+    page_clear(s);
     memset(s,0,sizeof(*s));
 }
 static void snapshot_copy(TsInfoSnapshot *out, const TsInfoSnapshot *in) {
     *out=*in;
     if (out->page) g_bytes_ref(out->page);
+    if (out->page_flash_off) g_bytes_ref(out->page_flash_off);
+    if (out->page_reveal) g_bytes_ref(out->page_reveal);
+    if (out->page_reveal_flash_off) g_bytes_ref(out->page_reveal_flash_off);
 }
 void ts_info_parser_snapshot(TsInfoParser *p, TsInfoSnapshot *out) { snapshot_copy(out,&p->state); }
 static void assembly_clear(Assembly *a) { a->used=a->expected=0; a->cc=-1; }
-static void teletext_clear(TsInfoParser *p) { avcodec_free_context(&p->teletext); assembly_clear(&p->pes); }
+static void teletext_clear(TsInfoParser *p) {
+    if (p->teletext) vbi_decoder_delete(p->teletext);
+    p->teletext=NULL; p->teletext_time=0; assembly_clear(&p->pes);
+}
 static void content_clear(TsInfoParser *p) {
     memset(p->state.events,0,sizeof(p->state.events));
     p->state.eit_received=p->state.teletext_received=0;
-    g_clear_pointer(&p->state.page,g_bytes_unref);
-    p->state.width=p->state.height=0;
+    page_clear(&p->state);
     p->state.pmt_seen=p->state.teletext_announced=FALSE;
     p->ttx_pid=0x1fff; p->eit_version=-1;
     assembly_clear(&p->eit); assembly_clear(&p->pmt); teletext_clear(p);
@@ -54,7 +67,7 @@ static void content_clear(TsInfoParser *p) {
 TsInfoParser *ts_info_parser_new(void) {
     TsInfoParser *p=g_new0(TsInfoParser,1);
     p->pat_version=-1;
-    p->state.teletext_decoder=avcodec_find_decoder(AV_CODEC_ID_DVB_TELETEXT)!=NULL;
+    p->state.teletext_decoder=TRUE;
     assembly_clear(&p->pat); assembly_clear(&p->sdt); content_clear(p);
     return p;
 }
@@ -243,6 +256,7 @@ static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
             if (b[at]==0x06 && b[d]==0x56 && b[d+1]>=5 && b[d+1]%5==0) {
                 for (gsize entry=d+2;entry<d+2+b[d+1];entry+=5) {
                     unsigned type=b[entry+3]>>3;
+                    if (type<1 || type>5) continue; /* reserved descriptor types */
                     int rank=type==1 ? 3 : type==3 || type==4 ? 2 : 1;
                     if (type==1 && (b[entry+3]&7)==1 && b[entry+4]==0) rank=4;
                     if (rank>best) { best=rank; pid=u16(b+at+1)&0x1fff; }
@@ -253,8 +267,8 @@ static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
         at=end;
     }
     if (pid!=p->ttx_pid) {
-        teletext_clear(p); g_clear_pointer(&p->state.page,g_bytes_unref);
-        p->state.teletext_received=0; p->state.width=p->state.height=0;
+        teletext_clear(p); page_clear(&p->state);
+        p->state.teletext_received=0;
     }
     p->ttx_pid=pid; p->state.pmt_seen=TRUE; p->state.teletext_announced=pid!=0x1fff;
 }
@@ -289,56 +303,82 @@ static void section_bytes(TsInfoParser *p, Assembly *a, const guint8 *b, gsize n
         }
     }
 }
-static void teletext_open(TsInfoParser *p) {
-    const AVCodec *codec=avcodec_find_decoder(AV_CODEC_ID_DVB_TELETEXT);
-    if (!codec) return;
-    p->teletext=avcodec_alloc_context3(codec);
-    if (!p->teletext) return;
-    AVDictionary *opts=NULL;
-    av_dict_set(&opts,"txt_page","100",0); av_dict_set(&opts,"txt_format","bitmap",0);
-    av_dict_set(&opts,"txt_chop_top","0",0); av_dict_set(&opts,"txt_transparent","0",0);
-    if (avcodec_open2(p->teletext,codec,&opts)<0) avcodec_free_context(&p->teletext);
-    av_dict_free(&opts); p->state.teletext_decoder=p->teletext!=NULL;
+/* EN 300 706: render the broadcast 40 x 25 grid, including rows 0 and 24.
+ * libzvbi's optional navigation generation is deliberately disabled: it may
+ * replace the broadcaster's last row with decoder-generated page links.
+ * Four immutable frames keep reveal/flash independent of packet arrival. */
+static GBytes *teletext_frame(vbi_page *page, gboolean reveal, gboolean flash) {
+    enum { WIDTH=40*12, HEIGHT=25*10 };
+    guint8 indexed[WIDTH*HEIGHT];
+    guint32 *pixels=g_new0(guint32,WIDTH*HEIGHT);
+    vbi_draw_vt_page_region(page,VBI_PIXFMT_PAL8,indexed,WIDTH,0,0,40,25,reveal,flash);
+    for (unsigned y=0;y<HEIGHT;y++) for (unsigned x=0;x<WIDTH;x++) {
+        const vbi_char *cell=&page->text[(y/10)*page->columns+x/12];
+        unsigned index=indexed[y*WIDTH+x];
+        if (index>=G_N_ELEMENTS(page->color_map) || cell->opacity==VBI_TRANSPARENT_SPACE ||
+            (cell->opacity==VBI_TRANSPARENT_FULL && index==cell->background)) continue;
+        /* libzvbi palette is 0xAABBGGRR; Cairo RGB24 is native 0x00RRGGBB.
+         * The separate TV text screen uses an opaque black video background. */
+        guint32 color=page->color_map[index];
+        if (!(color>>24)) continue;
+        pixels[y*WIDTH+x]=((color&255)<<16)|(color&0xff00)|((color>>16)&255);
+    }
+    return g_bytes_new_take(pixels,WIDTH*HEIGHT*4);
 }
-static void subtitle_copy(TsInfoParser *p, AVSubtitle *sub) {
-    for (unsigned i=0;i<sub->num_rects;i++) {
-        AVSubtitleRect *r=sub->rects[i];
-        if (r->type!=SUBTITLE_BITMAP || r->w<=0 || r->h<=0 || r->w>1024 || r->h>1024 ||
-            !r->data[0] || !r->data[1] || r->linesize[0]<r->w || r->nb_colors>256) continue;
-        guint32 *pixels=g_new0(guint32,(gsize)r->w*r->h);
-        for (int y=0;y<r->h;y++) for (int x=0;x<r->w;x++) {
-            unsigned c=r->data[0][y*r->linesize[0]+x]; guint32 color=0;
-            if (c<(unsigned)r->nb_colors) memcpy(&color,r->data[1]+4*c,4);
-            unsigned alpha=color>>24;
-            pixels[y*r->w+x]=((((color>>16)&255)*alpha/255)<<16)|
-                ((((color>>8)&255)*alpha/255)<<8)|((color&255)*alpha/255);
-        }
-        g_clear_pointer(&p->state.page,g_bytes_unref);
-        p->state.page=g_bytes_new_take(pixels,(gsize)r->w*r->h*4);
-        p->state.width=r->w; p->state.height=r->h;
+static void teletext_event(vbi_event *event, void *data) {
+    TsInfoParser *p=data;
+    if (event->type!=VBI_EVENT_TTX_PAGE || event->ev.ttx_page.pgno!=0x100) return;
+    vbi_page page;
+    if (!vbi_fetch_vt_page(p->teletext,&page,0x100,event->ev.ttx_page.subno,
+                          VBI_WST_LEVEL_3p5,25,FALSE)) return;
+    if (page.columns>=40 && page.rows>=25 && page.columns*page.rows<=(int)G_N_ELEMENTS(page.text)) {
+        page_clear(&p->state);
+        p->state.page=teletext_frame(&page,FALSE,TRUE);
+        p->state.page_flash_off=teletext_frame(&page,FALSE,FALSE);
+        p->state.page_reveal=teletext_frame(&page,TRUE,TRUE);
+        p->state.page_reveal_flash_off=teletext_frame(&page,TRUE,FALSE);
+        p->state.width=480; p->state.height=250;
         p->state.teletext_received=g_get_real_time();
     }
+    vbi_unref_page(&page);
+}
+static void teletext_open(TsInfoParser *p) {
+    p->teletext=vbi_decoder_new();
+    if (p->teletext && !vbi_event_handler_register(p->teletext,VBI_EVENT_TTX_PAGE,teletext_event,p))
+        teletext_clear(p);
+    if (p->teletext) vbi_teletext_set_level(p->teletext,VBI_WST_LEVEL_3p5);
+    p->state.teletext_decoder=p->teletext!=NULL;
 }
 static void pes_read(TsInfoParser *p) {
     Assembly *a=&p->pes;
-    if (a->used<9 || memcmp(a->data,"\0\0\1\xbd",4) || (a->data[6]&0xc0)!=0x80) return;
-    gsize offset=9+a->data[8]; if (offset>=a->used) return;
+    /* EN 300 472 clauses 4.2-4.4: private_stream_1, fixed 45-byte
+     * PES header, EBU identifier and length-delimited 44-byte data units.
+     * Validate the whole PES before changing decoder state. */
+    if (a->used<46 || memcmp(a->data,"\0\0\1\xbd",4) ||
+        (a->data[6]&0xc0)!=0x80 || a->data[8]!=0x24 || a->used%184 ||
+        a->data[45]<0x10 || a->data[45]>0x1f) return;
+    for (gsize at=46;at<a->used;) {
+        if (a->used-at<2) return;
+        unsigned id=a->data[at], len=a->data[at+1];
+        if (at+2+len>a->used) return;
+        if ((id==2 || id==3) && (len!=44 || a->data[at+3]!=0xe4)) return;
+        at+=2+len;
+    }
     if (!p->teletext) teletext_open(p);
     if (!p->teletext) return;
-    AVPacket *pkt=av_packet_alloc();
-    if (!pkt) return;
-    if (av_new_packet(pkt,(int)(a->used-offset))>=0) {
-        memcpy(pkt->data,a->data+offset,pkt->size);
-        for (unsigned i=0;i<26;i++) {
-            AVSubtitle sub={0}; int got=0;
-            int rc=avcodec_decode_subtitle2(p->teletext,&sub,&got,pkt);
-            if (got) subtitle_copy(p,&sub);
-            avsubtitle_free(&sub);
-            if (rc<0 || !got) break;
-            av_packet_unref(pkt); /* drain additional pages without new input */
-        }
+    for (gsize at=46;at<a->used;at+=2+a->data[at+1]) {
+        unsigned id=a->data[at];
+        if (id!=2 && id!=3) continue; /* stuffing/reserved units are not text */
+        vbi_sliced line={0};
+        line.id=VBI_SLICED_TELETEXT_B;
+        unsigned offset=a->data[at+2]&31;
+        line.line=offset ? offset+((a->data[at+2]&32) ? 0 : 313) : 0;
+        for (unsigned i=0;i<42;i++) line.data[i]=vbi_rev8(a->data[at+4+i]);
+        /* This is a page viewer, not a timed subtitle overlay. A monotonic
+         * decode clock also works for file replay fed faster than real time. */
+        p->teletext_time+=0.04;
+        vbi_decode(p->teletext,&line,1,p->teletext_time);
     }
-    av_packet_free(&pkt);
 }
 static void packet_read(TsInfoParser *p, const guint8 *b) {
     unsigned pid=u16(b+1)&0x1fff; Assembly *a=NULL;
@@ -463,7 +503,7 @@ static gpointer info_worker(gpointer data) {
 TsInfoBackend *ts_info_backend_new(void) {
     TsInfoBackend *b=g_new0(TsInfoBackend,1);
     g_mutex_init(&b->mutex); g_cond_init(&b->wake); g_queue_init(&b->queue);
-    b->snapshot.teletext_decoder=avcodec_find_decoder(AV_CODEC_ID_DVB_TELETEXT)!=NULL;
+    b->snapshot.teletext_decoder=TRUE;
     b->thread=g_thread_new("ts-information",info_worker,b); return b;
 }
 void ts_info_backend_feed(TsInfoBackend *b, const guint8 *data, gsize size) {
@@ -493,7 +533,7 @@ void ts_info_backend_select(TsInfoBackend *b, guint16 service) {
         ++b->generation; b->selected=service; queue_clear(b); b->gap=TRUE;
         memset(b->snapshot.events,0,sizeof(b->snapshot.events));
         b->snapshot.eit_received=b->snapshot.teletext_received=0;
-        g_clear_pointer(&b->snapshot.page,g_bytes_unref);
+        page_clear(&b->snapshot);
         b->snapshot.pmt_seen=b->snapshot.teletext_announced=FALSE; b->snapshot.selected=service;
         g_cond_signal(&b->wake);
     }

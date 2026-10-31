@@ -78,7 +78,7 @@ int dvbt_backend_main(int argc, char **argv) {
                 close(monitor_fd); monitor_fd=-1;
             }
         }
-        if (monitor_fd<0) fprintf(stderr,"[DVB-T] decodertelemetrie niet beschikbaar\n");
+        if (monitor_fd<0) fprintf(stderr,"[DVB-T] decoder telemetry unavailable\n");
     }
     fprintf(stderr,"[DVB-T ingebouwd] threads: dvbt-iq → dvbt-ofdm → dvbt-fec; cores via OS-scheduler\n");
     int result=rbdvbt_run_receiver(&cfg);

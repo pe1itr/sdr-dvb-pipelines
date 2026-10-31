@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -73,7 +74,7 @@ static gboolean valid_fec(App *a, int fec) {
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
 enum { SOURCE_FILE = 4 };
 static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "file"};
-static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Bestand (IQ)"};
+static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
@@ -152,7 +153,7 @@ static void clear_stages(App *a) {
 }
 
 static void build_pipeline(App *a) {
-    if (!valid_fec(a, a->fec)) fatal("Ongeldige FEC voor de gekozen standaard/constellatie");
+    if (!valid_fec(a, a->fec)) fatal("Invalid FEC for the selected standard/constellation");
     if (udp_output(a)) {
         char *host = setting(a, "renderer", "udp_host");
         struct in_addr destination;
@@ -194,7 +195,7 @@ static void build_pipeline(App *a) {
         const char *section = sources[a->source];
         sample_rate = integer_setting(a, section, "sample_rate", a->source == 3 ? 8138 : 2000000,
                                       a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
-        if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Ongeldige SDR-IQ samplerate: %d", sample_rate);
+        if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
         if (strcmp(format, "s16") && strcmp(format, "u8")) fatal("Invalid SDR format");
         s = new_stage(a, "sdr");
@@ -220,7 +221,7 @@ static void build_pipeline(App *a) {
         s = &a->stages[a->stage_count++];
         s->args = g_ptr_array_new_with_free_func(g_free);
         char *self = g_file_read_link("/proc/self/exe", NULL);
-        if (!self) fatal("Kan de ingebouwde DVB-T-decoder niet vinden");
+        if (!self) fatal("Cannot locate the built-in DVB-T decoder");
         add(s, self); g_free(self); add(s, "--decoder-worker=dvbt");
         options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp");
         /* These are essential for the integrated live decode path, even when
@@ -292,7 +293,7 @@ static char *describe(App *a) {
     if (a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory), *quoted = g_shell_quote(resolved);
-        g_string_append_printf(text, "\n  > %s  (nieuw MPEG-TS-bestand)", quoted);
+        g_string_append_printf(text, "\n  > %s  (new MPEG-TS file)", quoted);
         g_free(path); g_free(resolved); g_free(quoted);
     }
     if (use_scatter(a)) g_string_append(text, "\n  + decoder TS -> embedded TSscatterFix (parallel) -> RGB image / service / progress panel");
@@ -355,12 +356,12 @@ static void power_refresh(App *a) {
     for (unsigned i=0; i<G_N_ELEMENTS(states); ++i) gtk_style_context_remove_class(style, states[i]);
     int state = a->stopping ? 2 : a->running ? 1 : a->exit_code ? 3 : 0;
     gtk_style_context_add_class(style, states[state]);
-    const char *labels[] = {"Start SDR", "Stop SDR · actief", "SDR stopt…", "Start SDR · fout"};
-    const char *file_labels[] = {"Start bestand", "Stop bestand · actief", "Bestand stopt…", "Start bestand · fout"};
-    const char *tips[] = {"Ontvanger uit. Klik om te starten.",
-        "Ontvangstpipeline draait. Klik om te stoppen.",
-        "De ontvangstpipeline wordt gestopt. Even wachten…",
-        "Ontvangst gestopt door een fout. Zie de status en het log; klik om opnieuw te starten."};
+    const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
+    const char *file_labels[] = {"Play file", "Stop file · playing", "Stopping playback…", "Play file · error"};
+    const char *tips[] = {"Receiver off. Click to start.",
+        "Receiver pipeline running. Click to stop.",
+        "Stopping the receiver pipeline. Please wait…",
+        "Reception stopped due to an error. Check the status and log; click to restart."};
     gtk_label_set_text(GTK_LABEL(a->power_label), a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
     gtk_widget_set_tooltip_text(a->power_button, tips[state]);
     gtk_widget_set_sensitive(a->power_button, !a->stopping);
@@ -374,7 +375,7 @@ static void finish_if_stopped(App *a) {
     if (a->video_view.area) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
-    if (!a->exit_code) status(a, a->replay_eof ? "IQ-bestand volledig afgespeeld" : "Gestopt");
+    if (!a->exit_code) status(a, a->replay_eof ? "IQ file playback complete" : "Stopped");
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, TRUE);
         gtk_widget_set_sensitive(a->hardware, TRUE);
@@ -410,7 +411,7 @@ static void stop_pipeline(App *a) {
     decoder_view_tick(&a->decoder_view, FALSE, standards[a->standard]);
     if (a->drain_timer) { g_source_remove(a->drain_timer); a->drain_timer=0; }
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
-    if (!a->exit_code) status(a, "Pipeline stoppen...");
+    if (!a->exit_code) status(a, "Stopping pipeline...");
     power_refresh(a);
     for (int i = 0; i < a->stage_count; ++i)
         if (a->stages[i].group > 0) kill(-a->stages[i].group, SIGTERM);
@@ -420,7 +421,7 @@ static void stop_pipeline(App *a) {
 static gboolean replay_drained(gpointer data) {
     App *a=data; a->drain_timer=0;
     if (a->stages[1].pid) {
-        a->exit_code=1; status(a,"Decoder stopt niet na het einde van het IQ-bestand");
+        a->exit_code=1; status(a,"Decoder did not stop after the end of the IQ file");
     }
     stop_pipeline(a); return G_SOURCE_REMOVE;
 }
@@ -438,7 +439,7 @@ static void child_exit(GPid pid, gint result, gpointer data) {
             if (a->replay_eof) {
                 if (a->drain_timer) g_source_remove(a->drain_timer);
                 a->drain_timer=g_timeout_add(a->stages[1].pid ? 10000 : 1500,replay_drained,a);
-                status(a,"IQ-bestand uitgelezen; decoder en speler afronden…");
+                status(a,"End of IQ file; finishing decoder and player…");
                 gboolean alive=FALSE;
                 for (int j=0; j<a->stage_count; ++j) if (a->stages[j].pid) alive=TRUE;
                 if (!alive && !internal_player(a)) stop_pipeline(a);
@@ -446,8 +447,8 @@ static void child_exit(GPid pid, gint result, gpointer data) {
             break;
         }
         if (!a->stopping) {
-            char *message = g_strdup_printf("%s is gestopt (%s %d); volledige pipeline wordt gestopt.",
-                (char *)a->stages[i].args->pdata[0], WIFEXITED(result) ? "exitcode" : "signaal",
+            char *message = g_strdup_printf("%s stopped (%s %d); stopping the entire pipeline.",
+                (char *)a->stages[i].args->pdata[0], WIFEXITED(result) ? "exit code" : "signal",
                 WIFEXITED(result) ? WEXITSTATUS(result) : WTERMSIG(result));
             a->exit_code = 1; status(a, message); g_free(message); stop_pipeline(a);
         }
@@ -478,13 +479,13 @@ static void start_pipeline(App *a) {
         GError *error=NULL; guint64 samples;
         gboolean valid=*path && iq_file_validate(resolved,fmt,integer_setting(a,"file","header_bytes",0,100000000),&samples,&error);
         g_free(path); g_free(fmt); g_free(resolved);
-        if (!valid) { a->exit_code=1; status(a,error ? error->message : "Kies eerst een IQ-bestand onder SDR"); g_clear_error(&error); return; }
+        if (!valid) { a->exit_code=1; status(a,error ? error->message : "Select an IQ file in Input first"); g_clear_error(&error); return; }
     }
     a->iq_view.rows = 0; a->iq_view.last_frame = 0;
     for (int i = 0; i < a->stage_count; ++i) {
         char *program = a->stages[i].args->pdata[0], *found = g_find_program_in_path(program);
         if (!found) {
-            char *message = g_strdup_printf("Programma niet gevonden of niet uitvoerbaar: %s", program);
+            char *message = g_strdup_printf("Program not found or not executable: %s", program);
             status(a, message); g_free(message); a->exit_code = 1; return;
         }
         g_free(found);
@@ -495,7 +496,7 @@ static void start_pipeline(App *a) {
         char *resolved = g_canonicalize_filename(path, a->directory);
         output_fd = open(resolved, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
         if (output_fd < 0) {
-            char *message = g_strdup_printf("Kan MPEG-TS-bestand niet maken: %s: %s. Kies een nieuwe bestandsnaam.", resolved, g_strerror(errno));
+            char *message = g_strdup_printf("Cannot create MPEG-TS file: %s: %s. Choose a new filename.", resolved, g_strerror(errno));
             status(a, message); g_free(message); g_free(path); g_free(resolved); a->exit_code = 1; return;
         }
         g_free(path); g_free(resolved);
@@ -542,7 +543,7 @@ static void start_pipeline(App *a) {
         }
     }
     if (a->window && a->standard == 2 && !decoder_view_start(&a->decoder_view))
-        log_text(a, "Decodertelemetrie niet beschikbaar; ontvangst gaat door.\n");
+        log_text(a, "Decoder telemetry unavailable; reception continues.\n");
     a->running = TRUE;
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, FALSE);
@@ -586,7 +587,7 @@ static void start_pipeline(App *a) {
     else a->tune_fd = tune_pipe[1];
     if (log_pipe[1] >= 0) close(log_pipe[1]);
     if (log_pipe[0] >= 0) g_unix_fd_add(log_pipe[0], G_IO_IN | G_IO_HUP | G_IO_ERR, read_log, a);
-    if (!a->stopping) status(a, a->source==SOURCE_FILE ? "IQ-bestand wordt realtime afgespeeld" : "Pipeline actief - wachten op/ontvangen van IQ");
+    if (!a->stopping) status(a, a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
     if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
@@ -631,12 +632,12 @@ static void tuning_refresh(App *a) {
         double frequency=g_key_file_get_double(a->config,"file","frequency",NULL);
         char *text=g_strdup_printf("%.6f MHz",frequency/1e6);
         gtk_label_set_text(GTK_LABEL(a->frequency_display),text); g_free(text);
-        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Bestandsinvoer: de ontvangstfrequentie bepaalt alleen de schaal; hardware-afstemming en gain zijn uitgeschakeld.");
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"File input: the receive frequency only sets the display scale; hardware tuning and gain are disabled.");
         return;
     }
     if (!a->source) {
-        gtk_label_set_text(GTK_LABEL(a->frequency_display), "Afstemmen in Linrad");
-        gtk_label_set_text(GTK_LABEL(a->frequency_calculation), "Stel de hardwarefrequentie en eventuele LO-offset in Linrad in.");
+        gtk_label_set_text(GTK_LABEL(a->frequency_display), "Tune in Linrad");
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation), "Set the hardware frequency and any LO offset in Linrad.");
         return;
     }
     const char *section = sources[a->source];
@@ -651,9 +652,9 @@ static void tuning_refresh(App *a) {
     g_signal_handlers_unblock_by_func(a->step_box, tuning_changed, a);
     char *text = g_strdup_printf("%.6f MHz", (frequency + offset)/1e6);
     gtk_label_set_text(GTK_LABEL(a->frequency_display), text); g_free(text);
-    text = g_strdup_printf("SDR/IF + LO-offset = ontvangstfrequentie\n"
+    text = g_strdup_printf("SDR/IF + LO offset = receive frequency\n"
         "%.6f %s %.6f = %.6f MHz\n"
-        "Verschil (RF − IF) = %.6f MHz (%.3f kHz)",
+        "Difference (RF − IF) = %.6f MHz (%.3f kHz)",
         frequency/1e6, offset < 0 ? "−" : "+", fabs(offset)/1e6,
         (frequency+offset)/1e6, offset/1e6, offset/1000.0);
     gtk_label_set_text(GTK_LABEL(a->frequency_calculation), text); g_free(text);
@@ -681,14 +682,14 @@ static void tune_step(App *a, int direction) {
     double next = frequency + direction*step;
     double low = a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
     double high = a->source == 3 ? 30000000 : 6000000000.0;
-    if (next < low || next > high) { status(a, "Afstemgrens van de SDR bereikt"); return; }
+    if (next < low || next > high) { status(a, "SDR tuning limit reached"); return; }
     if (a->running) {
         char command[64];
         int length = g_snprintf(command, sizeof(command), "%.0f\n", next);
         ssize_t sent;
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
-        if (sent != length) { status(a, "Afstemopdracht niet verstuurd; probeer opnieuw"); return; }
+        if (sent != length) { status(a, "Tuning command not sent; try again"); return; }
     }
     if (a->scatter_backend) ts_info_backend_reset(a->scatter_backend->information);
     ts_info_view_reset(&a->information);
@@ -708,14 +709,14 @@ static void gain_step(App *a, int direction) {
     double next = gain + direction*(a->source == 3 ? 10 : 1);
     double low = a->source == 3 ? -20 : 0;
     double high = a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
-    if (next < low || next > high) { status(a, "Gain-grens van de SDR bereikt"); return; }
+    if (next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
         char command[64];
         int length = g_snprintf(command, sizeof(command), "gain %.1f\n", next);
         ssize_t sent;
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
-        if (sent != length) { status(a, "Gain-opdracht niet verstuurd; probeer opnieuw"); return; }
+        if (sent != length) { status(a, "Gain command not sent; try again"); return; }
     }
     g_key_file_set_double(a->config, section, "gain", next);
     tuning_refresh(a);
@@ -739,8 +740,8 @@ static void filter_refresh(App *a) {
     a->iq_view.bandwidth = width;
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
     gtk_widget_set_tooltip_text(a->filter_box, a->iq_view.enabled ?
-        "IQ-bandfilter aan. Klik om uit te zetten. [ en ] wijzigen de bandbreedte." :
-        "IQ-bandfilter uit. Klik om aan te zetten. [ en ] wijzigen de bandbreedte.");
+        "IQ bandpass filter on. Click to turn off. [ and ] adjust the bandwidth." :
+        "IQ bandpass filter off. Click to turn on. [ and ] adjust the bandwidth.");
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
 }
 static void filter_apply(App *a, int width, gboolean enabled) {
@@ -751,7 +752,7 @@ static void filter_apply(App *a, int width, gboolean enabled) {
         ssize_t sent;
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
-        if (sent != length) { status(a, "Filteropdracht niet verstuurd"); filter_refresh(a); return; }
+        if (sent != length) { status(a, "Filter command not sent"); filter_refresh(a); return; }
     }
     g_key_file_set_boolean(a->config, section, "filter_enabled", enabled);
     g_key_file_set_integer(a->config, section, "filter_bandwidth", width);
@@ -796,8 +797,8 @@ static void save_settings(App *a) {
     char *contents = g_key_file_to_data(a->config, &length, &error);
     gboolean saved = contents && g_file_set_contents_full(a->config_path, contents, length,
         G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE, 0600, &error);
-    char *message = saved ? g_strdup_printf("Instellingen opgeslagen: %s", a->config_path) :
-        g_strdup_printf("Opslaan mislukt: %s", error ? error->message : "onbekende fout");
+    char *message = saved ? g_strdup_printf("Settings saved: %s", a->config_path) :
+        g_strdup_printf("Save failed: %s", error ? error->message : "unknown error");
     status(a, message);
     g_free(message); g_free(contents); g_clear_error(&error);
 }
@@ -964,7 +965,7 @@ static void scatter_changed(GtkWidget *widget, gpointer data) {
 }
 
 static void populate_rates(App *a) {
-    if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard == 2 ? "BW (Hz)" : "Symbolrate (sym/s)");
+    if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard == 2 ? "BW (Hz)" : "Symbol rate (sym/s)");
     const int *rates = a->standard == 2 ? terrestrial_rates : sat_rates;
     int count = a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
     g_signal_handlers_block_by_func(a->sr_box, selection_changed, a);
@@ -1095,7 +1096,7 @@ static void source_defaults(App *a) {
         if (!g_key_file_has_key(a->config, "renderer", udp_keys[i], NULL))
             g_key_file_set_string(a->config, "renderer", udp_keys[i], udp_values[i]);
     const char *file_keys[]={"path","input_format","format","sample_rate","header_bytes","frequency","metadata"};
-    const char *file_values[]={"","s16","s16","250000","0","0","Geen metadata geladen; controleer de instellingen."};
+    const char *file_values[]={"","s16","s16","250000","0","0","No metadata loaded; check the settings."};
     for (unsigned i=0; i<G_N_ELEMENTS(file_keys); ++i)
         if (!g_key_file_has_key(a->config,"file",file_keys[i],NULL))
             g_key_file_set_string(a->config,"file",file_keys[i],file_values[i]);
@@ -1158,7 +1159,7 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
     App candidate={.standard=standard,.constellation=constellation,.fec=fec};
     if (standard<0 || constellation<0 || fec<0 || gi<0 ||
         (standard!=1 && constellation!=0) || !valid_fec(&candidate,fec)) {
-        g_set_error_literal(error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"DVB-mode, modulatie, FEC of guard interval uit de metadata wordt niet ondersteund");
+        g_set_error_literal(error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Unsupported DVB mode, modulation, FEC or guard interval in metadata");
         iq_file_info_clear(&info); return FALSE;
     }
     char *fallback=setting(a,"file","input_format");
@@ -1166,7 +1167,7 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
     int rate=info.sample_rate ? info.sample_rate : integer_setting(a,"file","sample_rate",1,100000000);
     guint64 samples;
     if (rate<1 || rate>100000000 || !iq_file_validate(info.path,format,info.header_bytes,&samples,error)) {
-        if (error && !*error) g_set_error_literal(error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Ongeldige samplerate");
+        if (error && !*error) g_set_error_literal(error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Invalid sample rate");
         g_free(fallback); iq_file_info_clear(&info); return FALSE;
     }
     g_key_file_set_string(a->config,"file","path",info.path);
@@ -1178,8 +1179,8 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
     g_key_file_set_boolean(a->config,"file","filter_enabled",FALSE);
     g_key_file_set_integer(a->config,"file","filter_bandwidth",CLAMP((int)MIN(sr*1.35,100000000),MAX(10,(rate+255)/256),MAX(10,(int)(rate*.95))));
     char *message=info.metadata_path ? g_strdup_printf("Metadata: %s%s",info.metadata_path,
-        !info.sample_rate || !*info.format ? " · controleer samplerate en formaat" : "") :
-        g_strdup("Geen JSON-metadata. Controleer samplerate, formaat en DVB-instellingen vóór Start.");
+        !info.sample_rate || !*info.format ? " · check sample rate and format" : "") :
+        g_strdup("No JSON metadata. Check the sample rate, format and DVB settings before playback.");
     g_key_file_set_string(a->config,"file","metadata",message); g_free(message);
     a->source=SOURCE_FILE; a->standard=standard; a->constellation=constellation; a->fec=fec; a->gi=gi; a->sr=sr;
     g_free(fallback); iq_file_info_clear(&info); return TRUE;
@@ -1199,7 +1200,7 @@ static void file_controls_refresh(App *a) {
     int rate=integer_setting(a,"file","sample_rate",1,100000000);
     if (*path && iq_file_validate(resolved,format,gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->file_header)),&samples,&error))
         text=g_strdup_printf("%.3f s · %d samples/s · %s → %s\n%s",(double)samples/rate,rate,format,!strcmp(format,"u8") ? "u8" : "s16",metadata);
-    else text=g_strdup(error ? error->message : "Kies een IQ-bestand. Afspelen begint met Start bestand rechtsboven.");
+    else text=g_strdup(error ? error->message : "Select an IQ file. Click Play file at the top right to start playback.");
     gtk_label_set_text(GTK_LABEL(a->file_details),text);
     for (unsigned i=0; i<G_N_ELEMENTS(widgets); ++i) g_signal_handlers_unblock_by_func(widgets[i],file_options_changed,a);
     g_clear_error(&error); g_free(text); g_free(path); g_free(resolved); g_free(format); g_free(metadata);
@@ -1234,13 +1235,13 @@ static void file_selection_sync(App *a) {
 static void choose_iq_file(GtkWidget *widget, gpointer data) {
     (void)widget; App *a=data;
     if (a->running) return;
-    GtkWidget *chooser=gtk_file_chooser_dialog_new("IQ-bestand openen",GTK_WINDOW(a->config_dialog),GTK_FILE_CHOOSER_ACTION_OPEN,
-        "Annuleren",GTK_RESPONSE_CANCEL,"Openen",GTK_RESPONSE_ACCEPT,NULL);
-    GtkFileFilter *filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"IQ-bestanden");
+    GtkWidget *chooser=gtk_file_chooser_dialog_new("Open IQ file",GTK_WINDOW(a->config_dialog),GTK_FILE_CHOOSER_ACTION_OPEN,
+        "Cancel",GTK_RESPONSE_CANCEL,"Open",GTK_RESPONSE_ACCEPT,NULL);
+    GtkFileFilter *filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"IQ files");
     const char *patterns[]={"*.iq","*.cf32","*.fc32","*.s16","*.u8"};
     for (unsigned i=0; i<G_N_ELEMENTS(patterns); ++i) gtk_file_filter_add_pattern(filter,patterns[i]);
     gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser),filter);
-    filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"Alle bestanden"); gtk_file_filter_add_pattern(filter,"*");
+    filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"All files"); gtk_file_filter_add_pattern(filter,"*");
     gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser),filter);
     char *current=setting(a,"file","path");
     if (*current) gtk_file_chooser_set_filename(GTK_FILE_CHOOSER(chooser),current);
@@ -1248,7 +1249,7 @@ static void choose_iq_file(GtkWidget *widget, gpointer data) {
     if (gtk_dialog_run(GTK_DIALOG(chooser))==GTK_RESPONSE_ACCEPT) {
         char *path=gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(chooser));
         GError *error=NULL;
-        if (select_iq_file(a,path,&error)) { file_selection_sync(a); status(a,"IQ-bestand geladen. Controleer Mode; druk op Start bestand om realtime af te spelen."); }
+        if (select_iq_file(a,path,&error)) { file_selection_sync(a); status(a,"IQ file loaded. Check Mode; click Play file to play in real time."); }
         else {
             GtkWidget *message=gtk_message_dialog_new(GTK_WINDOW(a->config_dialog),GTK_DIALOG_MODAL,
                 GTK_MESSAGE_ERROR,GTK_BUTTONS_CLOSE,"%s",error->message);
@@ -1288,7 +1289,7 @@ static gboolean apply_hardware(App *a) {
     struct in_addr address;
     if (inet_pton(AF_INET, ip, &address) != 1) {
         GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(a->config_dialog), GTK_DIALOG_MODAL,
-            GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Vul een geldig IPv4-adres voor Linrad in.");
+            GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Enter a valid IPv4 address for Linrad.");
         gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
         gtk_widget_grab_focus(a->ip_box); return FALSE;
     }
@@ -1325,7 +1326,10 @@ static GtkWidget *about_label(GtkWidget *box, const char *text, const char *styl
     GtkWidget *label=gtk_label_new(text);
     gtk_label_set_xalign(GTK_LABEL(label),0);
     gtk_label_set_line_wrap(GTK_LABEL(label),TRUE);
-    gtk_label_set_max_width_chars(GTK_LABEL(label),64);
+    /* A minimum paragraph width prevents GTK from requesting the height
+     * needed to wrap the entire paragraph into a narrow column. */
+    if (!style || !strcmp(style,"about-meta")) gtk_label_set_width_chars(GTK_LABEL(label),76);
+    gtk_label_set_max_width_chars(GTK_LABEL(label),76);
     gtk_label_set_selectable(GTK_LABEL(label),TRUE);
     if (style) gtk_style_context_add_class(gtk_widget_get_style_context(label),style);
     gtk_box_pack_start(GTK_BOX(box),label,FALSE,FALSE,0);
@@ -1335,33 +1339,35 @@ static GtkWidget *about_label(GtkWidget *box, const char *text, const char *styl
 static void show_about(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
     GtkWidget *dialog=gtk_dialog_new_with_buttons("About · Linrad DVB",GTK_WINDOW(a->window),
-        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Sluiten",GTK_RESPONSE_CLOSE,NULL);
-    gtk_window_set_default_size(GTK_WINDOW(dialog),580,-1);
-    GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,12);
-    gtk_container_set_border_width(GTK_CONTAINER(box),18);
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);
+    /* Let GTK fit the height to the wrapped content at this width, rather
+     * than using the labels' unconstrained natural height. */
+    gtk_window_set_default_size(GTK_WINDOW(dialog),640,1);
+    GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
+    gtk_container_set_border_width(GTK_CONTAINER(box),12);
     gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),box,TRUE,TRUE,0);
     about_label(box,"linrad_dvb","about-title");
-    about_label(box,"linrad_dvb is een softwareprogramma voor radioamateurs die digitale "
-        "amateurtelevisie bij zwakke signalen ontvangen (weak signal).",NULL);
+    about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
+        "amateur television under weak signal conditions.",NULL);
     about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
         "elements in static test patterns from fragments of the received "
         "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
-    about_label(box,"Gemaakt door Rob Hardenberg, PE1ITR.",NULL);
+    about_label(box,"Created by Rob Hardenberg, PE1ITR.",NULL);
     /* Compiler timestamps identify this executable, not the date it is opened. */
-    about_label(box,"Builddatum: " __DATE__ " · " __TIME__,"about-meta");
-    about_label(box,"Toetsen","about-heading");
+    about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
+    about_label(box,"Keyboard shortcuts","about-heading");
     GtkWidget *grid=gtk_grid_new();
     gtk_widget_set_name(grid,"about-shortcuts");
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
     const char *shortcuts[][2]={
-        {"Toets","Omschrijving"},
+        {"Key","Description"},
         {"Alt+I / Alt+M / Alt+R / Alt+A","Open Input / Mode / Renderer / About"},
         {"R","Reset TSscatterFix reconstruction"},
         {"U","Mute / unmute the embedded player"},
-        {"← / →","Ontvangstfrequentie verlagen / verhogen"},
-        {"↑ / ↓","Gain verhogen / verlagen"},
-        {"[ / ]","IQ-bandfilter smaller / breder maken"},
-        {"W","Instellingen opslaan, inclusief spectrum en waterval"},
+        {"← / →","Decrease / increase receive frequency"},
+        {"↑ / ↓","Increase / decrease gain"},
+        {"[ / ]","Narrow / widen the IQ bandpass filter"},
+        {"W","Save settings, including spectrum and waterfall"},
         {"P","Save the entire main window as a PNG screenshot"}
     };
     for (unsigned row=0;row<G_N_ELEMENTS(shortcuts);++row) {
@@ -1371,7 +1377,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
             gtk_label_set_line_wrap(GTK_LABEL(cell),TRUE);
             gtk_style_context_add_class(gtk_widget_get_style_context(cell),
                 row==0 ? "about-table-heading" : column==0 ? "about-key" : "about-description");
-            if (column==0) gtk_label_set_width_chars(GTK_LABEL(cell),10);
+            if (column==0) gtk_label_set_width_chars(GTK_LABEL(cell),14);
             else {
                 gtk_widget_set_hexpand(cell,TRUE);
                 gtk_label_set_max_width_chars(GTK_LABEL(cell),48);
@@ -1379,9 +1385,9 @@ static void show_about(GtkWidget *widget, gpointer data) {
             gtk_grid_attach(GTK_GRID(grid),cell,column,row,1,1);
         }
     }
-    about_label(box,"Sneltoetsen werken in het hoofdvenster, ook met kleine letters en tijdens ontvangst. "
-        "In instellingenschermen blijven de toetsen beschikbaar voor tekstinvoer.","about-meta");
-    about_label(box,"Bij Linrad regel je frequentie en gain in Linrad zelf.","about-meta");
+    about_label(box,"Shortcuts work in the main window, including lowercase keys and during reception. "
+        "In settings dialogs, keys remain available for text entry.","about-meta");
+    about_label(box,"When using Linrad, adjust frequency and gain in Linrad itself.","about-meta");
     about_label(box,"Screenshots are saved beside the INI file as "
         "linrad-dvb-[UTC timestamp]-[mode]-[SR or BW]-[frequency in whole kHz].png. "
         "SR is in symbols/s; BW is in Hz. "
@@ -1391,8 +1397,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
 }
 
 static void create_config(App *a) {
-    a->config_dialog = gtk_dialog_new_with_buttons("SDR · input en hardware", GTK_WINDOW(a->window),
-        GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL, "Sluiten", GTK_RESPONSE_CLOSE, NULL);
+    a->config_dialog = gtk_dialog_new_with_buttons("SDR · input and hardware", GTK_WINDOW(a->window),
+        GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_window_set_default_size(GTK_WINDOW(a->config_dialog), 620, -1);
     a->hardware = gtk_grid_new();
     gtk_container_set_border_width(GTK_CONTAINER(a->hardware), 12);
@@ -1400,7 +1406,7 @@ static void create_config(App *a) {
     gtk_grid_set_column_spacing(GTK_GRID(a->hardware), 12);
     gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(a->config_dialog))), a->hardware, TRUE, TRUE, 0);
     a->source_box = combo(a->hardware, "Input / SDR", 0, source_labels, G_N_ELEMENTS(source_labels), a->source);
-    a->rate_box = spin(a->hardware, "Samplerate (samples/s)", 1, 1, 100000000, 100000);
+    a->rate_box = spin(a->hardware, "Sample rate (samples/s)", 1, 1, 100000000, 100000);
     a->sdriq_rate_box = gtk_combo_box_text_new();
     gtk_grid_attach(GTK_GRID(a->hardware), a->sdriq_rate_box, 1, 1, 1, 1);
     for (unsigned i = 0; i < G_N_ELEMENTS(sdriq_rates); ++i) {
@@ -1409,7 +1415,7 @@ static void create_config(App *a) {
     }
     gtk_widget_set_no_show_all(a->rate_box, TRUE);
     gtk_widget_set_no_show_all(a->sdriq_rate_box, TRUE);
-    a->format_box = combo(a->hardware, "IQ-formaat", 2, (const char *[]) {"s16", "u8"}, 2, 0);
+    a->format_box = combo(a->hardware, "IQ format", 2, (const char *[]) {"s16", "u8"}, 2, 0);
     a->hardware_stack = gtk_stack_new();
     gtk_grid_attach(GTK_GRID(a->hardware), a->hardware_stack, 0, 3, 2, 1);
     for (int source=0; source<(int)G_N_ELEMENTS(sources); ++source) {
@@ -1417,24 +1423,24 @@ static void create_config(App *a) {
         gtk_grid_set_row_spacing(GTK_GRID(grid), 8); gtk_grid_set_column_spacing(GTK_GRID(grid), 12);
         gtk_stack_add_named(GTK_STACK(a->hardware_stack), grid, sources[source]);
         if (!source) {
-            a->ip_box = entry_field(grid, "UDP-bindadres", 0, a, "linrad", "ip");
-            a->port_box = spin(grid, "UDP-poort", 1, 1, 65535, 1);
+            a->ip_box = entry_field(grid, "UDP bind address", 0, a, "linrad", "ip");
+            a->port_box = spin(grid, "UDP port", 1, 1, 65535, 1);
             a->header_box = spin(grid, "Header (bytes)", 2, 0, 65534, 1);
-            a->center_box = spin(grid, "Ontvangstfrequentie (MHz)", 3, 0, 100000, 1);
+            a->center_box = spin(grid, "Receive frequency (MHz)", 3, 0, 100000, 1);
             gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->center_box), 6);
-            gtk_widget_set_tooltip_text(a->center_box, "Stel hier de middenfrequentie van Linrad in voor de MHz-schaal. Dit stemt Linrad niet af.");
+            gtk_widget_set_tooltip_text(a->center_box, "Set Linrad's center frequency here for the MHz scale. This does not tune Linrad.");
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->port_box), integer_setting(a, "linrad", "port", 1, 65535));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->header_box), integer_setting(a, "linrad", "header_bytes", 0, 65534));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->center_box), g_key_file_get_double(a->config, "linrad", "frequency", NULL)/1e6);
         } else if (source==SOURCE_FILE) {
-            a->file_path=entry_field(grid,"IQ-bestand",0,a,"file","path");
+            a->file_path=entry_field(grid,"IQ file",0,a,"file","path");
             gtk_editable_set_editable(GTK_EDITABLE(a->file_path),FALSE);
-            GtkWidget *browse=gtk_button_new_with_label("Bladeren…");
+            GtkWidget *browse=gtk_button_new_with_label("Browse…");
             gtk_grid_attach(GTK_GRID(grid),browse,2,0,1,1);
             g_signal_connect(browse,"clicked",G_CALLBACK(choose_iq_file),a);
-            a->file_format=combo(grid,"Bestandsformaat",1,file_formats,G_N_ELEMENTS(file_formats),0);
-            a->file_header=spin(grid,"Header overslaan (bytes)",2,0,100000000,1);
-            a->file_center=spin(grid,"Ontvangstfrequentie (MHz)",3,0,1000000,1);
+            a->file_format=combo(grid,"File format",1,file_formats,G_N_ELEMENTS(file_formats),0);
+            a->file_header=spin(grid,"Skip header (bytes)",2,0,100000000,1);
+            a->file_center=spin(grid,"Receive frequency (MHz)",3,0,1000000,1);
             gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->file_center),6);
             a->file_details=gtk_label_new("");
             gtk_label_set_xalign(GTK_LABEL(a->file_details),0);
@@ -1447,7 +1453,7 @@ static void create_config(App *a) {
             g_signal_connect(a->file_center,"value-changed",G_CALLBACK(file_options_changed),a);
         } else {
             const char *keys[] = {"args", "images", "antenna"};
-            const char *labels[] = {"Device-argumenten", "UHD-images (B210)", "Antenne"};
+            const char *labels[] = {"Device arguments", "UHD images (B210)", "Antenna"};
             for (int field=0; field<3; ++field) {
                 GtkWidget *entry = entry_field(grid, labels[field], field, a, sources[source], keys[field]);
                 a->hardware_entries[source][field] = entry;
@@ -1456,11 +1462,11 @@ static void create_config(App *a) {
         }
     }
     a->frequency_box = spin(a->hardware, "SDR / IF (kHz)", 4, 1000, 6000000.0, 1);
-    a->offset_box = spin(a->hardware, "LO-offset (kHz)", 5, -100000000, 100000000, 1);
+    a->offset_box = spin(a->hardware, "LO offset (kHz)", 5, -100000000, 100000000, 1);
     gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->offset_box), 3);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box), 0);
-    gtk_widget_set_tooltip_text(a->offset_box, "Weergave = SDR-frequentie + LO-offset. Voor 436 MHz via 28 MHz: 408000 kHz.");
-    a->step_box = spin(a->hardware, "Afstemstap (Hz)", 6, 1, 10000000, 100);
+    gtk_widget_set_tooltip_text(a->offset_box, "Display = SDR frequency + LO offset. For 436 MHz via 28 MHz: 408000 kHz.");
+    a->step_box = spin(a->hardware, "Tuning step (Hz)", 6, 1, 10000000, 100);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->step_box), 1000);
     a->frequency_calculation = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(a->frequency_calculation), 0);
@@ -1468,7 +1474,7 @@ static void create_config(App *a) {
     gtk_label_set_line_wrap(GTK_LABEL(a->frequency_calculation), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(a->frequency_calculation), 70);
     gtk_grid_attach(GTK_GRID(a->hardware), a->frequency_calculation, 0, 7, 2, 1);
-    GtkWidget *hint = gtk_label_new("Wijzigingen gelden voor deze sessie. W in het hoofdvenster slaat ze op.");
+    GtkWidget *hint = gtk_label_new("Changes apply to this session. Press W in the main window to save them.");
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
     gtk_grid_attach(GTK_GRID(a->hardware), hint, 0, 8, 2, 1);
     g_signal_connect(a->config_dialog, "response", G_CALLBACK(config_response), a);
@@ -1477,7 +1483,7 @@ static void create_config(App *a) {
 
 static GtkWidget *settings_dialog(App *a, const char *title, GtkWidget **grid) {
     GtkWidget *dialog = gtk_dialog_new_with_buttons(title, GTK_WINDOW(a->window),
-        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Sluiten", GTK_RESPONSE_CLOSE, NULL);
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Close", GTK_RESPONSE_CLOSE, NULL);
     *grid = gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(*grid), 8); gtk_grid_set_column_spacing(GTK_GRID(*grid), 12);
     gtk_container_set_border_width(GTK_CONTAINER(*grid), 12);
@@ -1522,14 +1528,14 @@ static gboolean apply_renderer(App *a) {
     const char *file = gtk_entry_get_text(GTK_ENTRY(a->output_file));
     GError *error=NULL; char **argv=NULL; int argc;
     if (a->renderer == RENDER_CUSTOM) {
-        if (!*program) { gtk_label_set_text(GTK_LABEL(a->renderer_error), "Vul een programmanaam of pad in."); return FALSE; }
+        if (!*program) { gtk_label_set_text(GTK_LABEL(a->renderer_error), "Enter a program name or path."); return FALSE; }
         if (*args && !g_shell_parse_argv(args, &argc, &argv, &error)) {
             gtk_label_set_text(GTK_LABEL(a->renderer_error), error->message); g_clear_error(&error); return FALSE;
         }
         g_strfreev(argv);
     }
     if (a->renderer == RENDER_FILE && !*file) {
-        gtk_label_set_text(GTK_LABEL(a->renderer_error), "Vul een naam voor het MPEG-TS-bestand in."); return FALSE;
+        gtk_label_set_text(GTK_LABEL(a->renderer_error), "Enter a filename for the MPEG-TS output."); return FALSE;
     }
     if (internal_player(a)) {
         gboolean enabled = a->renderer == RENDER_UDP || gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->udp_enabled));
@@ -1564,20 +1570,20 @@ static gboolean renderer_close(GtkWidget *widget, GdkEvent *event, gpointer data
 }
 
 static void create_mode_renderer(App *a) {
-    a->mode_dialog = settings_dialog(a, "Mode · DVB-instellingen", &a->controls);
+    a->mode_dialog = settings_dialog(a, "Mode · DVB settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, 3, a->standard);
-    a->sr_box = combo(a->controls, "Symbolrate (sym/s)", 1, NULL, 0, -1);
+    a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
     a->sr_label = gtk_grid_get_child_at(GTK_GRID(a->controls), 0, 1);
     a->fec_box = combo(a->controls, "FEC", 2, NULL, 0, -1);
     a->gi_box = combo(a->controls, "Guard interval", 3, guards, 4, a->gi);
-    a->constellation_box = combo(a->controls, "Constellatie", 4, constellations, 2, a->constellation);
-    a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS-uitvoer", &a->renderer_panel);
-    a->renderer_box = combo(a->renderer_panel, "Uitvoer", 0,
-        (const char *[]) {"VLC (cvlc)", "VLC met bediening", "FFplay", "Eigen programma", "MPEG-TS-bestand", "Embedded player (right panel)", "UDP stream (external player)"},
+    a->constellation_box = combo(a->controls, "Constellation", 4, constellations, 2, a->constellation);
+    a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS output", &a->renderer_panel);
+    a->renderer_box = combo(a->renderer_panel, "Output", 0,
+        (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)"},
         G_N_ELEMENTS(renderers), a->renderer);
-    a->renderer_program = entry_field(a->renderer_panel, "Programma / pad", 1, a, "paths", "custom_renderer");
-    a->renderer_args = entry_field(a->renderer_panel, "Argumenten", 2, a, "renderer", "args");
-    a->output_file = entry_field(a->renderer_panel, "MPEG-TS-bestand", 3, a, "renderer", "output_file");
+    a->renderer_program = entry_field(a->renderer_panel, "Program / path", 1, a, "paths", "custom_renderer");
+    a->renderer_args = entry_field(a->renderer_panel, "Arguments", 2, a, "renderer", "args");
+    a->output_file = entry_field(a->renderer_panel, "MPEG-TS file", 3, a, "renderer", "output_file");
     a->udp_enabled = gtk_check_button_new_with_label("Also send video/audio via UDP");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->udp_enabled),
         g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
@@ -1612,7 +1618,11 @@ static void create_mode_renderer(App *a) {
 static void gui(App *a) {
     source_defaults(a);
     if (!g_key_file_has_key(a->config, "session", "renderer", NULL)) a->renderer = RENDER_EMBEDDED;
-    if (!gtk_init_check(NULL, NULL)) fatal("Kan geen grafisch scherm openen. Gebruik --print-pipeline voor controle zonder GUI.");
+    /* Keep GTK's built-in dialogs and errors in the same language as the UI. */
+    setlocale(LC_ALL, "");
+    setlocale(LC_MESSAGES, "C");
+    gtk_disable_setlocale();
+    if (!gtk_init_check(NULL, NULL)) fatal("Cannot open a graphical display. Use --print-pipeline to check without a GUI.");
     apply_receiver_theme();
     a->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(a->window), "Linrad DVB · PE1ITR");
@@ -1649,11 +1659,11 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(top_bar),a->mode_summary,TRUE,TRUE,6);
     a->frequency_display = gtk_label_new("");
     gtk_widget_set_name(a->frequency_display, "frequency-display");
-    gtk_widget_set_tooltip_text(a->frequency_display, "Ontvangstfrequentie · ← / → afstemmen; bij Linrad stem je in Linrad af.");
+    gtk_widget_set_tooltip_text(a->frequency_display, "Receive frequency · ← / → to tune; when using Linrad, tune in Linrad.");
     gtk_box_pack_start(GTK_BOX(top_bar), a->frequency_display, FALSE, FALSE, 8);
     a->gain_display = gtk_label_new("");
     gtk_widget_set_name(a->gain_display, "gain-display");
-    gtk_widget_set_tooltip_text(a->gain_display, "↑ / ↓ gain hoger / lager · alleen bij directe SDR-invoer.");
+    gtk_widget_set_tooltip_text(a->gain_display, "↑ / ↓ increase / decrease gain · direct SDR input only.");
     gtk_box_pack_start(GTK_BOX(top_bar), a->gain_display, FALSE, FALSE, 8);
     a->power_button = gtk_button_new();
     gtk_widget_set_name(a->power_button, "receiver-power");
@@ -1680,7 +1690,7 @@ static void gui(App *a) {
     a->filter_box = a->iq_view.filter_toggle;
     a->scatter_box = gtk_toggle_button_new_with_label("TSscatterFix");
     gtk_widget_set_name(a->scatter_box,"spectrum-scatter");
-    atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix aan/uit");
+    atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix on/off");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
     ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls);
@@ -1714,11 +1724,11 @@ static void gui(App *a) {
     gtk_label_set_xalign(GTK_LABEL(a->status), 0);
     gtk_label_set_ellipsize(GTK_LABEL(a->status), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(a->lower), a->status, FALSE, FALSE, 0);
-    GtkWidget *diagnostics = gtk_expander_new("Opstartcommando / Log");
+    GtkWidget *diagnostics = gtk_expander_new("Startup command / Log");
     GtkWidget *diagnostic_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_add(GTK_CONTAINER(diagnostics), diagnostic_box);
     gtk_box_pack_start(GTK_BOX(a->lower), diagnostics, FALSE, FALSE, 0);
-    a->preview = text_panel(diagnostic_box, "Opstartcommando", 55);
+    a->preview = text_panel(diagnostic_box, "Startup command", 55);
     a->log = text_panel(diagnostic_box, "Log", 80);
     create_config(a);
     source_changed(a->source_box, a);
@@ -1758,7 +1768,7 @@ static void gui(App *a) {
 
 static int choice(const char *value, const char **choices, int n, const char *name) {
     for (int i = 0; i < n; ++i) if (!strcmp(value, choices[i])) return i;
-    fatal("Ongeldige %s: %s", name, value);
+    fatal("Invalid %s: %s", name, value);
 }
 
 static void load_session(App *a) {
@@ -1796,27 +1806,27 @@ int main(int argc, char **argv) {
     int sr = -1;
     GOptionEntry entries[] = {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
-        {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"IQ-bestand realtime afspelen (met JSON-metadata)","FILE"},
-        {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK of 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq of file", "SOURCE"},
-        {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Eigen configuratiebestand", "FILE"},
-        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 of DVB-T", "MODE"},
-        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbolrate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},
-        {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC passend bij standaard/constellatie (bijv. 3/4)", "FEC"},
-        {"gi", 0, 0, G_OPTION_ARG_STRING, &gi, "DVB-T: 1/32, 1/16, 1/8 of auto", "GI"},
-        {"no-scatterfix", 0, 0, G_OPTION_ARG_NONE, &no_scatter, "Opgeslagen Scatterfix-keuze uitschakelen", NULL},
-        {"scatterfix", 0, 0, G_OPTION_ARG_NONE, &scatter, "Scatterfix inschakelen", NULL},
-        {"print-pipeline", 0, 0, G_OPTION_ARG_NONE, &print, "Pipeline tonen zonder processen te starten", NULL},
-        {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Zonder GUI starten; stoppen met Ctrl+C", NULL}, {NULL}
+        {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
+        {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq or file", "SOURCE"},
+        {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
+        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
+        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},
+        {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC supported by the standard/constellation (e.g. 3/4)", "FEC"},
+        {"gi", 0, 0, G_OPTION_ARG_STRING, &gi, "DVB-T: 1/32, 1/16, 1/8 or auto", "GI"},
+        {"no-scatterfix", 0, 0, G_OPTION_ARG_NONE, &no_scatter, "Disable the saved ScatterFix setting", NULL},
+        {"scatterfix", 0, 0, G_OPTION_ARG_NONE, &scatter, "Enable ScatterFix", NULL},
+        {"print-pipeline", 0, 0, G_OPTION_ARG_NONE, &print, "Show the pipeline without starting processes", NULL},
+        {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Run without a GUI; stop with Ctrl+C", NULL}, {NULL}
     };
-    GOptionContext *context = g_option_context_new("- Linrad DVB ontvanger in C");
+    GOptionContext *context = g_option_context_new("- Linrad DVB receiver in C");
     g_option_context_add_main_entries(context, entries, NULL);
     GError *error = NULL;
     if (!g_option_context_parse(context, &argc, &argv, &error)) fatal("%s", error->message);
-    if (argc != 1 || (print && run)) fatal("Ongeldige argumenten; zie --help");
+    if (argc != 1 || (print && run)) fatal("Invalid arguments; see --help");
     if (!config) {
         char *exe = g_file_read_link("/proc/self/exe", &error);
-        if (!exe) fatal("Kan programmamap niet bepalen: %s", error->message);
+        if (!exe) fatal("Cannot determine the program directory: %s", error->message);
         char *dir = g_path_get_dirname(exe); config = g_build_filename(dir, "..", "linrad-dvb.ini", NULL);
         g_free(exe); g_free(dir);
     }
@@ -1833,28 +1843,28 @@ int main(int argc, char **argv) {
     if (source) a.source = choice(source, sources, G_N_ELEMENTS(sources), "input");
     if (iq_file && !select_iq_file(&a,iq_file,&error)) fatal("%s",error->message);
     if (standard) {
-        int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standaard");
+        int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standard");
         if (selected != a.standard) {
             a.standard = selected; a.constellation = 0; a.fec = 0;
             a.sr = a.standard == 2 ? 150000 : 125000;
         }
     }
     if (constellation) {
-        a.constellation = choice(constellation, constellations, 2, "constellatie");
+        a.constellation = choice(constellation, constellations, 2, "constellation");
         if (!fec && !valid_fec(&a, a.fec)) a.fec = a.constellation ? 1 : 0;
     }
     g_free(constellation);
-    if (a.constellation && a.standard != 1) fatal("8PSK vereist DVB-S2");
+    if (a.constellation && a.standard != 1) fatal("8PSK requires DVB-S2");
     if (fec) a.fec = choice(fec, fecs, G_N_ELEMENTS(fecs), "FEC");
-    if (!valid_fec(&a, a.fec)) fatal("Ongeldige FEC voor de gekozen standaard/constellatie");
+    if (!valid_fec(&a, a.fec)) fatal("Invalid FEC for the selected standard/constellation");
     if (gi) a.gi = choice(gi, guards, 4, "guard interval");
     if (sr != -1) a.sr = sr;
     const int *rates = a.standard == 2 ? terrestrial_rates : sat_rates;
     gboolean valid = FALSE;
     for (int i = 0; i < (a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !(a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Ongeldige SR %d voor %s", a.sr, standards[a.standard]);
-    if (scatter && no_scatter) fatal("Kies --scatterfix of --no-scatterfix");
+    if (!valid && !(a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;
     a.headless = run;

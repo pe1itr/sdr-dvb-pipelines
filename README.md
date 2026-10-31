@@ -76,13 +76,16 @@ blijven beschikbaar voor de oudere experimenten.
 
 Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
 GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD, FFmpeg
-(`libavcodec`, `libavformat`, `libavutil`, `libswscale`) en libVLC 3
+(`libavcodec`, `libavformat`, `libavutil`, `libswscale`), libzvbi (`zvbi-0.2`) en libVLC 3
 (inclusief de VLC-codecplugins)):
 
 ```bash
 make
 ./build/linrad_dvb
 ```
+
+Voor libzvbi zijn ook de ontwikkelbestanden nodig: `sudo dnf install zvbi-devel`
+op Fedora, of `sudo apt install libzvbi-dev` op Debian/Ubuntu.
 
 De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
@@ -202,12 +205,29 @@ tegelijk openstaan; sluiten van een venster onderbreekt de ontvangst niet.
 
 **EIT** toont het huidige en volgende programma uit de actual-transportstream
 present/following-tabel, met titel, korte en uitgebreide beschrijving en tijden in
-de lokale tijdzone. Het venster **Teletext** toont een klassiek zwart 4:3-tv-scherm.
-Bovenaan staan de zendernaam, een lokale klok en rechts het paginanummer **P100**.
-Een blauwe informatiebalk toont de ontvangststatus, met daaronder de pagina in de
-uitgezonden kleuren, vaste tekenposities, blokgrafiek, dubbele tekenhoogte en
-oorspronkelijke paginakop. De pagina schaalt met het venster mee. Ontvangen subpagina's
-van pagina 100 volgen de uitzending; er is geen paginabrowser.
+de lokale tijdzone. Het venster **Teletext** toont de uitgezonden pagina op een
+zwart 4:3-scherm: 40 kolommen en 25 rijen, inclusief de originele kop (rij 0)
+en onderste regel (rij 24). Het beeld bevat geen eigen zenderlogo, lokale klok,
+statusbalk of gegenereerde navigatietekst. Servicekeuze, ontvangststatus en de
+knop **Reveal** staan buiten het scherm. De pagina schaalt als geheel mee met
+het venster, met behoud van de beeldverhouding en scherpe bitmaptekens.
+Ontvangen subpagina's van pagina 100 volgen de uitzending; er is geen paginabrowser.
+
+De verwerking volgt [ETSI EN 300 706 V1.2.1](https://www.etsi.org/deliver/etsi_en/300700_300799/300706/01.02.01_60/en_300706v010201p.pdf)
+voor teletekst en [ETSI EN 300 472 V1.4.1](https://www.etsi.org/deliver/etsi_en/300400_300499/300472/01.04.01_60/en_300472v010401p.pdf)
+voor het DVB-transport. De bitmaptekens komen uit libzvbi: kleur- en
+achtergrondcodes, nationale tekensets, aaneengesloten/gescheiden mozaïeken,
+hold/release-mosaics en dubbele hoogte/breedte worden door de teletekstdecoder
+verwerkt. Verborgen tekst blijft verborgen tot **Reveal** wordt ingeschakeld.
+De normale knipperfunctie werkt ook zonder nieuwe TS-pakketten.
+Het exacte letterontwerp is volgens EN 300 706, bijlage G.2, een decoderkeuze;
+verschillende televisies kunnen daarom verschillende glyphs tonen.
+
+Dit is een zelfstandige paginaweergave, geen op video gesynchroniseerde
+ondertiteloverlay. De basispagina (Level 1/1.5) is het geteste weergaveprofiel.
+libzvbi verwerkt daarnaast beschikbare enhancements tot Level 3.5; volledige
+Level 2.5/3.5-conformiteit, zijpanelen en de aanvullende kleur-/faseknippermodi
+worden niet geclaimd.
 
 De informatie wordt ook verzameld als het venster gesloten is, bij DVB-S/S2/T,
 alle renderers en met Scatterfix uitgeschakeld. Bij meerdere services kiest de
@@ -229,13 +249,19 @@ De TS-informatieverwerking draait op een eigen thread met maximaal 1 MiB wachten
 TS-data. Pakketverlies of overloop reset de opbouw van secties en teletekst; de
 laatst weergegeven inhoud blijft staan. CRC-foute SI-secties worden genegeerd.
 De oorspronkelijke TS-uitvoer blijft byte voor byte behouden. Teletekst gebruikt
-FFmpeg's `libzvbi_teletextdec`; als de gekoppelde FFmpeg zonder libzvbi is gebouwd,
-meldt de popup dat de decoder ontbreekt en blijft EIT beschikbaar.
+libzvbi rechtstreeks, omdat FFmpeg's bitmapinterface conceal altijd onthult en
+flash permanent inschakelt. De parser controleert de PES-header, EBU-dataidentifier,
+data-unitlengtes en framingcode voordat de gegevens naar de decoder gaan.
+Zowel gewone teletekstunits (0x02) als ondertitelunits (0x03) worden verwerkt;
+stuffing en onbekende units worden overgeslagen. Bij een decoderinitialisatiefout
+blijft EIT beschikbaar.
 
 `make test-ts-info` test de SI-parser en teletekstdecoder met gegenereerde
 transportstreams, inclusief tekstcoderingen, uitgebreide beschrijvingen,
-servicewissels, pakketverlies en pagina-updates. De GTK-smoketest controleert de
-afzonderlijke vensters zonder tabbladen, de teletekstkop, servicekeuze en reset tijdens
+servicewissels, pakketverlies en pagina-updates. Pixeltests controleren conceal,
+flash, attribuuttiming, mozaïeken, dubbele tekengrootte, nationale tekens,
+koponderdrukking en rij 24. De GTK-smoketest controleert de afzonderlijke vensters,
+de 4:3-pagina zonder extra widgets in het beeld, servicekeuze en reset tijdens
 achtergrondverwerking.
 
 ### Ingebouwde DVB-T-decoder en verdeling van het werk

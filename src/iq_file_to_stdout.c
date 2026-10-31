@@ -68,24 +68,24 @@ int main(int argc, char **argv) {
     char *path=NULL, *format=NULL;
     int header=0; Replay r={0};
     GOptionEntry entries[]={
-        {"in",0,0,G_OPTION_ARG_FILENAME,&path,"IQ-bestand","FILE"},
-        {"sample-rate",0,0,G_OPTION_ARG_INT,&r.rate,"Samples per seconde","HZ"},
-        {"input-format",0,0,G_OPTION_ARG_STRING,&format,"s16, u8 of cf32 (little-endian IQ)","FORMAT"},
-        {"header-bytes",0,0,G_OPTION_ARG_INT,&header,"Bytes overslaan aan het begin","N"},
-        {"filter-bandwidth",0,0,G_OPTION_ARG_DOUBLE,&r.bandwidth,"Totale IQ-bandbreedte; 0=bypass","HZ"},
-        {"control-stdin",0,0,G_OPTION_ARG_NONE,&r.control,"Live bandwidth-commando's op stdin",NULL}, {NULL}
+        {"in",0,0,G_OPTION_ARG_FILENAME,&path,"IQ file","FILE"},
+        {"sample-rate",0,0,G_OPTION_ARG_INT,&r.rate,"Samples per second","HZ"},
+        {"input-format",0,0,G_OPTION_ARG_STRING,&format,"s16, u8 or cf32 (little-endian IQ)","FORMAT"},
+        {"header-bytes",0,0,G_OPTION_ARG_INT,&header,"Bytes to skip at the start","N"},
+        {"filter-bandwidth",0,0,G_OPTION_ARG_DOUBLE,&r.bandwidth,"Total IQ bandwidth; 0=bypass","HZ"},
+        {"control-stdin",0,0,G_OPTION_ARG_NONE,&r.control,"Live bandwidth commands on stdin",NULL}, {NULL}
     };
-    GOptionContext *options=g_option_context_new("- IQ-bestand realtime naar stdout");
+    GOptionContext *options=g_option_context_new("- Play an IQ file to stdout in real time");
     g_option_context_add_main_entries(options,entries,NULL);
     GError *error=NULL; guint64 samples=0;
     if (!g_option_context_parse(options,&argc,&argv,&error)) goto invalid;
     if (!format) format=g_strdup("s16");
     if (argc!=1 || !path || r.rate<1 || r.rate>100000000 || !iq_bandfilter_valid(r.rate,r.bandwidth)) {
-        g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Ongeldig bestand, samplerate of bandbreedte"); goto invalid;
+        g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Invalid file, sample rate or bandwidth"); goto invalid;
     }
     if (!iq_file_validate(path,format,header,&samples,&error)) goto invalid;
     FILE *file=fopen(path,"rb");
-    if (!file || fseeko(file,header,SEEK_SET)) { perror("IQ-bestand openen"); if (file) fclose(file); return 1; }
+    if (!file || fseeko(file,header,SEEK_SET)) { perror("Open IQ file"); if (file) fclose(file); return 1; }
     struct sigaction sa={.sa_handler=stop_signal}; sigemptyset(&sa.sa_mask);
     sigaction(SIGINT,&sa,NULL); sigaction(SIGTERM,&sa,NULL); signal(SIGPIPE,SIG_IGN);
     int flags=fcntl(STDOUT_FILENO,F_GETFL);
@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
         if (flags<0 || fcntl(STDIN_FILENO,F_SETFL,flags|O_NONBLOCK)<0) { perror("stdin"); fclose(file); return 1; }
     }
     r.filter=iq_bandfilter_create(r.rate,r.bandwidth);
-    if (!r.filter) { fprintf(stderr,"[iq-file] Kan IQ-filter niet maken\n"); fclose(file); return 1; }
+    if (!r.filter) { fprintf(stderr,"[iq-file] Cannot create IQ filter\n"); fclose(file); return 1; }
     gboolean u8=!strcmp(format,"u8"), cf32=!strcmp(format,"cf32");
     size_t stride=u8 ? 2 : cf32 ? 8 : 4, chunk=CLAMP(r.rate/100,1,8192);
     uint8_t input[8192*8], converted[8192*4];
@@ -104,13 +104,13 @@ int main(int argc, char **argv) {
     fprintf(stderr,"[iq-file] %s: %s, %d samples/s, %.3f s, realtime\n",path,format,r.rate,(double)samples/r.rate);
     while (!stopping && sent<samples) {
         size_t count=(size_t)MIN((guint64)chunk,samples-sent);
-        if (fread(input,stride,count,file)!=count) { fprintf(stderr,"[iq-file] Onverwacht einde of leesfout\n"); result=1; break; }
+        if (fread(input,stride,count,file)!=count) { fprintf(stderr,"[iq-file] Unexpected end of file or read error\n"); result=1; break; }
         uint8_t *out=input;
         if (cf32) {
             for (size_t i=0; i<count*2; ++i) {
                 uint32_t bits; float value; int16_t sample;
                 memcpy(&bits,input+i*4,4); bits=GUINT32_FROM_LE(bits); memcpy(&value,&bits,4);
-                if (!isfinite(value)) { fprintf(stderr,"[iq-file] Niet-eindige float in IQ-bestand\n"); result=1; break; }
+                if (!isfinite(value)) { fprintf(stderr,"[iq-file] Non-finite float in IQ file\n"); result=1; break; }
                 value=fmaxf(-1,fminf(1,value)); sample=(int16_t)lrintf(value*32767.0f);
                 converted[i*2]=(uint16_t)sample&255; converted[i*2+1]=(uint16_t)sample>>8;
             }
@@ -128,11 +128,11 @@ int main(int argc, char **argv) {
         if (now>deadline+100000) { epoch+=now-deadline; deadline=now; }
         if (!wait_until(&r,deadline)) { result=1; break; }
     }
-    fprintf(stderr,"[iq-file] %s: %" G_GUINT64_FORMAT " samples, %.3f s verstreken\n",
-        stopping ? "gestopt" : result ? "fout" : "einde bestand",sent,(g_get_monotonic_time()-start)/1e6);
+    fprintf(stderr,"[iq-file] %s: %" G_GUINT64_FORMAT " samples, %.3f s elapsed\n",
+        stopping ? "stopped" : result ? "error" : "end of file",sent,(g_get_monotonic_time()-start)/1e6);
     iq_bandfilter_destroy(r.filter); fclose(file);
     g_free(path); g_free(format); g_option_context_free(options); return result;
 invalid:
-    fprintf(stderr,"[iq-file] %s\n",error ? error->message : "Ongeldige argumenten");
+    fprintf(stderr,"[iq-file] %s\n",error ? error->message : "Invalid arguments");
     g_clear_error(&error); g_free(path); g_free(format); g_option_context_free(options); return 2;
 }

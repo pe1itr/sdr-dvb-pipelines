@@ -231,7 +231,7 @@ class PipelineTests(unittest.TestCase):
             p = subprocess.run([UI, "--config", str(path), "--source", "sdriq", "--print-pipeline"],
                                capture_output=True, timeout=3)
             self.assertNotEqual(p.returncode, 0)
-            self.assertIn(b"SDR-IQ samplerate", p.stderr)
+            self.assertIn(b"SDR-IQ sample rate", p.stderr)
 
     def test_saved_session_and_cli_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -303,7 +303,9 @@ class PipelineTests(unittest.TestCase):
     def test_invalid_selection(self):
         for args in (["--standard", "DVB-T", "--sr", "36000"], ["--fec", "1.2"],
                      ["--sr", "0"], ["--gi", "1/4"], ["--standard", "bogus"]):
-            p = subprocess.run([UI, "--print-pipeline", *args], capture_output=True, timeout=3)
+            # File replay allows custom symbol rates; do not inherit that source.
+            p = subprocess.run([UI, "--source", "linrad", "--print-pipeline", *args],
+                               capture_output=True, timeout=3)
             self.assertNotEqual(p.returncode, 0)
 
     def config(self, tmp):
@@ -517,7 +519,7 @@ class LifecycleTests(PipelineTests):
             try:
                 _, err = p.communicate(timeout=5)
                 self.assertEqual(p.returncode, 1, err.decode())
-                self.assertIn(b"Kies een nieuwe bestandsnaam", err)
+                self.assertIn(b"Choose a new filename", err)
                 self.assertEqual(output.read_bytes(), contents)
             finally:
                 self.cleanup_process(p, tmp)
@@ -531,7 +533,7 @@ class LifecycleTests(PipelineTests):
                 Path(tmp, "fail").touch()
                 _, err = p.communicate(timeout=5)
                 self.assertEqual(p.returncode, 1, err.decode())
-                self.assertIn(b"exitcode 17", err)
+                self.assertIn(b"exit code 17", err)
                 self.assert_stopped(tmp, int(cfg["linrad"]["port"]))
             finally:
                 self.cleanup_process(p, tmp)
