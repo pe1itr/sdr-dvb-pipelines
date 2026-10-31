@@ -16,15 +16,15 @@ struct IQOutput {
     unsigned char *data;
     size_t capacity, head, count, peak;
     uint64_t accepted, written, dropped;
-    int fd, flags, stop, error;
+    int fd, flags, stop, error, drain;
 };
 
 static void *writer(void *opaque) {
     IQOutput *q = opaque;
     pthread_mutex_lock(&q->mutex);
     while (!q->stop) {
-        while (!q->count && !q->stop) pthread_cond_wait(&q->changed, &q->mutex);
-        if (q->stop) break;
+        while (!q->count && !q->stop && !q->drain) pthread_cond_wait(&q->changed, &q->mutex);
+        if (q->stop || (!q->count && q->drain)) break;
         /* Occupied bytes remain reserved while the mutex is released. */
         size_t available = q->capacity-q->head;
         if (available > q->count) available = q->count;
@@ -102,12 +102,18 @@ int iq_output_error(IQOutput *q) {
     pthread_mutex_unlock(&q->mutex); return error;
 }
 
-void iq_output_destroy(IQOutput *q) {
-    if (!q) return;
-    pthread_mutex_lock(&q->mutex); q->stop = 1;
+static int finish(IQOutput *q, int drain) {
+    if (!q) return 0;
+    pthread_mutex_lock(&q->mutex);
+    if (drain) q->drain = 1; else q->stop = 1;
     pthread_cond_signal(&q->changed); pthread_mutex_unlock(&q->mutex);
     pthread_join(q->thread, NULL);
     fcntl(q->fd, F_SETFL, q->flags);
     pthread_cond_destroy(&q->changed); pthread_mutex_destroy(&q->mutex);
+    int error = q->error;
     free(q->data); free(q);
+    return error;
 }
+
+void iq_output_destroy(IQOutput *q) { (void)finish(q, 0); }
+int iq_output_finish(IQOutput *q) { return finish(q, 1); }

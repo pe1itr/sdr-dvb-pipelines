@@ -9,6 +9,7 @@
 #include "tune_control.h"
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
+#include "iq_record.h"
 #include <fcntl.h>
 #include <errno.h>
 #include <math.h>
@@ -49,11 +50,12 @@ int main(int argc, char **argv) {
     double rate = 10000000, freq = 437000000, gain = 30, actual = 0;
     double bandwidth = 0;
     int control_stdin = 0;
-    TuneControl control = {0};
+    IQRecord capture = {0};
+    TuneControl control = {.command=iq_record_command, .command_data=&capture};
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz]\nControl stdin: frequency Hz, gain DB, or bandwidth HZ (0 = bypass).\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz]\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
@@ -161,7 +163,9 @@ int main(int argc, char **argv) {
     started = 1;
     double last_report = monotonic_seconds();
     IQOutputStats previous = {0};
+    capture.rate = actual;
     while (!stopped) {
+        iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
                 sdriq ? 500 : hackrf ? 1000000 : 70000000,
@@ -229,6 +233,7 @@ int main(int argc, char **argv) {
             }
         }
         if (sdriq) iq_cf32_to_s16(float_iq, iq, got);
+        iq_record_feed(&capture, hackrf && u8 ? (void *)packed : (void *)iq, got, hackrf && u8 ? 2 : 0);
         if (u8) {
             if (hackrf) iq_cs8_to_u8(packed, got);
             else iq_cs16_to_u8(iq, packed, got);
@@ -255,6 +260,7 @@ int main(int argc, char **argv) {
     }
     result = 0;
 done:
+    iq_record_stop(&capture);
     if (output) {
         IQOutputStats stats; iq_output_stats(output, &stats);
         fprintf(stderr, "[SDR] Total IQ samples dropped for slow decoder: %llu\n",

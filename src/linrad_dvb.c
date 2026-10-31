@@ -48,6 +48,10 @@ typedef struct {
     int stage_count;
     GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *constellation_box;
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
+    GtkWidget *record_button;
+    gboolean recording, record_pending;
+    char record_log_line[1024];
+    size_t record_log_used;
     GMainLoop *loop;
     IQView iq_view;
     DecoderView decoder_view;
@@ -329,13 +333,70 @@ static void log_text(App *a, const char *text) {
     gtk_text_view_scroll_to_iter(GTK_TEXT_VIEW(a->log), &end, 0, FALSE, 0, 0);
 }
 
+static void record_toggled(GtkToggleButton *button, gpointer data);
+
+static void record_refresh(App *a) {
+    if (!a->record_button) return;
+    g_signal_handlers_block_by_func(a->record_button, record_toggled, a);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->record_button), a->recording);
+    g_signal_handlers_unblock_by_func(a->record_button, record_toggled, a);
+    gtk_button_set_label(GTK_BUTTON(a->record_button), a->record_pending ? "IQ · waiting…" :
+        a->recording ? "● Stop IQ" : "● Record IQ");
+    gtk_widget_set_sensitive(a->record_button,
+        a->source != SOURCE_FILE && a->running && !a->stopping && !a->record_pending && a->tune_fd >= 0);
+    gtk_widget_set_tooltip_text(a->record_button, a->source == SOURCE_FILE ?
+        "IQ recording is unavailable during file playback." : !a->running ?
+        "Start SDR to record full-band s16 IQ." : "Toggle full-band s16 IQ recording in the configuration directory.");
+}
+
+static void record_toggled(GtkToggleButton *button, gpointer data) {
+    App *a = data;
+    if (a->source == SOURCE_FILE || !a->running || a->stopping || a->record_pending || a->tune_fd < 0) {
+        record_refresh(a); return;
+    }
+    char *command;
+    if (gtk_toggle_button_get_active(button)) {
+        const char *section = sources[a->source];
+        double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
+        if (hardware_source(a)) frequency += g_key_file_get_double(a->config, section, "lo_offset", NULL);
+        int rate = integer_setting(a, section, "sample_rate", 1, 100000000);
+        GDateTime *now = g_date_time_new_now_utc();
+        char *stamp = g_date_time_format(now, "%Y%m%dT%H%M%S.%fZ");
+        command = g_strdup_printf("record %.0f linrad-dvb-%s-%.0f-%d.iq\n", frequency, stamp, frequency, rate);
+        g_free(stamp); g_date_time_unref(now);
+    } else command = g_strdup("record-stop\n");
+    ssize_t sent;
+    do { sent = write(a->tune_fd, command, strlen(command)); } while (sent < 0 && errno == EINTR);
+    if (sent == (ssize_t)strlen(command)) a->record_pending = TRUE;
+    else status(a, "Cannot send IQ recording command; try again.");
+    g_free(command); record_refresh(a);
+}
+
+/* stderr shares a pipe with decoder logs; retain partial lines across reads. */
+static void record_log(App *a, const char *text, size_t length) {
+    for (size_t i = 0; i < length; ++i) {
+        if (text[i] == '\n') {
+            a->record_log_line[a->record_log_used] = 0;
+            const char *line = a->record_log_line;
+            if (g_str_has_prefix(line, "[iq-record] ")) {
+                a->recording = a->running && !a->stopping && g_str_has_prefix(line, "[iq-record] started ");
+                a->record_pending = FALSE;
+                status(a, line + strlen("[iq-record] "));
+                record_refresh(a);
+            }
+            a->record_log_used = 0;
+        } else if (a->record_log_used < sizeof(a->record_log_line)-1)
+            a->record_log_line[a->record_log_used++] = text[i];
+    }
+}
+
 static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
     App *a = data;
     char buf[4097]; ssize_t n;
     /* Bound each callback so continuous decoder logging cannot starve Stop. */
     for (int i = 0; i < 16; ++i) {
         n = read(fd, buf, sizeof(buf) - 1);
-        if (n > 0) { buf[n] = 0; log_text(a, buf); continue; }
+        if (n > 0) { buf[n] = 0; log_text(a, buf); record_log(a, buf, n); continue; }
         if (n < 0 && errno == EINTR) continue;
         if (!n || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { close(fd); return G_SOURCE_REMOVE; }
         break;
@@ -354,6 +415,7 @@ static void scatter_refresh(App *a) {
 
 static void power_refresh(App *a) {
     scatter_refresh(a);
+    record_refresh(a);
     if (!a->power_button) return;
     GtkStyleContext *style = gtk_widget_get_style_context(a->power_button);
     const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error"};
@@ -379,6 +441,7 @@ static void finish_if_stopped(App *a) {
     if (a->video_view.area) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
+    a->recording = a->record_pending = FALSE;
     if (!a->exit_code) status(a, a->replay_eof ? "IQ file playback complete" : "Stopped");
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, TRUE);
@@ -471,6 +534,7 @@ static void child_setup(gpointer unused) {
 
 static void start_pipeline(App *a) {
     if (a->running) return;
+    a->record_log_used = 0;
     build_pipeline(a); a->exit_code = 0;
     if (internal_player(a) && !a->video_view.area) {
         a->exit_code = 1;
@@ -1908,6 +1972,12 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(power_content), a->power_label, TRUE, TRUE, 0);
     gtk_container_add(GTK_CONTAINER(a->power_button), power_content);
     gtk_box_pack_end(GTK_BOX(top_bar), a->power_button, FALSE, FALSE, 0);
+    a->record_button = gtk_toggle_button_new_with_label("● Record IQ");
+    gtk_widget_set_name(a->record_button, "iq-record");
+    gtk_widget_set_margin_top(a->record_button, 3);
+    gtk_widget_set_margin_bottom(a->record_button, 3);
+    gtk_box_pack_end(GTK_BOX(top_bar), a->record_button, FALSE, FALSE, 0);
+    g_signal_connect(a->record_button, "toggled", G_CALLBACK(record_toggled), a);
     power_refresh(a);
     g_signal_connect(config_item, "activate", G_CALLBACK(show_config), a);
     g_signal_connect(about_item, "activate", G_CALLBACK(show_about), a);

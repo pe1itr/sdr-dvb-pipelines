@@ -2,6 +2,7 @@
 import configparser
 import importlib.util
 import itertools
+import json
 import os
 from pathlib import Path
 import select
@@ -53,6 +54,66 @@ def wait_for(predicate, timeout=5):
 
 
 class ReceiverTests(unittest.TestCase):
+    def test_live_iq_record_toggle_preserves_full_band_s16(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            port = free_port()
+            p = subprocess.Popen([RX, "--port", str(port), "--sample-rate", "250000",
+                                  "--control-stdin", "--u8", "--filter-bandwidth", "40000"],
+                                 cwd=tmp, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, bufsize=0)
+            self.addCleanup(lambda: p.poll() is None and p.kill())
+
+            def wait_log(marker):
+                data = b""
+                deadline = time.monotonic() + 4
+                while marker not in data:
+                    ready, _, _ = select.select([p.stderr], [], [], max(0, deadline - time.monotonic()))
+                    self.assertTrue(ready, data.decode())
+                    chunk = os.read(p.stderr.fileno(), 4096)
+                    self.assertTrue(chunk, data.decode())
+                    data += chunk
+                return data
+
+            def command(text, marker):
+                p.stdin.write(text.encode() + b"\n")
+                return wait_log(marker)
+
+            payload = struct.pack("<8h", -32768, 32767, -12345, 6789, 1, -1, 0, 1234)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+                def send():
+                    sender.sendto(bytes(24) + payload, ("127.0.0.1", port))
+                    read_exact(p.stdout, len(payload) // 2)
+
+                try:
+                    wait_log(b"[linrad] listening")
+                    send()  # No recording before the toggle.
+                    first = "linrad-dvb-20261101T000000.000001Z-144600000-250000.iq"
+                    command(f"record 144600000 {first}", b"[iq-record] started")
+                    send()
+                    # Commands also work without incoming UDP packets.
+                    command("record-stop", b"[iq-record] stopped")
+                    self.assertEqual(Path(tmp, first).read_bytes(), payload)
+                    metadata = json.loads(Path(tmp, first + ".json").read_text())
+                    self.assertEqual(metadata["format"], "cs16_le")
+                    self.assertEqual(metadata["sample_rate_hz"], 250000)
+                    self.assertEqual(metadata["center_frequency_hz"], 144600000)
+                    send()
+                    self.assertEqual(Path(tmp, first).read_bytes(), payload)
+                    command(f"record 144600000 {first}", b"[iq-record] error")
+                    self.assertEqual(Path(tmp, first).read_bytes(), payload)
+                    second = first.replace("000001Z", "000002Z")
+                    command(f"record 144600000 {second}", b"[iq-record] started")
+                    send()
+                    p.terminate()
+                    _, err = p.communicate(timeout=4)
+                    self.assertEqual(p.returncode, 0, err.decode())
+                    self.assertIn(b"[iq-record] stopped", err)
+                    self.assertEqual(Path(tmp, second).read_bytes(), payload)
+                finally:
+                    if p.poll() is None:
+                        p.kill()
+                        p.communicate()
+
     def receive(self, packets, expected, args=(), cwd=None):
         port = free_port()
         p = subprocess.Popen([RX, "--port", str(port), *args], cwd=cwd,

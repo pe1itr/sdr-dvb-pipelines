@@ -6,10 +6,15 @@
 #include <string.h>
 #include <unistd.h>
 
-typedef struct { char line[80]; unsigned used; int discard; } TuneControl;
+typedef struct {
+    char line[256]; unsigned used; int discard;
+    void (*command)(void *data, const char *line);
+    void *command_data;
+} TuneControl;
 /* Nonblocking lines: frequency in Hz, or "gain DB". Return bit 1 for
  * frequency, bit 2 for gain, bit 4 for "bandwidth HZ" (0 = bypass). Keep the latest complete valid
- * request; bound work so keyboard repeat cannot starve reception. */
+ * request; bound work so keyboard repeat cannot starve reception.
+ * Optional recording commands are dispatched in order through the callback. */
 static inline int tune_control_read(TuneControl *c, int fd, double low, double high, double *frequency,
         double gain_low, double gain_high, double gain_step, double *gain,
         double sample_rate, double *bandwidth) {
@@ -21,6 +26,8 @@ static inline int tune_control_read(TuneControl *c, int fd, double low, double h
         if (n <= 0) break;
         if (ch == '\n') {
             c->line[c->used] = 0;
+            if (!c->discard && c->command && !strncmp(c->line, "record", 6))
+                c->command(c->command_data, c->line);
             char *end;
             errno = 0;
             int is_gain = !strncmp(c->line, "gain ", 5);

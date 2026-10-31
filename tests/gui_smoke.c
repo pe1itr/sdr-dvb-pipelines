@@ -11,6 +11,61 @@ static void assert_no_tabs(GtkWidget *widget) {
     g_list_free(children);
 }
 
+static void exercise_record_controls(App *a) {
+    g_assert_false(a->running);
+    g_assert_false(gtk_widget_get_sensitive(a->record_button));
+    g_assert_true(gtk_widget_get_parent(a->record_button) == gtk_widget_get_parent(a->power_button));
+    GtkAllocation record_position, power_position;
+    gtk_widget_get_allocation(a->record_button, &record_position);
+    gtk_widget_get_allocation(a->power_button, &power_position);
+    g_assert_cmpint(record_position.x + record_position.width, <=, power_position.x);
+    int source = a->source, fds[2];
+    g_assert_cmpint(pipe(fds), ==, 0);
+    g_assert_true(g_unix_set_fd_nonblocking(fds[0], TRUE, NULL));
+    a->running = TRUE; a->tune_fd = fds[1]; a->source = 0;
+    record_refresh(a);
+    g_assert_true(gtk_widget_get_sensitive(a->record_button));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->record_button), TRUE);
+    char command[256] = {0};
+    ssize_t n = read(fds[0], command, sizeof(command)-1);
+    g_assert_cmpint(n, >, 0);
+    g_assert_nonnull(strstr(command, " linrad-dvb-"));
+    char *suffix = g_strdup_printf("-%.0f-%d.iq\n",
+        g_key_file_get_double(a->config, "linrad", "frequency", NULL),
+        g_key_file_get_integer(a->config, "linrad", "sample_rate", NULL));
+    g_assert_true(g_str_has_suffix(command, suffix)); g_free(suffix);
+    g_assert_true(a->record_pending);
+    g_assert_false(gtk_widget_get_sensitive(a->record_button));
+    const char *first = "unrelated log\n[iq-rec", *last = "ord] started test.iq\n";
+    record_log(a, first, strlen(first));
+    g_assert_false(a->recording);
+    record_log(a, last, strlen(last));
+    g_assert_true(a->recording);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->record_button)));
+    g_assert_true(gtk_widget_get_sensitive(a->record_button));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->record_button), FALSE);
+    memset(command, 0, sizeof(command));
+    g_assert_cmpint(read(fds[0], command, sizeof(command)-1), >, 0);
+    g_assert_cmpstr(command, ==, "record-stop\n");
+    const char *stopped = "[iq-record] stopped test.iq\n";
+    record_log(a, stopped, strlen(stopped));
+    g_assert_false(a->recording); g_assert_false(a->record_pending);
+    a->recording = TRUE; a->record_pending = TRUE;
+    const char *failed = "[iq-record] error Disk full\n";
+    record_log(a, failed, strlen(failed));
+    g_assert_false(a->recording); g_assert_false(a->record_pending);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->record_button)));
+    a->source = SOURCE_FILE;
+    record_refresh(a);
+    g_assert_false(gtk_widget_get_sensitive(a->record_button));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->record_button), TRUE);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->record_button)));
+    g_assert_cmpint(read(fds[0], command, sizeof(command)), ==, -1);
+    a->source = source; a->running = FALSE; a->tune_fd = -1;
+    close(fds[0]); close(fds[1]); record_refresh(a);
+    status(a, "");
+}
+
 static gboolean constellation_green_at(DecoderView *v, double re, double im) {
     int w=gtk_widget_get_allocated_width(v->area), h=gtk_widget_get_allocated_height(v->area);
     double size=MIN(w,h), scale=size/(4*.70710678);
@@ -634,6 +689,7 @@ static gboolean exercise(gpointer data) {
         exercise_scatter_view(a);
         exercise_decoder_view(a);
         exercise_file_selection(a);
+        exercise_record_controls(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
         g_assert_true(gtk_widget_get_parent(a->gain_display) == gtk_widget_get_parent(a->power_button));

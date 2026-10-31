@@ -3,7 +3,9 @@
 #include <fcntl.h>
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
+#include "iq_record.h"
 #include "tune_control.h"
+#include <poll.h>
 #include <errno.h>
 #include <getopt.h>
 #include <glib.h>
@@ -85,7 +87,8 @@ int main(int argc, char **argv) {
     int port = 50000, skip = 24, bufsize = 8192, u8 = 0, offset = 128, verbose = 0, record_stdout = 0;
     double scale = 256, gain = 1, sample_rate = 0, bandwidth = 0;
     int control_stdin = 0;
-    TuneControl control = {0};
+    IQRecord capture = {0};
+    TuneControl control = {.command=iq_record_command, .command_data=&capture};
     size_t limit = 0;
     enum { IP = 256, PORT, SKIP, BUFSIZE, U8, SCALE, OFFSET, GAIN, MEASURE, RECORD, PREFIX, STDOUT, VERBOSE, SAMPLE_RATE, FILTER, CONTROL };
     const struct option opts[] = {
@@ -134,7 +137,7 @@ int main(int argc, char **argv) {
                  "  --verbose           Packet counters on stderr\n"
                  "  --sample-rate Hz    Required for IQ filtering (no resampling)\n"
                  "  --filter-bandwidth Hz  Total FIR width; 0=bypass\n"
-                 "  --control-stdin     Accept bandwidth Hz commands on stdin");
+                 "  --control-stdin     Accept bandwidth Hz, record FREQUENCY_HZ BASENAME, record-stop");
             return 0;
         default: return 2;
         }
@@ -192,12 +195,8 @@ int main(int argc, char **argv) {
         if (record) fclose(record);
         g_free(packet); g_free(output); close(sock); return 1;
     }
+    capture.rate = sample_rate;
     while (!stopping) {
-        ssize_t received = recv(sock, packet, bufsize, MSG_TRUNC);
-        if (received < 0) {
-            if (errno == EINTR) continue;
-            perror("recv"); result = 1; break;
-        }
         if (control_stdin) {
             double unused = 0, requested_bw = bandwidth;
             int changed = tune_control_read(&control, STDIN_FILENO, 1, 0, &unused,
@@ -208,6 +207,16 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "[linrad] IQ filter width %.0f Hz (0=bypass); sample rate unchanged\n", bandwidth);
             }
         }
+        iq_record_feed(&capture, NULL, 0, 0);
+        struct pollfd ready = {.fd=sock, .events=POLLIN};
+        int polled = poll(&ready, 1, 100);
+        if (polled < 0 && errno != EINTR) { perror("poll"); result = 1; break; }
+        if (polled <= 0) continue;
+        ssize_t received = recv(sock, packet, bufsize, MSG_TRUNC);
+        if (received < 0) {
+            if (errno == EINTR) continue;
+            perror("recv"); result = 1; break;
+        }
         ++packets;
         if (received <= skip || received > bufsize) {
             ++dropped;
@@ -216,6 +225,7 @@ int main(int argc, char **argv) {
         }
         size_t n = ((size_t)received - skip) & ~(size_t)1;
         const uint8_t *payload = packet + skip;
+        iq_record_feed(&capture, payload, n / 4, 0);
         size_t out_n = u8 ? n / 2 : n;
         input_bytes += n;
         if (limit && in_measured < in_target) {
@@ -254,6 +264,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)packets, (unsigned long long)dropped,
                     (unsigned long long)input_bytes, (unsigned long long)output_bytes);
     }
+    iq_record_stop(&capture);
     if (record && fclose(record)) { perror("close recording"); result = 1; }
     fprintf(stderr, "[stop] pkts=%llu dropped=%llu in_bytes=%llu out_bytes=%llu\n",
             (unsigned long long)packets, (unsigned long long)dropped,

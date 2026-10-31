@@ -116,6 +116,22 @@ ontvangst. Tijdens stoppen is de knop geel en tijdelijk geblokkeerd; na een fout
 wordt hij rood en kun je opnieuw starten. Onderaan staan de status en het
 uitklapbare **Opstartcommando / Log**.
 
+Links van **Start SDR** staat **Record IQ**. Start eerst de live ontvangst en
+schakel deze knop in om de volledige ontvangen IQ-band op te nemen; de rode
+**Stop IQ**-knop stopt de opname. Stoppen of sluiten van de ontvanger sluit ook
+de opname af. Bij **Bestand (IQ)** is de opnameknop uitgeschakeld.
+De bestanden staan naast het INI-bestand en heten
+`linrad-dvb-[UTC timestamp]-[frequentie in Hz]-[samplerate in Hz].iq`, bijvoorbeeld
+`linrad-dvb-20261101T001530.123456Z-144600000-250000.iq`.
+Het formaat is interleaved I,Q, signed 16-bit little-endian, zonder header.
+Er wordt opgenomen vóór het decoderfilter en vóór de conversie naar u8; native
+8-bit SDR-samples worden naar s16 geschaald. Een bijbehorend `.iq.json`-bestand
+bevat formaat, samplerate en de weergegeven ontvangstfrequentie bij het starten
+(inclusief LO-offset bij directe SDR-invoer). Daardoor herkent de bestandsweergave
+deze instellingen automatisch. Een nieuwe opname overschrijft geen bestaande
+bestanden. Bij een schrijffout of een volle opnamebuffer stopt de opname met een
+melding; de ontvangst blijft doorlopen.
+
 - **Input**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
   device-argumenten, antenne en UHD-images;
   bij Linrad het UDP-adres, de poort, de headerlengte en de frequentie voor de schaal.

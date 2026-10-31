@@ -13,5 +13,7 @@ IQOutput *iq_output_create(int fd, size_t block_bytes, size_t slots);
 /* 0 = queued, 1 = full (this input block dropped, existing queue preserved), -1 = writer failed. */
 int iq_output_push(IQOutput *q, const void *data, size_t bytes);
 int iq_output_error(IQOutput *q);
+/* Drain a regular-file queue and destroy it; returns an errno value, or zero. */
+int iq_output_finish(IQOutput *q);
 void iq_output_destroy(IQOutput *q);
 #endif
