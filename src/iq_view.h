@@ -58,12 +58,13 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     double rate=v->rate;
     if(rate>0) {
-        /* Mark every 25 kHz on the waterfall's absolute frequency axis. */
+        /* Use wider tick spacing at higher sample rates. */
+        double tick_step=rate>=20000000 ? 2000000 : rate>6000000 ? 1000000 : 25000;
         double low=v->center-rate/2, high=v->center+rate/2;
         cairo_save(cr);
         cairo_set_antialias(cr,CAIRO_ANTIALIAS_NONE);
         cairo_set_source_rgb(cr,1,1,1); cairo_set_line_width(cr,1);
-        for (double frequency=ceil(low/25000)*25000; frequency<=high; frequency+=25000) {
+        for (double frequency=ceil(low/tick_step)*tick_step; frequency<=high; frequency+=tick_step) {
             double x=trunc(left+(frequency-low)/rate*(right-left))+.5;
             cairo_move_to(cr,x,wf+wh); cairo_line_to(cr,x,wf+wh+6);
         }
