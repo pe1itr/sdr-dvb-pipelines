@@ -19,6 +19,8 @@
 #define LEANSDR_BCH_H
 
 #include "leansdr/discrmath.h"
+#include <array>
+#include <vector>
 
 namespace leansdr {
 
@@ -51,6 +53,16 @@ namespace leansdr {
       truncpolys = new bitvect<T,DP>[npolys];
       for ( int i=0; i<npolys; ++i )
 	truncpolys[i].copy(polys[i]);
+      // Byte-at-a-time polynomial division for DVB-S2's 14/16-bit
+      // remainders. Keep the generic bitwise path for other word sizes.
+      if constexpr (DP >= 8 && DP <= int(sizeof(T)*8) && sizeof(T) > 1) {
+        remainder_tables.resize(npolys);
+        for (int j=0; j<npolys; ++j)
+          for (int b=0; b<256; ++b) {
+            uint8_t byte = b;
+            remainder_tables[j][b] = shiftdivmod(&byte, 1, truncpolys[j]).v[0];
+          }
+      }
       // Check which polynomial contains each root.
       // Note: The DVB-S2 polynomials are numbered so that
       // syndpoly[2*i]==i, but we don't use that property.
@@ -83,7 +95,18 @@ namespace leansdr {
       // TBD Maybe do in parallel, scanning cw only once.
       bitvect<T,DP> rem[npolys];
       for ( int j=0; j<npolys; ++j ) {
-	rem[j] = divmod(cw, cwbytes, truncpolys[j]);
+        if constexpr (DP >= 8 && DP <= int(sizeof(T)*8) && sizeof(T) > 1) {
+          T r = 0;
+          const T mask = T(-1) >> (sizeof(T)*8-DP);
+          const auto &table = remainder_tables[j];
+          // r' = (r*X^8 + byte) mod g_j. The outgoing high byte
+          // contributes table[...]; incoming bits are not pre-shifted.
+          for (size_t i=0; i<cwbytes; ++i)
+            r = ((r << 8) & mask) ^ table[r >> (DP-8)] ^ cw[i];
+          rem[j] = r;
+        } else {
+          rem[j] = divmod(cw, cwbytes, truncpolys[j]);
+        }
       }
       // Compute syndromes.
       TGF S[2*npolys];
@@ -204,6 +227,7 @@ namespace leansdr {
     }
 
     bitvect<T,DP> *truncpolys;
+    std::vector<std::array<T,256>> remainder_tables;
     int npolys;
     int *syndpolys;
     bitvect<T,N> g;

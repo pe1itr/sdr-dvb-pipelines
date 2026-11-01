@@ -241,3 +241,12 @@ test-leansdr: all $(BUILD_DIR)/leandvbtx
 	python3 tests/test_leansdr.py
 
 test: test-leansdr
+
+$(BUILD_DIR)/test_bch: tests/test_bch.cc tests/leansdr_test_hooks.cc $(wildcard $(LEAN_DIR)/src/leansdr/*.h) | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LEAN_FLAGS) tests/test_bch.cc tests/leansdr_test_hooks.cc -o $@ $(LDFLAGS)
+
+.PHONY: test-bch
+test-bch: $(BUILD_DIR)/test_bch
+	./$(BUILD_DIR)/test_bch
+
+test: test-bch

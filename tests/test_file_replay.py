@@ -2,6 +2,7 @@
 import configparser
 import json
 import os
+import shlex
 from pathlib import Path
 import signal
 import struct
@@ -100,6 +101,25 @@ class FilePipelineTests(unittest.TestCase):
             cfg.write(f)
         return subprocess.run([UI, '--config', config, '--iq-file', iq, '--print-pipeline'],
                               capture_output=True, text=True, timeout=3)
+
+    def test_s2_auto_uses_recording_symbol_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, config = self.config(tmp)
+            iq = Path(tmp, 'automatic.iq')
+            iq.write_bytes(bytes(400))
+            for rate in (125000, 333000, 333001, 5000000):
+                with self.subTest(rate=rate):
+                    Path(str(iq)+'.json').write_text(json.dumps({
+                        'format': 'cs16_le', 'sample_rate_hz': 8000000,
+                        'standard': 'DVB-S2', 'symbol_rate_hz': rate,
+                        'modulation': '8PSK' if rate == 5000000 else 'QPSK',
+                        'fec': '3/4' if rate == 5000000 else '1/2'}))
+                    p = self.preview(cfg, config, iq)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    decoder = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")][1]
+                    self.assertEqual(decoder[decoder.index('--sr')+1], str(rate))
+                    self.assertEqual('--fastlock' in decoder, rate <= 333000)
+                    self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], '1' if rate <= 333000 else '32')
 
     def test_airscatter_metadata_and_filename_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

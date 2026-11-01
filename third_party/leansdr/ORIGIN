@@ -15,6 +15,9 @@ Local integration changes:
   accepts a frame, keeping the fixed GUI mode stable across corrupted headers.
 - Fix fd_const >= 0 check; explicit return for invalid decoder standard.
 - Add --help alias and document embedded options, helper framing and worker limits.
+- Byte-table BCH polynomial remainders for 14/16-bit DVB-S2 polynomials,
+  replacing bitwise division without changing syndromes or error correction.
+  Generic polynomial widths retain the original division path.
 
 Acquisition patch by Ondrej OK1CDJ, reported in upstream issue #41:
 https://github.com/pabr/leansdr/issues/41

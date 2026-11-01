@@ -37,7 +37,7 @@ typedef struct {
     GtkWidget *hardware_entries[5][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
-    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box;
+    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
@@ -68,6 +68,8 @@ typedef struct {
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
 static const char *constellations[] = {"QPSK", "8PSK"};
+static const char *s2_latency_modes[] = {"auto", "low", "throughput"};
+static const char *s2_acquisition_modes[] = {"auto", "fast", "normal"};
 static const char *fecs[] = {"1/2", "2/3", "3/4", "1/4", "1/3", "2/5", "3/5", "4/5", "5/6", "8/9", "9/10", "7/8"};
 /* DVB-S2 MODCOD numbers, indexed by constellation and the FEC list above.
  * Zero denotes an unsupported combination. */
@@ -119,6 +121,17 @@ static int integer_setting(App *a, const char *section, const char *key, int low
     if (errno || end == s || *end || n < low || n > high) fatal("Config [%s] %s: invalid value %s", section, key, s);
     g_free(s); return n;
 }
+
+static int s2_choice(App *a, const char *key, const char *const choices[], unsigned count) {
+    char *value = setting(a, "leandvb", key);
+    for (unsigned i=0; i<count; ++i) if (!strcmp(value, choices[i])) { g_free(value); return i; }
+    fatal("Invalid DVB-S2 %s: %s", key, value);
+    return 0;
+}
+
+/* Contest rates favour reacquisition/latency; high rates favour throughput.
+ * Resolve at pipeline creation so GUI changes and IQ metadata use the same rule. */
+static gboolean s2_narrowband(App *a) { return a->sr <= 333000; }
 
 static void add(Stage *s, const char *arg) { g_ptr_array_add(s->args, g_strdup(arg)); }
 static void add_number(Stage *s, const char *flag, int value) {
@@ -256,6 +269,10 @@ static void build_pipeline(App *a) {
         options(a, s, "leandvb", a->standard ? "dvbs2_args" : "dvbs_args",
                 embedded ? "--s16 --u8 --f32 -f --standard --sr --cr --modcods --ldpc-helper --nhelpers --ldpc-batch" :
                            "--s16 --u8 --f32 -f --standard --sr --cr --modcods");
+        if (a->standard==1) {
+            int acquisition=s2_choice(a,"acquisition",s2_acquisition_modes,G_N_ELEMENTS(s2_acquisition_modes));
+            if (acquisition==1 || (acquisition==0 && s2_narrowband(a))) add(s,"--fastlock");
+        }
         add(s, !strcmp(format, "u8") ? "--u8" : "--s16"); add_number(s, "-f", sample_rate);
         add(s, "--standard"); add(s, standards[a->standard]); add_number(s, "--sr", a->sr);
         if (embedded && a->standard==1) {
@@ -263,9 +280,8 @@ static void build_pipeline(App *a) {
             if (!strcmp(mode,"soft")) {
                 add(s,"--ldpc-helper"); add(s,"builtin");
                 add_number(s,"--nhelpers",integer_setting(a,"leandvb","helpers",1,8));
-                char *latency=setting(a,"leandvb","latency");
-                if (strcmp(latency,"low") && strcmp(latency,"throughput")) fatal("Invalid LDPC latency: %s",latency);
-                add_number(s,"--ldpc-batch",!strcmp(latency,"low") ? 1 : 32); g_free(latency);
+                int latency=s2_choice(a,"latency",s2_latency_modes,G_N_ELEMENTS(s2_latency_modes));
+                add_number(s,"--ldpc-batch",latency==1 || (latency==0 && s2_narrowband(a)) ? 1 : 32);
             } else if (strcmp(mode,"bitflip")) fatal("Invalid LDPC mode: %s",mode);
             g_free(mode);
         }
@@ -1233,6 +1249,7 @@ static void populate_fecs(App *a) {
         gtk_widget_set_sensitive(a->ldpc_mode_box,a->standard==1);
         gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && soft);
         gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && soft);
+        gtk_widget_set_sensitive(a->s2_acquisition_box,a->standard==1);
     }
     g_signal_handlers_unblock_by_func(a->fec_box, selection_changed, a);
 }
@@ -1355,8 +1372,8 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
-    const char *lean_keys[]={"backend","ldpc_mode","helpers","latency"};
-    const char *lean_values[]={"embedded","soft","1","low"};
+    const char *lean_keys[]={"backend","ldpc_mode","helpers","latency","acquisition"};
+    const char *lean_values[]={"embedded","soft","1","auto","auto"};
     for (unsigned i=0;i<G_N_ELEMENTS(lean_keys);++i)
         if (!g_key_file_has_key(a->config,"leandvb",lean_keys[i],NULL))
             g_key_file_set_string(a->config,"leandvb",lean_keys[i],lean_values[i]);
@@ -1670,7 +1687,9 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
         "Mode: DVB-S/S2/T, symbol rate or bandwidth, FEC, constellation and guard interval. "
         "For DVB-S2, choose Soft-decision LDPC or Bit-flipping, 1–8 LDPC workers, "
-        "and Low latency or Throughput. W saves these settings.",NULL);
+        "and automatic acquisition/processing based on symbol rate: up to 333 ksym/s, "
+        "continuous search and low latency; above that, normal search and throughput. "
+        "Manual overrides are available. W saves these settings.",NULL);
     about_label(box,"Renderer: embedded video, UDP, external player or MPEG-TS file. "
         "Spectrum controls: IQ filter, IQ recording, TSscatterFix, USB / FM / FM-DATA, "
         "Service info / EPG / Teletext. TCI: monitor audio and control connection.",NULL);
@@ -1999,7 +2018,8 @@ static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
     int mode=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box));
     g_key_file_set_string(a->config,"leandvb","ldpc_mode",mode ? "bitflip" : "soft");
     g_key_file_set_integer(a->config,"leandvb","helpers",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->ldpc_workers_box)));
-    g_key_file_set_string(a->config,"leandvb","latency",gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box)) ? "throughput" : "low");
+    g_key_file_set_string(a->config,"leandvb","latency",s2_latency_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box))]);
+    g_key_file_set_string(a->config,"leandvb","acquisition",s2_acquisition_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->s2_acquisition_box))]);
     gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && !mode);
     gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && !mode);
     if (!a->running) refresh_preview(a);
@@ -2013,15 +2033,23 @@ static void create_mode_renderer(App *a) {
     a->fec_box = combo(a->controls, "FEC", 2, NULL, 0, -1);
     a->gi_box = combo(a->controls, "Guard interval", 3, guards, 4, a->gi);
     a->constellation_box = combo(a->controls, "Constellation", 4, constellations, 2, a->constellation);
-    char *ldpc_mode=setting(a,"leandvb","ldpc_mode"), *latency=setting(a,"leandvb","latency");
+    char *ldpc_mode=setting(a,"leandvb","ldpc_mode");
     a->ldpc_mode_box=combo(a->controls,"DVB-S2 error correction",5,(const char *[]){"Soft-decision LDPC","Bit-flipping"},2,!strcmp(ldpc_mode,"bitflip"));
     a->ldpc_workers_box=spin(a->controls,"LDPC workers",6,1,8,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->ldpc_workers_box),integer_setting(a,"leandvb","helpers",1,8));
-    a->ldpc_latency_box=combo(a->controls,"LDPC processing",7,(const char *[]){"Low latency","Throughput"},2,!strcmp(latency,"throughput"));
-    g_free(ldpc_mode); g_free(latency);
+    a->ldpc_latency_box=combo(a->controls,"LDPC processing",7,(const char *[]){"Automatic (symbol rate)","Low latency","Throughput"},3,
+        s2_choice(a,"latency",s2_latency_modes,G_N_ELEMENTS(s2_latency_modes)));
+    a->s2_acquisition_box=combo(a->controls,"DVB-S2 acquisition",8,(const char *[]){"Automatic (symbol rate)","Continuous search","Normal search"},3,
+        s2_choice(a,"acquisition",s2_acquisition_modes,G_N_ELEMENTS(s2_acquisition_modes)));
+    GtkWidget *auto_hint=gtk_label_new("Automatic: up to 333 ksym/s, continuous search + low latency.\n"
+        "Above 333 ksym/s, normal search + throughput.");
+    gtk_label_set_xalign(GTK_LABEL(auto_hint),0);
+    gtk_grid_attach(GTK_GRID(a->controls),auto_hint,0,9,2,1);
+    g_free(ldpc_mode);
     g_signal_connect(a->ldpc_mode_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
+    g_signal_connect(a->s2_acquisition_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS output", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Output", 0,
         (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)"},

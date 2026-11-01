@@ -242,6 +242,46 @@ class PipelineTests(unittest.TestCase):
                         self.assertEqual(dec[dec.index("--gi") + 1], gi)
                     self.assertEqual(cmds[-1][-1], "fd://0")
 
+    def test_s2_automatic_acquisition_and_processing(self):
+        for rate in (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 5000000):
+            with self.subTest(rate=rate):
+                decoder = self.preview('DVB-S2', rate, '1/2')[1]
+                self.assertEqual('--fastlock' in decoder, rate <= 333000)
+                self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], '1' if rate <= 333000 else '32')
+                self.assertEqual(decoder[decoder.index('--nhelpers')+1], '1')
+        # The 5M 8PSK repeater uses the ordinary command line/configuration.
+        p = subprocess.run([UI, '--print-pipeline', '--source', 'b210', '--standard', 'DVB-S2',
+                            '--sr', '5000000', '--constellation', '8PSK', '--fec', '3/4'],
+                           capture_output=True, text=True, timeout=3)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        decoder = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")][1]
+        self.assertNotIn('--fastlock', decoder)
+        self.assertIn('0x4000', decoder)
+        self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], '32')
+
+    def test_s2_automatic_defaults_and_manual_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            for key in ('latency', 'acquisition'):
+                cfg.remove_option('leandvb', key)
+            self.write_config(cfg, path)
+            decoder = self.preview('DVB-S2', 5000000, '3/4', config=path)[1]
+            self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], '32')
+            self.assertNotIn('--fastlock', decoder)
+            for rate, latency, acquisition, batch, fast in (
+                    (125000, 'throughput', 'normal', '32', False),
+                    (5000000, 'low', 'fast', '1', True)):
+                cfg['leandvb'].update(latency=latency, acquisition=acquisition)
+                self.write_config(cfg, path)
+                decoder = self.preview('DVB-S2', rate, '1/2', config=path)[1]
+                self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], batch)
+                self.assertEqual('--fastlock' in decoder, fast)
+            cfg['leandvb'].update(ldpc_mode='bitflip', acquisition='auto')
+            self.write_config(cfg, path)
+            decoder = self.preview('DVB-S2', 125000, '1/2', config=path)[1]
+            self.assertIn('--fastlock', decoder)
+            self.assertNotIn('--ldpc-batch', decoder)
+
     def test_direct_sdr_5ms(self):
         for source, fmt in (("hackrf", "--u8"), ("b210", "--s16")):
             p = subprocess.run([UI, "--print-pipeline", "--source", source,

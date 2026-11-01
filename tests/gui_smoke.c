@@ -751,11 +751,44 @@ static void exercise_information(App *a) {
     g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal)));
 }
 
+static void exercise_s2_automatic(App *a) {
+    int standard=a->standard, sr=a->sr;
+    char *backend=setting(a,"leandvb","backend");
+    g_key_file_set_string(a->config,"leandvb","backend","embedded");
+    g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box)),==,0);
+    g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->s2_acquisition_box)),==,0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),2); // 125k
+    char *command=describe(a);
+    g_assert_nonnull(strstr(command,"'--fastlock'"));
+    g_assert_nonnull(strstr(command,"'--ldpc-batch' '1'")); g_free(command);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),G_N_ELEMENTS(sat_rates)-1); // 5M
+    g_assert_cmpint(a->sr,==,5000000);
+    command=describe(a);
+    g_assert_null(strstr(command,"'--fastlock'"));
+    g_assert_nonnull(strstr(command,"'--ldpc-batch' '32'")); g_free(command);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->ldpc_latency_box),1);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->s2_acquisition_box),1);
+    command=describe(a);
+    g_assert_nonnull(strstr(command,"'--fastlock'"));
+    g_assert_nonnull(strstr(command,"'--ldpc-batch' '1'")); g_free(command);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->ldpc_latency_box),0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->s2_acquisition_box),0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),2);
+    command=describe(a);
+    g_assert_nonnull(strstr(command,"'--fastlock'"));
+    g_assert_nonnull(strstr(command,"'--ldpc-batch' '1'")); g_free(command);
+    g_key_file_set_string(a->config,"leandvb","backend",backend); g_free(backend);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),standard);
+    a->sr=sr; populate_rates(a); refresh_preview(a);
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        exercise_s2_automatic(a);
         exercise_information(a);
         exercise_scatter_view(a);
         exercise_decoder_view(a);

@@ -25,6 +25,37 @@ def transport(count=2400):
                     + rng.randbytes(180) for i in range(count))
 
 
+def weak_iq(ts, standard, fec, mc, short, pilots, seed, esn0, fading=False):
+    import numpy as np
+    args = [TX, '--standard', standard, '-f', '4',
+            '--rrc-rej', '30', '--s16']
+    args += ['--modcod', str(mc)] if standard == 'DVB-S2' else ['--cr', fec]
+    if short:
+        args += ['--shortframes']
+    if pilots:
+        args += ['--pilots']
+    tx = subprocess.run(args, input=ts, capture_output=True, check=True, timeout=60)
+    raw = np.frombuffer(tx.stdout, dtype='<i2').reshape(-1, 2).astype(float)*.1
+    signal = raw[:, 0] + 1j*raw[:, 1]
+    n = np.arange(len(signal))
+    # Small carrier offset plus linear drift, expressed per symbol.
+    phase = 2*np.pi*(.005*n/4 + .001*n*n/(8*len(n)))
+    signal *= np.exp(1j*phase)
+    power = np.mean(np.abs(signal)**2)
+    if fading:
+        # Acquire at the nominal Es/N0, pass through a deep fade and recover.
+        envelope = np.interp(n/len(n), [0, .2, .4, .6, .8, 1], [1, 1, .08, .08, 1, 1])
+        signal *= envelope
+    # Es/N0 refers to the unfaded waveform, 4 complex samples/symbol.
+    sigma = (power*4/(2*10**(esn0/10)))**.5
+    noise = np.random.default_rng(seed).normal(size=raw.shape)*sigma
+    raw = np.column_stack((signal.real, signal.imag)) + noise
+    clipped = int(np.count_nonzero((raw < -32768) | (raw > 32767)))
+    if clipped:
+        raise AssertionError(f'{clipped} clipped components invalidate noise calibration')
+    return np.rint(raw).astype('<i2').tobytes()
+
+
 class DecoderStatus(ctypes.Structure):
     _fields_ = ([(k, ctypes.c_uint32) for k in ('magic', 'type', 'locks', 'buffer_valid')]
                 + [(k, ctypes.c_float) for k in ('snr_db', 'pilot_lock', 'cfo_hz', 'rms_dbfs', 'peak_dbfs', 'buffer_percent')]
@@ -110,6 +141,36 @@ class LeanDvbTests(unittest.TestCase):
         sigma = (power*4/(2*10))**.5
         noisy = np.clip(raw+np.random.default_rng(41).normal(0,sigma,raw.shape),-32768,32767).astype('<i2')
         self.receive(noisy.tobytes(),modcod=4)
+
+    def test_125k_weak_reception_and_fading(self):
+        # Pre-optimization reference recovered 512, 206 and 539 correct
+        # packets respectively. Keep margin for platform rounding at the
+        # threshold, while rejecting a material loss of weak reception.
+        ts = transport(900)
+        cases = [(4, False, True, 41, 2, False, 450),
+                 (5, True, False, 42, 4, False, 180),
+                 (4, True, True, 42, 10, True, 480)]
+        for mc, short, pilots, seed, esn0, fading, minimum in cases:
+            with self.subTest(modcod=mc, short=short, esn0=esn0, fading=fading):
+                iq = weak_iq(ts, 'DVB-S2', '1/2', mc, short, pilots, seed, esn0, fading)
+                args = [RX, '--decoder-worker=leansdr', '--standard', 'DVB-S2',
+                        '--s16', '-f', '500000', '--sr', '125000', '--sampler', 'rrc',
+                        '--rrc-rej', '30', '--rrc-steps', '8', '--modcods', str(1 << mc),
+                        '--framesizes', '2' if short else '1', '--ldpc-helper', 'builtin',
+                        '--nhelpers', '1', '--ldpc-batch', '1']
+                p = subprocess.run(args, input=iq, capture_output=True, timeout=60)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(len(p.stdout)%188, 0)
+                count = len(p.stdout)//188
+                self.assertGreaterEqual(count, minimum)
+                self.assertLess(count, 900*.65)  # Actually exercise reception loss.
+                previous = -1
+                for pos in range(0, len(p.stdout), 188):
+                    packet = p.stdout[pos:pos+188]
+                    index = struct.unpack('>I', packet[4:8])[0]
+                    self.assertEqual(packet, ts[index*188:(index+1)*188])
+                    self.assertGreater(index, previous)
+                    previous = index
 
     def test_parallel_batches_preserve_order_and_tail(self):
         iq = self.iq()

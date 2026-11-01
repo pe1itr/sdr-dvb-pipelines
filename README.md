@@ -141,7 +141,7 @@ melding; de ontvangst blijft doorlopen.
   zie [Native Afedri Net input](#native-afedri-net-input).
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie;
-  voor DVB-S2 ook LDPC-methode, 1–8 workers en Low latency / Throughput.
+  voor DVB-S2 ook LDPC-methode, 1–8 workers en automatische acquisitie/verwerking.
 - **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
 - **Alt+I / Alt+M / Alt+R / Alt+T / Alt+A**: open Input, Mode, Renderer, TCI en About.
@@ -398,14 +398,31 @@ niet doorgestuurd naar de foutcorrectie. Alleen geaccepteerde frames mogen het
 infopaneel bijwerken. Zonder lock toont dat paneel de ingestelde modulatie en
 FEC; de lockindicatoren geven afzonderlijk aan of er werkelijk ontvangst is.
 
-In **Mode** staan drie DVB-S2-instellingen:
+De gewone start kiest DVB-S2-acquisitie en verwerking standaard automatisch
+op basis van de ingestelde symbolrate, ook na het openen van een IQ-bestand:
+
+| Symbolrate | Acquisitie | LDPC-verwerking |
+|---|---|---|
+| Tot en met 333 ksym/s, inclusief contest op 125k | Continu zoeken (`--fastlock`) | Low latency, één frame per batch |
+| Boven 333 ksym/s, inclusief PI6EHV op 5M 8PSK | Normaal zoeken | Throughput, maximaal 32 frames per batch |
+
+Beide gebruiken standaard één worker, RRC rejection 10 en 8 interpolatiestappen.
+Er is geen aparte startconfiguratie nodig: kies de juiste modulatie, FEC en
+symbolrate in **Mode**. DVB-S behoudt zijn bestaande `--fastlock --hq`-instelling.
+Dit is een keuze op basis van de uitgevoerde metingen, geen automatische
+meting van signaalsterkte of een optimalisatie voor ieder mogelijk kanaal.
+
+In **Mode** staan vier DVB-S2-instellingen:
 
 - **Error correction**: soft-decision LDPC (standaard) of de bestaande bit-flipping.
 - **LDPC workers**: 1–8 workers in totaal. Begin met één; meer workers kosten extra
   geheugen en helpen alleen wanneer FEC de doorvoer beperkt.
-- **LDPC processing**: *Low latency* verwerkt één frame met een smalle decoder;
+- **LDPC processing**: standaard *Automatic (symbol rate)*. Handmatig:
+  *Low latency* verwerkt één frame met een smalle decoder;
   *Throughput* verzamelt maximaal 32 frames, met hoogstens 2 ms wachttijd voor
   batchvorming. Dit is niet de totale ontvangstvertraging.
+- **DVB-S2 acquisition**: standaard *Automatic (symbol rate)*; *Continuous search*
+  en *Normal search* blijven als handmatige keuzes beschikbaar.
 
 De instellingen worden met de bestaande configuratie-opslag bewaard:
 
@@ -414,8 +431,15 @@ De instellingen worden met de bestaande configuratie-opslag bewaard:
 backend=embedded
 ldpc_mode=soft
 helpers=1
-latency=low
+latency=auto
+acquisition=auto
 ```
+
+Automatische keuzes worden bij iedere nieuwe pipeline opnieuw afgeleid;
+wisselen van 125k naar 5M en terug vergt dus geen aangepaste configuratie.
+Oude expliciete `latency=low`/`throughput`-instellingen blijven handmatige keuzes.
+Extra decoderargumenten zoals een expliciete `--fastlock` of `--hq` blijven
+eveneens van kracht; laat die weg uit `dvbs2_args` voor automatische acquisitie.
 
 De worker beheert begrensde wachtrijen, bewaart framevolgorde en werkt resterende
 frames bij bestandseinde af. De helper gebruikt een privéprotocol met expliciete
@@ -423,6 +447,122 @@ batchlengtes; grote kernel-pipebuffers of wijzigingen aan `/proc/sys` zijn niet
 nodig. Stop beëindigt de volledige procesgroep. Op x86_64 bouwt `make` ook
 `ldpc_tool_avx2`; `ldpc_tool` controleert de CPU en kiest die variant automatisch.
 `LINRAD_LDPC_PORTABLE=1` forceert de draagbare variant voor vergelijking.
+
+Voor **5 MSym/s, 8PSK 3/4** kiest Automatic dus **Throughput**, met standaard **1 worker**.
+Meer workers zijn niet automatisch sneller: zij kunnen de beschikbare frames
+over kleinere SIMD-batches verdelen. Meet met de eigen opname en machine.
+De BCH-controle gebruikt nu tabellen om acht bits tegelijk te verwerken;
+de syndromen en foutcorrectie blijven gelijk. `make test-bch` controleert
+315 schone, herstelbare en onherstelbare gevallen over alle 21 S2-FEC-tabellen.
+
+Gemeten op Ryzen 7 5800H met
+`linrad-dvb-20261101T024957.298790Z-1291000000-8000000.iq`
+(cs16, 8 MS/s, **19,415 s IQ**), directe bestandsinvoer zonder afspeelpauzes:
+
+| Decoder | Workers / verwerking | Verwerkingstijd |
+|---|---|---:|
+| Voor BCH-optimalisatie | 1 / Low latency | 32,92 s |
+| Voor BCH-optimalisatie | 1 / Throughput | 13,59 s |
+| Voor BCH-optimalisatie | 4 / Throughput | 10,37 s |
+| Met BCH-optimalisatie | 1 / Throughput | 5,76 s |
+| Met BCH-optimalisatie | 4 / Throughput | 9,57 s |
+
+Alle vijf runs leverden dezelfde 27.015.224 bytes MPEG-TS op (SHA-256
+`b98c57bf044669098ae1bd4b4871a65deb327d87f6f4892e1a2a8dff6f652ccc`).
+Dit zijn losse metingen van de decoder, inclusief LDPC-subprocessen, zonder
+videorenderer. Realtime-invoer vormt kleinere batches en kan meer CPU gebruiken;
+de tabel is dus geen garantie voor de volledige liveketen. Reproduceer met:
+
+```sh
+/usr/bin/time ./build/linrad_dvb --decoder-worker=leansdr \
+  --s16 -f 8000000 --standard DVB-S2 --sr 5000000 \
+  --sampler rrc --rrc-steps 8 --framesizes 3 --modcods 0x4000 \
+  --ldpc-helper builtin --nhelpers 1 --ldpc-batch 32 \
+  < linrad-dvb-20261101T024957.298790Z-1291000000-8000000.iq \
+  > /tmp/dvbs2-5msym.ts
+```
+
+Met de realtime `iq_file_to_stdout` ervoor duurde de geoptimaliseerde run
+met één worker **19,55 s**, met dezelfde TS-uitvoer. De totale CPU-tijd van
+bronhelper, decoder en LDPC samen was 25,18 s (gemiddeld circa 1,29 CPU-core).
+De videorenderer zat niet in deze meting.
+
+Voor smalbandige weak-signalontvangst kiest Automatic **Low latency, 1 worker**
+en continu zoeken. De BCH-optimalisatie verandert geen
+filtering, acquisitie, LDPC-iteratielimiet of codeersterkte.
+
+`tests/test_weak_signals.py` vergelijkt een bewaarde decoder van vóór de
+wijziging met de actuele build, steeds op exact dezelfde IQ-samples. Het
+zwaartepunt is **125 ksym/s**, voor DVB-S en DVB-S2 QPSK; daarnaast worden
+35, 66, 250 en 333 ksym/s getest. De synthetische gevallen bevatten AWGN,
+frequentieafwijking/drift en diepe fading. De 125k-sweeps gebruiken twee
+ruisrealisaties, verschillende FEC's, normale/korte S2-frames en pilots aan/uit.
+De test vereist zowel gedeeltelijke als goede ontvangst, vergelijkt alle
+TS-bytes en gedecodeerde S2-BB-frames, en controleert synthetische TS-payloads
+tegen de verzonden inhoud. Legacy DVB-S kan beschadigde RS-pakketten
+doorlaten bij lockverlies; die worden geteld en moeten ook bytegelijk blijven.
+
+```sh
+python3 tests/test_weak_signals.py --reference /pad/naar/linrad_dvb-voor-wijziging
+python3 tests/test_weak_signals.py --reference /pad/naar/linrad_dvb-voor-wijziging \
+  --recordings-only --output build/diagnostics/weak-recordings
+```
+
+De tweede opdracht gebruikt de volledige lokale `fbn2.raw`, `org.raw` en
+`h.raw` met hun metadata. Deze IQ-bestanden zijn geen onderdeel van Git.
+`results.json`, TS/BB-uitvoer en logs komen in de opgegeven uitvoermap
+(standaard `build/diagnostics/weak-signals`). De vergelijking gebruikt bij
+beide binaries dezelfde huidige LDPC-helper en standaard batches van één
+frame: zo wordt de BCH-wijziging geïsoleerd. Dit is een deterministische
+regressiecontrole, geen geijkte gevoeligheidsmeting of videoweergavetest.
+Drie representatieve 125k-gevallen (normale en korte frames, ontvangst rond
+de grens en herstel na fading) zitten ook in `make test-leansdr`. Die snelle
+controle heeft geen oude binary nodig en controleert zowel een minimumaantal
+herstelde pakketten als hun inhoud en volgorde.
+
+De uitgevoerde vergelijking na de BCH-wijziging gaf **116/116 identieke
+synthetische resultaten**, inclusief alle TS-bytes en S2-BB-frames. De volledige
+echte opnamen bleven eveneens gelijk: `fbn2.raw` leverde 550 TS-pakketten en
+`org.raw` 8.561. `h.raw` gaf in beide versies geen uitvoer en bewijst daarmee
+geen behoud van ontvangstgevoeligheid. De JSON-resultaten staan lokaal in
+`build/diagnostics/weak-signals/results.json` en
+`build/diagnostics/weak-recordings/results.json`; de referentiebinary is bewaard
+als `build/diagnostics/weak-reference/linrad_dvb-before`.
+
+Een aparte proef met de volledige zwakke `fbn2.raw` (circa 216 s, DVB-S2
+QPSK 125k, FEC 1/2, korte frames) vergeleek zwaardere ontvangstinstellingen:
+
+| Instelling, steeds Low latency / 1 worker | Ontvangen TS-pakketten |
+|---|---:|
+| Bestaande acquisitie, RRC rejection 10, 8 stappen | 550 |
+| `--fastlock`, RRC rejection 10, 8 stappen | **965** |
+| Bestaande acquisitie, RRC rejection 30, 8 stappen | 450 |
+| `--fastlock`, RRC rejection 30, 8 stappen | 776 |
+| `--fastlock`, RRC rejection 30, 16 stappen | 615 |
+| `--fastlock`, RRC rejection 10, 8 stappen, experimentele helper met 50 iteraties | 970 |
+
+Met `--fastlock` stijgt ook het aantal pakketten op video-PID 256 van 496
+naar 867; de extra uitvoer bestaat dus grotendeels uit videodata. De volledige
+opname kostte met deze instelling circa 31,5 s verwerking. Een realtimeproef
+met de eerste 40 s duurde 40,4 s met 8,57 CPU-seconden voor bron en decoder
+samen, exclusief videoweergave. Bij de normale acquisitie slaat de decoder
+na mislukte synchronisatie delen van het signaal over om CPU te besparen;
+`--fastlock` blijft zoeken. Ook de referentiedecoder levert daarmee dezelfde
+965 pakketten: dit is winst uit de acquisitie-instelling. De BCH-versnelling
+zelf behoudt dezelfde foutcorrectie. Deze ene opname bewijst geen algemene
+gevoeligheidswinst in dB of ononderbroken beeld.
+
+Bij de daaropvolgende praktijkcontrole bevestigde de gebruiker volledig beeld
+van DL4FBN, waar dat vóór deze wijziging niet lukte.
+
+Deze combinatie is nu de automatische keuze tot en met 333 ksym/s:
+`--fastlock`, RRC rejection 10, 8 stappen en Low latency / 1 worker. De helper
+houdt zijn bestaande 25 iteraties. Start gewoon de ontvanger; aparte profielen
+voor weak signals of de 5 MSym/s-repeater zijn niet nodig.
+
+```sh
+./build/linrad_dvb
+```
 
 Het decoderpaneel toont QPSK/8PSK, MER (geen SNR), frequentieafwijking,
 synchronisatie, RS/BCH-resultaten en TS-tellers. Voor S2 worden de daadwerkelijk
@@ -1265,7 +1405,8 @@ and propagation of a closed decoder pipe. The queue absorbs short stalls; it
 cannot compensate for a decoder that is continuously slower than the SDR.
 
 
-DVB-S2 startup defaults omit `--fastlock`. Without a valid signal, aggressive
+DVB-S2 automatic acquisition omits `--fastlock` above 333 ksym/s and enables
+it at narrowband contest rates. Without a valid signal, aggressive
 frame searches can be much slower than decoding an already acquired clean signal.
 The messages `Unsupported or corrupted FEC` / `MODCOD` can arise from false
 physical-layer-header detections in noise, including operation without an antenna.
