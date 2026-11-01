@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR and IQ files), run `make` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+ and IQ files), run `make` followed by
 `./build/linrad_dvb`. Set parameters directly in the GUI and edit
 `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -1536,6 +1536,54 @@ en [rate-instellingen](https://github.com/pothosware/SoapyRTLSDR/blob/master/Set
   --frequency 437000000 --gain 30 --format u8 > rtl.u8
 ```
 
+### FUNcube Dongle Pro+ in de C GUI
+
+Selecteer **FUNcube Pro+** onder **SDR → Input / SDR** (`--source fcdpp`).
+De Pro+ heeft een vaste bronrate van **192000 samples/s**, stereo 16-bit IQ.
+De keuzelijst biedt uitsluitend die rate; de oorspronkelijke Pro met 96 kS/s
+is een ander model en wordt door deze bron niet geopend. Begin bijvoorbeeld met
+**DVB-T, bandwidth 40000, FEC 1/2, GI 1/32**. De DVB-bandbreedte/symbolrate is
+een aparte instelling: een breed DVB-signaal past niet in de smalle FUNcube-band.
+
+De C-helper gebruikt Linux **hidraw** voor de tuner en de bijbehorende **ALSA
+hardware-capturekaart** voor IQ. Er is geen extra SoapyFCDPP-plugin nodig.
+De USB-identiteit `04d8:fb31` en de gedeelde USB-parent koppelen beide interfaces,
+ook als de ALSA-kaartnummers veranderen. De audio wordt rechtstreeks op 192 kS/s
+gelezen, zonder desktop-audiomixer of resampling. Toegang tot zowel `/dev/hidrawN`
+als de ALSA-capturekaart is nodig; een bezet apparaat of ontbrekende toegang
+wordt in het log gemeld.
+
+Standaard: 437 MHz, IF gain 20 dB, `s16`, LNA aan en mixer hoog. De gainpijlen
+regelen **IF gain 0–59 dB** in stappen van 1 dB. Onder **Device arguments** kun
+je `lna=0,mixer=1` gebruiken; beide schakelaars accepteren `0` of `1`.
+Bij meerdere Pro+-dongles selecteer je bijvoorbeeld
+`hid=/dev/hidraw2,lna=1,mixer=1`; de audiokaart wordt daarbij automatisch gevonden.
+Frequentiebereik: 150 kHz–240 MHz en 420–1900 MHz. Bias-tee wordt niet gewijzigd.
+De tunercommando's volgen het [FUNcube Pro+-protocol in SoapyFCDPP](https://github.com/pothosware/SoapyFCDPP/blob/master/SoapyFCDPP/fcdcmd.h).
+
+**Spectrum valt weg bij hogere IF gain:** verlaag eerst de IF gain; 20 dB is
+de standaard. Stop de ontvangst en probeer desgewenst `lna=1,mixer=0` onder
+**Device arguments**, en start opnieuw. Het toegestane instelbereik 0–59 dB
+is geen garantie dat iedere combinatie van versterkerstanden bruikbaar is.
+Op de aangesloten Pro+ met firmware 20.03 viel bij mixer hoog rond 29 dB eerst
+het I-kanaal weg en bij 30 dB ook Q. Met mixer laag bleven beide kanalen bij
+30 en 40 dB werken; bij 50 dB viel I opnieuw weg. Dit is gemeten in ruwe
+`s16`-samples op 144,600 en 437 MHz, met correcte gain-teruglezing, en wijst
+op interne oversturing. Alleen de LNA uitschakelen hielp hierbij niet.
+Een DVB receiver offset of DC-correctie kan een al weggevallen ingangssignaal
+niet herstellen. De genoemde grenzen zijn metingen aan dit exemplaar,
+geen algemene gainlimieten voor alle Pro+-dongles of antennesituaties.
+
+Live afstemmen, IF gain, IQ-filter, spectrum/waterval, audiomonitoring en de
+IQ-opnameknop gebruiken dezelfde pipeline als de andere directe bronnen.
+`u8` is beschikbaar voor decoderinvoer; IQ-opnamen bewaren de originele `s16`
+samples met 192000 Hz in de JSON-metadata. **W** bewaart de instellingen in
+`[fcdpp]`. Een oudere configuratie krijgt automatisch de nieuwe standaardwaarden.
+
+```bash
+./build/linrad_dvb --source fcdpp --standard DVB-T --sr 40000 --fec 1/2 --gi 1/32
+```
+
 ### Direct HackRF, B210 and SDR-IQ inputs in the C GUI
 
 Build with `make all` and launch `./build/linrad_dvb`. The build requires GTK 3,
@@ -1549,15 +1597,53 @@ Start opens the selected SDR; Stop closes the receive pipeline. Frequency and ga
 are disabled for Linrad, where tuning is done in Linrad itself. GUI edits are kept per source; press **W** to save them to the active INI file
 and restore them on the next start.
 
-The frequency readout in the top bar shows **RF frequency = SDR frequency + LO offset**.
+The frequency readout in the top bar shows **DVB receive frequency = SDR frequency + LO offset + DVB receiver offset**.
 Set **LO-offset (kHz)** in the **SDR** menu for the converter: 28 MHz IF plus 408000 kHz offset
 shows 436.000000 MHz. The **SDR / IF (kHz)** field is also in the **SDR** menu.
-Below these settings, a live calculation shows **SDR/IF + LO-offset = RF** and
-the difference **RF − IF** in MHz and kHz to help check the offset. The top bar
+Below these settings, a live calculation shows the hardware frequency, converter
+LO offset, DVB receiver offset, receive frequency and spectrum center. The top bar
 shows the received RF frequency and gain alongside Start/Stop.
 The offset changes the readout and spectrum/waterfall axes; the hardware always receives the IF frequency.
 Signed offsets are supported; this is an additive offset, not a high-side mixer
 inversion mode.
+
+**DVB receiver offset (kHz)** is a separate setting in **SDR**, available for
+direct hardware sources while stopped. It selects a DVB channel above (positive)
+or below (negative) the hardware center. **0 bypasses the frequency conversion
+entirely**, retaining the existing sample processing. **W** saves the offset per
+source as `receiver_offset` in **Hz**; older configurations default to zero.
+
+For example, with no converter LO offset:
+
+| Action | SDR / spectrum center | DVB frequency in the top bar |
+| --- | --- | --- |
+| Offset 0 | 144.600 MHz | 144.600 MHz |
+| Set DVB offset +50 kHz | 144.600 MHz | 144.650 MHz |
+| Tune down 50 kHz with the arrows | 144.550 MHz | 144.600 MHz |
+
+The spectrum/waterfall retains its symmetric full hardware span. The DVB filter
+outline and channel marker move by the receiver offset. The IQ samples sent to
+the DVB decoder are digitally shifted in the opposite direction, **before** the
+existing channel filter; the sample rate stays the same. No new DC-removal or
+notch filter is added. Mixing and filtering use floating point before the final
+s16/u8 quantization, preserving headroom; u8 is rounded symmetrically to avoid
+introducing a new DC bias. Offset 0 follows the original path bit for bit.
+
+The offset plus occupied DVB bandwidth and any enabled IQ-filter width must fit
+inside the source band, with 2.5% of the sample rate reserved at each edge. For
+DVB-S/S2 the check uses 0.35 roll-off (occupied width = 1.35 × symbol rate).
+Invalid combinations are reported and cannot start reception; the GUI stays
+available to correct them. At 192 kS/s, +50 kHz with DVB-T 40 kHz fits;
+DVB-S 125 ksym/s with that offset does not. A live IQ-filter widening that would
+cross the source-band edge is rejected. Enable a suitable IQ filter when needed
+to reject the displaced DC peak before the decoder.
+
+This offset applies **only to DVB**. USB/FM monitoring continues to use raw IQ
+and its own frequency selection. IQ recordings also remain raw, before shifting
+or filtering: their frequency metadata describes the hardware center (plus any
+converter LO), not the offset DVB channel. Full-band playback therefore still
+shows that original center; the DVB offset is not automatically applied to an IQ
+file. Screenshot filenames use the displayed DVB receive frequency.
 
 Use the keyboard left/right arrow keys to tune by **Afstemstap (Hz)**,
 configured in the **SDR** menu (default 1000 Hz). Plain arrows tune whenever the launcher window is active,

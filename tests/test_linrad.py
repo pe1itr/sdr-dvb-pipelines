@@ -346,6 +346,92 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(p.returncode, 2)
             self.assertIn(b"RTL-SDR sample rate", p.stderr)
 
+    def test_receiver_offset_pipeline_and_bandwidth_limits(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            cfg['fcdpp'].update(frequency='144550000', receiver_offset='50000')
+            cfg['session'] = {'source':'fcdpp', 'standard':'DVB-T', 'sr':'40000', 'fec':'1/2'}
+            for offset in ('0', '50000', '-50000'):
+                cfg['fcdpp']['receiver_offset'] = offset
+                self.write_config(cfg, path)
+                p = subprocess.run([UI, '--config', str(path), '--print-pipeline'], capture_output=True, text=True, timeout=3)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                source, decoder, _ = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+                self.assertEqual(source[source.index('--frequency')+1], '144550000')
+                self.assertIn('192000', decoder)
+                if offset == '0':
+                    self.assertNotIn('--receiver-offset', source)
+                    self.assertNotIn('--channel-bandwidth', source)
+                else:
+                    self.assertEqual(source[source.index('--receiver-offset')+1], offset)
+                    self.assertEqual(source[source.index('--channel-bandwidth')+1], '40000')
+            cfg['fcdpp']['receiver_offset'] = '50000'
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', str(path), '--print-pipeline', '--standard','DVB-S','--sr','125000'],
+                               capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn('Receiver offset + DVB bandwidth', p.stderr)
+            cfg['fcdpp'].update(filter_enabled='true', filter_bandwidth='150000')
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', str(path), '--print-pipeline'], capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn('Receiver offset + IQ filter', p.stderr)
+            cfg['fcdpp'].update(receiver_offset='nan', filter_enabled='false')
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', str(path), '--print-pipeline'], capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+        helper=ROOT/'build/sdr_to_stdout'
+        for flags in (['--receiver-offset','96000'], ['--receiver-offset','50000','--channel-bandwidth','168750'],
+                      ['--receiver-offset','50000','--filter-bandwidth','150000']):
+            p = subprocess.run([helper,'--source','fcdpp','--sample-rate','192000',*flags],capture_output=True,timeout=3)
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn(b'Receiver offset',p.stderr)
+
+    def test_funcube_fixed_rate_pipeline_and_legacy_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            cfg.remove_section("fcdpp")
+            for fmt in (None, "s16", "u8"):
+                if fmt:
+                    cfg["fcdpp"] = {"format": fmt, "args": "lna=0,mixer=1"}
+                self.write_config(cfg, path)
+                for standard, sr in (("DVB-T", "40000"), ("DVB-S", "66000"), ("DVB-S2", "125000")):
+                    p = subprocess.run([UI, "--config", str(path), "--source", "fcdpp",
+                                        "--standard", standard, "--sr", sr, "--print-pipeline"],
+                                       capture_output=True, text=True, timeout=3)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    source, decoder, _ = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+                    self.assertEqual(source[source.index("--sample-rate")+1], "192000")
+                    self.assertEqual(source[source.index("--format")+1], fmt or "s16")
+                    self.assertEqual(source[source.index("--gain")+1], "20")
+                    self.assertEqual(source[source.index("--args")+1], "lna=0,mixer=1" if fmt else "lna=1,mixer=1")
+                    self.assertEqual(decoder[decoder.index("--sample-rate" if standard == "DVB-T" else "-f")+1], "192000")
+                    self.assertIn((fmt or "s16") if standard == "DVB-T" else "--" + (fmt or "s16"), decoder)
+            cfg["session"] = {"source": "fcdpp", "standard": "DVB-T", "sr": "40000", "fec": "1/2"}
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, "--config", str(path), "--print-pipeline"], capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("'--source' 'fcdpp'", p.stdout)
+            cfg["fcdpp"]["sample_rate"] = "96000"
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, "--config", str(path), "--print-pipeline"], capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn("sample_rate", p.stderr)
+
+    def test_funcube_rejects_unsupported_settings_before_hardware(self):
+        base = [ROOT / "build/sdr_to_stdout", "--source", "fcdpp", "--sample-rate", "192000",
+                "--frequency", "437000000", "--gain", "20"]
+        for flag, value in (("--sample-rate", "96000"), ("--sample-rate", "196078"),
+                            ("--sample-rate", "192000.1"), ("--gain", "-1"), ("--gain", "60"),
+                            ("--gain", "20.5"), ("--frequency", "149999"), ("--frequency", "1900000001"),
+                            ("--frequency", "240000001"), ("--frequency", "419999999")):
+            p = subprocess.run([*base, flag, value], capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn(b"FUNcube Pro+", p.stderr)
+        p = subprocess.run([*base, "--args", "lna=2"], capture_output=True, timeout=3)
+        self.assertEqual(p.returncode, 1, p.stderr)
+        self.assertIn(b"unknown option", p.stderr)
+
     def test_sdriq_pipeline_and_legacy_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.config(tmp)

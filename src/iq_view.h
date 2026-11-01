@@ -11,7 +11,7 @@ typedef struct {
     guint timer;
     IQMonitorFrame frame;
     float history[IQ_VIEW_ROWS][IQ_MONITOR_BINS];
-    double bandwidth, center, rate, floor, span;
+    double bandwidth, center, rate, floor, span, receiver_offset;
     gboolean enabled, active;
     gboolean usb_enabled;
     MonitorMode monitor_mode;
@@ -79,7 +79,11 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
             cairo_move_to(cr,tx,wf+wh+18); cairo_show_text(cr,text);
             cairo_move_to(cr,tx,bottom+18); cairo_show_text(cr,text);
         }
-        double half=CLAMP(v->bandwidth/rate,0,1)*(right-left)/2, center=(left+right)/2;
+        double shift=isfinite(v->receiver_offset) ? v->receiver_offset : 0;
+        double half=CLAMP(v->bandwidth/rate,0,1)*(right-left)/2, center=(left+right)/2+shift/rate*(right-left);
+        cairo_save(cr);
+        cairo_rectangle(cr,left,top,right-left,bottom-top);
+        cairo_rectangle(cr,left,wf,right-left,wh); cairo_clip(cr);
         cairo_set_source_rgba(cr,0.2,.7,1,v->enabled?.12:.035);
         cairo_rectangle(cr,center-half,top,2*half,bottom-top); cairo_fill(cr);
         cairo_set_source_rgba(cr,.3,.8,1,v->enabled?.9:.35);
@@ -88,11 +92,17 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
             cairo_move_to(cr,center+side*half,wf); cairo_line_to(cr,center+side*half,wf+wh);
         }
         cairo_stroke(cr);
+        if (shift != 0) {
+            const double dash[]={3,3}; cairo_set_dash(cr,dash,2,0);
+            cairo_move_to(cr,center,top); cairo_line_to(cr,center,bottom);
+            cairo_move_to(cr,center,wf); cairo_line_to(cr,center,wf+wh); cairo_stroke(cr);
+        }
+        cairo_restore(cr);
         /* Right-align the bandwidth just inside the right filter boundary;
          * recompute its position on every draw so it follows the moving line. */
         g_snprintf(text,sizeof(text),"BW %.0f Hz%s",v->bandwidth,v->enabled ? "" : " (off)");
         cairo_text_extents_t ext; cairo_text_extents(cr,text,&ext);
-        double tx=center+half-6-ext.width-ext.x_bearing, ty=top+18;
+        double tx=CLAMP(center+half-6-ext.width-ext.x_bearing,left,right-ext.width), ty=top+18;
         cairo_set_source_rgba(cr,0,0,0,.85);
         cairo_rectangle(cr,tx+ext.x_bearing-3,ty+ext.y_bearing-3,ext.width+6,ext.height+6);
         cairo_fill(cr);

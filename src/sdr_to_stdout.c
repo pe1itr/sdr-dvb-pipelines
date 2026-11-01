@@ -5,7 +5,9 @@
 #include <uhd.h>
 #include "iq_output.h"
 #include "iq_convert.h"
+#include "iq_shift.h"
 #include "sdriq.h"
+#include "funcube.h"
 #include "rtlsdr.h"
 #include "afedri.h"
 #include "tune_control.h"
@@ -50,7 +52,7 @@ static double number(const char *s) {
 int main(int argc, char **argv) {
     const char *source = "", *args = "", *images = "", *antenna = "TX/RX", *format = "s16";
     double rate = 10000000, freq = 437000000, gain = 30, actual = 0;
-    double bandwidth = 0;
+    double bandwidth = 0, receiver_offset = 0, channel_bandwidth = 0;
     const char *ip = "192.168.0.118", *bind_ip = "0.0.0.0";
     double port = 50005;
     int control_stdin = 0;
@@ -59,7 +61,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz]\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
@@ -71,24 +73,29 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--images")) images = v;
         else if (!strcmp(key, "--antenna")) antenna = v;
         else if (!strcmp(key, "--format")) format = v;
+        else if (!strcmp(key, "--receiver-offset")) receiver_offset = number(v);
+        else if (!strcmp(key, "--channel-bandwidth")) channel_bandwidth = number(v);
         else if (!strcmp(key, "--filter-bandwidth")) bandwidth = number(v);
         else if (!strcmp(key, "--sample-rate")) rate = number(v);
         else if (!strcmp(key, "--frequency")) freq = number(v);
         else if (!strcmp(key, "--gain")) gain = number(v);
         else { fprintf(stderr, "Unknown option: %s\n", key); return 2; }
     }
+    int fcdpp = !strcmp(source, "fcdpp");
     int afedri = !strcmp(source, "afedri");
     int rtlsdr = !strcmp(source, "rtlsdr");
     int sdriq = !strcmp(source, "sdriq");
     int hackrf = !strcmp(source, "hackrf"), u8 = !strcmp(format, "u8");
-    if ((!hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
-        (rtlsdr ? (!rtlsdr_rate_valid(rate) || freq < RTLSDR_MIN_FREQUENCY ||
+    if ((!fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
+        (fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
+         rtlsdr ? (!rtlsdr_rate_valid(rate) || freq < RTLSDR_MIN_FREQUENCY ||
                     freq > RTLSDR_MAX_FREQUENCY || gain < 0 || gain > RTLSDR_MAX_GAIN) : afedri ? (rate < 48000 || rate > 2400000 || rate != floor(rate) ||
                    freq < 0 || freq > 35000000 || !afedri_gain_valid(gain) ||
                    port < 1 || port > 65535 || port != floor(port)) : sdriq ? (!sdriq_rate_valid(rate) || freq < 500 || freq > 30000000 || !sdriq_gain_valid(gain)) :
          (rate < 2000000 || rate > (hackrf ? 20000000 : 61440000) ||
           freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < 0 || gain > (hackrf ? 116 : 76)))) {
         fprintf(stderr, "Invalid source, format, rate, frequency or gain\n");
+        if (fcdpp) fprintf(stderr, "FUNcube Pro+: fixed rate 192000; frequency 150000..240000000 or 420000000..1900000000 Hz; IF gain 0..59 dB in 1 dB steps\n");
         if (afedri) fprintf(stderr, "AFEDRI: rate 48000..2400000; frequency 0..35000000 Hz; gain -10..35 dB in 3 dB steps; IPv4 and TCP/UDP port required\n");
         if (rtlsdr) fprintf(stderr, "RTL-SDR: rates 225001..300000 or 900001..3200000; frequency 24000000..1764000000 Hz; gain 0..49.6 dB (R820T/R828D tuner mode)\n");
         if (sdriq) fprintf(stderr, "SDR-IQ: rates 8138, 16276, 37793, 55556, 111111, 158730, 196078; frequency 500..30000000 Hz; ATT -20, -10, 0, 10 dB\n");
@@ -96,6 +103,12 @@ int main(int argc, char **argv) {
     }
     if (!iq_bandfilter_valid(rate, bandwidth)) {
         fprintf(stderr, "Invalid filter width: use 0 (off), or max(10, sample-rate/256)..0.95*sample-rate Hz\n"); return 2;
+    }
+    IQShift shift;
+    if (iq_shift_init(&shift, rate, receiver_offset) ||
+        !iq_shift_fits(rate, receiver_offset, channel_bandwidth) ||
+        !iq_shift_fits(rate, receiver_offset, bandwidth)) {
+        fprintf(stderr, "Receiver offset/channel/filter does not fit the sample rate (2.5%% edge margin)\n"); return 2;
     }
     struct sigaction sa = {.sa_handler = stop}; sigemptyset(&sa.sa_mask);
     if (control_stdin) {
@@ -107,6 +120,7 @@ int main(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
     uhd_usrp_handle usrp = NULL; uhd_rx_streamer_handle rx = NULL; uhd_rx_metadata_handle md = NULL;
     Afedri *net = NULL;
+    Funcube *cube = NULL;
     SoapySDRDevice *dev = NULL; SoapySDRStream *stream = NULL;
     int result = 1, started = 0;
     IQOutput *output = NULL;
@@ -119,8 +133,14 @@ int main(int argc, char **argv) {
     float float_iq[2048 * 2];
     /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
      * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
-    size_t block_samples = afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : rtlsdr ? 8192 : 65536;
-    if (afedri) {
+    size_t block_samples = fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : rtlsdr ? 8192 : 65536;
+    float *shifted=receiver_offset != 0 ? malloc(block_samples*2*sizeof(float)) : NULL;
+    if (receiver_offset != 0 && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
+    if (fcdpp) {
+        cube = funcube_open(args, freq, gain);
+        if (!cube) goto done;
+        actual = FUNCUBE_RATE;
+    } else if (afedri) {
         net = afedri_open(ip, (int)port, bind_ip, rate, freq, gain, &actual);
         if (!net) goto done;
     } else if (hackrf || sdriq || rtlsdr) {
@@ -186,6 +206,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Requested rate %.0f, hardware rate %.0f; select the hardware rate in the GUI\n", rate, actual); goto done;
     }
     fprintf(stderr, "[SDR] %s: %.0f Hz, %.0f samples/s, gain %.1f dB, %s IQ\n", source, freq, actual, gain, format);
+    if (receiver_offset != 0) fprintf(stderr, "[SDR] Receiver offset %+.0f Hz: hardware %.0f Hz, channel %.0f Hz; spectrum and recording remain at hardware center\n", receiver_offset, freq, freq+receiver_offset);
     size_t slots = (size_t)ceil(rate * 0.5 / block_samples);
     output = iq_output_create(STDOUT_FILENO, block_samples * (u8 ? 2 : 4), slots);
     if (!output) { perror("IQ output queue"); goto done; }
@@ -193,7 +214,7 @@ int main(int argc, char **argv) {
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
     if (afedri) { if (afedri_start(net)) goto done; }
     else if (hackrf || sdriq || rtlsdr) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
-    else { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
+    else if (!fcdpp) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
     double last_report = monotonic_seconds();
     IQOutputStats previous = {0};
@@ -202,12 +223,18 @@ int main(int argc, char **argv) {
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
-                rtlsdr ? RTLSDR_MIN_FREQUENCY : afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
-                rtlsdr ? RTLSDR_MAX_FREQUENCY : afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
-                afedri ? -10 : sdriq ? -20 : 0, rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
-                afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+                fcdpp ? FUNCUBE_MIN_FREQUENCY : rtlsdr ? RTLSDR_MIN_FREQUENCY : afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
+                fcdpp ? FUNCUBE_MAX_FREQUENCY : rtlsdr ? RTLSDR_MAX_FREQUENCY : afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
+                afedri ? -10 : sdriq ? -20 : 0, fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+        if (fcdpp && (changed & 1) && !funcube_frequency_valid(requested)) {
+            fprintf(stderr, "FUNcube Pro+: ignoring tune into unsupported 240..420 MHz gap\n");
+            changed &= ~1;
+        }
         if ((changed & 1) && requested != freq) {
-            if (afedri) {
+            if (fcdpp) {
+                if (funcube_frequency(cube, requested)) goto done;
+            } else if (afedri) {
                 if (afedri_frequency(net, requested)) goto done;
             } else if (dev) {
                 S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, requested, NULL));
@@ -221,7 +248,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[SDR] Tuned to %.0f Hz; decoder may need to reacquire\n", freq);
         }
         if ((changed & 2) && requested_gain != gain) {
-            if (afedri) {
+            if (fcdpp) {
+                if (funcube_gain(cube, requested_gain)) goto done;
+                gain = requested_gain;
+            } else if (afedri) {
                 if (afedri_gain(net, requested_gain)) goto done;
                 gain = requested_gain;
             } else if (sdriq) {
@@ -236,6 +266,10 @@ int main(int argc, char **argv) {
             }
             fprintf(stderr, "[SDR] RX gain %.1f dB (requested %.1f dB)\n", gain, requested_gain);
         }
+        if ((changed & 4) && !iq_shift_fits(rate, receiver_offset, requested_bw)) {
+            fprintf(stderr, "[SDR] Ignoring filter width: receiver offset + filter exceeds source band\n");
+            changed &= ~4;
+        }
         if ((changed & 4) && requested_bw != bandwidth) {
             if (iq_bandfilter_set(filter, requested_bw)) { fprintf(stderr, "Cannot update IQ bandfilter\n"); goto done; }
             bandwidth = requested_bw;
@@ -244,7 +278,12 @@ int main(int argc, char **argv) {
         int output_error = iq_output_error(output);
         if (output_error) { fprintf(stderr, "IQ output: %s\n", strerror(output_error)); goto done; }
         size_t got = 0; void *buffers[] = {sdriq ? (void *)float_iq : ((hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq)};
-        if (afedri) {
+        if (fcdpp) {
+            int n = funcube_read(cube, iq, block_samples);
+            if (n < 0) goto done;
+            if (!n) continue;
+            got = (size_t)n;
+        } else if (afedri) {
             int n = afedri_read(net, iq, block_samples);
             if (n < 0) goto done;
             if (!n) continue;
@@ -284,7 +323,15 @@ int main(int argc, char **argv) {
         }
         unsigned char *out = u8 ? packed : (unsigned char *)iq;
         iq_monitor_feed(out, got, u8, rate);
-        iq_bandfilter_process(filter, out, got, u8);
+        if (receiver_offset != 0) {
+            /* Raw spectrum/audio/recording are tapped above. Preserve float
+             * headroom through mixing + filtering; quantize only at output. */
+            for (size_t n=0;n<got*2;++n)
+                shifted[n]=u8 && (hackrf || rtlsdr) ? ((int)packed[n]-128)*256 : iq[n];
+            iq_shift_process(&shift, shifted, got);
+            iq_bandfilter_process_float(filter, shifted, got);
+            iq_shift_pack(shifted,out,got,u8);
+        } else iq_bandfilter_process(filter, out, got, u8);
         size_t bytes = got * (u8 ? 2 : 4);
         int queued = iq_output_push(output, out, bytes);
         if (queued < 0) {
@@ -305,6 +352,8 @@ int main(int argc, char **argv) {
     }
     result = 0;
 done:
+    free(shifted);
+    funcube_close(cube);
     afedri_close(net);
     iq_record_stop(&capture);
     if (output) {

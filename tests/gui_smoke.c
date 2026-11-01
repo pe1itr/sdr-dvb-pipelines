@@ -23,7 +23,8 @@ static void exercise_live_gain_locale(App *a) {
     GPtrArray *source_args = a->stages[0].args;
     const struct { int source; double initial, low, high, step; } cases[] = {
         {1, 40, 0, 116, 1}, {2, 30.5, 0, 76, 1},
-        {3, -10, -20, 10, 10}, {SOURCE_AFEDRI, 14, -10, 35, 3}
+        {3, -10, -20, 10, 10}, {SOURCE_AFEDRI, 14, -10, 35, 3},
+        {SOURCE_FCDPP, 20, 0, 59, 1}
     };
     for (unsigned i = 0; i < G_N_ELEMENTS(cases); ++i) {
         a->source = cases[i].source;
@@ -145,6 +146,109 @@ static void exercise_rtlsdr(App *a) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_RTLSDR);
     g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "250000");
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
+}
+
+static void exercise_funcube(App *a) {
+    int source = a->source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_FCDPP);
+    g_assert_true(hardware_source(a));
+    g_assert_false(gtk_widget_get_visible(a->rate_box));
+    g_assert_true(gtk_widget_get_visible(a->sdriq_rate_box));
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "192000");
+    GtkTreeModel *rates = gtk_combo_box_get_model(GTK_COMBO_BOX(a->sdriq_rate_box));
+    g_assert_cmpint(gtk_tree_model_iter_n_children(rates, NULL), ==, 1);
+    gtk_entry_set_text(GTK_ENTRY(a->hardware_entries[SOURCE_FCDPP][0]), "lna=0,mixer=1");
+    tune_step(a, 1); gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "fcdpp", "frequency", NULL), ==, 437001000);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "fcdpp", "gain", NULL), ==, 21);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)), ==, "IF gain 21 dB");
+    char *preview = describe(a);
+    g_assert_nonnull(strstr(preview, "'--source' 'fcdpp'"));
+    g_assert_nonnull(strstr(preview, "'--sample-rate' '192000'"));
+    g_assert_nonnull(strstr(preview, "'--args' 'lna=0,mixer=1'"));
+    g_free(preview);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), 240000);
+    tune_step(a, 1); /* Do not step into the tuner's frequency gap. */
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "fcdpp", "frequency", NULL), ==, 240000000);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), 437001);
+    g_key_file_set_double(a->config, "fcdpp", "gain", 59);
+    gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "fcdpp", "gain", NULL), ==, 59);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 3);
+    g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->sdriq_rate_box), "111111"));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_FCDPP);
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "192000");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
+}
+
+static void exercise_receiver_offset(App *a) {
+    int source=a->source, standard=a->standard, sr=a->sr;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_FCDPP);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),2);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),2); /* DVB-T 40 kHz */
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),144600);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),50);
+    g_assert_null(receiver_offset_problem(a));
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"144.650000 MHz");
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"fcdpp","frequency",NULL),==,144600000);
+    monitor_tick(a);
+    g_assert_cmpfloat(a->iq_view.center,==,144600000);
+    g_assert_cmpfloat(a->iq_view.receiver_offset,==,50000);
+    const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
+    if (screenshot) {
+        GtkRequisition minimum,natural;
+        gtk_widget_get_preferred_size(a->window,&minimum,&natural);
+        GtkAllocation allocation={0,0,1280,900};
+        gtk_widget_size_allocate(a->window,&allocation);
+        cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+            gtk_widget_get_allocated_width(a->window),gtk_widget_get_allocated_height(a->window));
+        cairo_t *cr=cairo_create(surface); gtk_widget_draw(a->window,cr);
+        char *path=g_strconcat(screenshot,".offset.png",NULL);
+        g_assert_cmpint(cairo_surface_write_to_png(surface,path),==,CAIRO_STATUS_SUCCESS);
+        g_free(path); cairo_destroy(cr); cairo_surface_destroy(surface);
+    }
+    char *pipeline=describe(a);
+    g_assert_nonnull(strstr(pipeline,"'--receiver-offset' '50000'"));
+    g_assert_nonnull(strstr(pipeline,"'--channel-bandwidth' '40000'"));
+    g_assert_nonnull(strstr(pipeline,"'--frequency' '144600000'")); g_free(pipeline);
+    /* Arrow tuning sends hardware frequency while the display includes offset. */
+    int fds[2]; g_assert_cmpint(pipe(fds),==,0);
+    g_assert_true(g_unix_set_fd_nonblocking(fds[0],TRUE,NULL));
+    a->running=TRUE; a->tune_fd=fds[1];
+    for (int n=0;n<50;++n) tune_step(a,-1);
+    TuneControl control={0}; double frequency=0,gain=0,bandwidth=0;
+    g_assert_cmpint(tune_control_read(&control,fds[0],150000,1900000000,&frequency,
+        0,59,1,&gain,192000,&bandwidth),==,1);
+    g_assert_cmpfloat(frequency,==,144550000);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"144.600000 MHz");
+    monitor_tick(a); g_assert_cmpfloat(a->iq_view.center,==,144550000);
+    /* Recording stays raw: its RF metadata must NOT include receiver offset. */
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->record_button),TRUE);
+    char command[256]={0};
+    g_assert_cmpint(read(fds[0],command,sizeof(command)-1),>,0);
+    g_assert_true(g_str_has_prefix(command,"record 144550000 "));
+    a->record_pending=FALSE; a->recording=FALSE;
+    close(fds[0]); close(fds[1]); a->tune_fd=-1; a->running=FALSE; record_refresh(a);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),0); /* 125 ksym/s no longer fits */
+    g_assert_nonnull(receiver_offset_problem(a));
+    start_pipeline(a); g_assert_false(a->running); a->exit_code=0;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),0);
+    g_assert_null(receiver_offset_problem(a));
+    pipeline=describe(a); g_assert_null(strstr(pipeline,"--receiver-offset")); g_free(pipeline);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),2);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),2);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),-50);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"144.500000 MHz");
+    /* Converter offset changes labels but does not change the digital shift. */
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box),100000);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"244.500000 MHz");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box),0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),437001);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),50);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
+    g_assert_cmpfloat(receiver_offset(a),==,0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),standard);
+    a->sr=sr; populate_rates(a); refresh_preview(a);
 }
 
 static void exercise_afedri(App *a) {
@@ -930,6 +1034,8 @@ static gboolean exercise(gpointer data) {
         exercise_record_controls(a);
         exercise_afedri(a);
         exercise_rtlsdr(a);
+        exercise_funcube(a);
+        exercise_receiver_offset(a);
         exercise_live_gain_locale(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
@@ -1216,6 +1322,10 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpint(g_key_file_get_integer(restored.config, "rtlsdr", "sample_rate", NULL), ==, 250000);
         g_assert_cmpfloat(g_key_file_get_double(restored.config, "rtlsdr", "gain", NULL), ==, 49.6);
         g_assert_cmpfloat(g_key_file_get_double(restored.config, "rtlsdr", "frequency", NULL), ==, 437001000);
+        g_assert_cmpint(g_key_file_get_integer(restored.config, "fcdpp", "sample_rate", NULL), ==, 192000);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "fcdpp", "gain", NULL), ==, 59);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "fcdpp", "frequency", NULL), ==, 437001000);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "fcdpp", "receiver_offset", NULL), ==, 50000);
         g_assert_cmpint(restored.source, ==, 3);
         g_assert_cmpint(restored.standard, ==, 2);
         g_assert_cmpint(restored.sr, ==, 40000);

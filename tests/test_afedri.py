@@ -1,5 +1,6 @@
 """Exercise native AFEDRI against a loopback TCP/UDP receiver, without hardware."""
 import configparser
+import json
 import os
 import math
 from pathlib import Path
@@ -188,6 +189,38 @@ class AfedriTests(unittest.TestCase):
             p.stdin.write(b"record-stop\n")
             self.wait_log(p, b"[iq-record] stopped")
             self.assertEqual(Path(base).read_bytes(), PAYLOAD)
+
+    def test_dvb_offset_changes_decoder_only_and_preserves_raw_recording(self):
+        # Exact quarter-rate rotations have an independent integer oracle.
+        # Exercise the real receive helper, both output formats and both signs.
+        values = struct.unpack('<512h', PAYLOAD)
+        for offset in (50000, -50000):
+            for fmt in ('s16', 'u8'):
+                with self.subTest(offset=offset, fmt=fmt), tempfile.TemporaryDirectory() as tmp:
+                    device = Receiver()
+                    p = self.launch(device, '--receiver-offset', str(offset), '--channel-bandwidth', '40000',
+                                    '--format', fmt, cwd=tmp)
+                    rotated = []
+                    for n in range(256):
+                        i, q = values[2*n:2*n+2]
+                        z = complex(i,q) * (1, -1j, -1, 1j)[(n if offset>0 else -n)%4]
+                        rotated.extend(max(-32768,min(32767,round(v))) for v in (z.real,z.imag))
+                    expected = struct.pack('<512h',*rotated) if fmt=='s16' else bytes(max(0,min(255,round(v/256)+128)) for v in rotated)
+                    self.assertEqual(self.read(p.stdout,len(expected)),expected)
+                    p.stdin.write(b'record 28000000 linrad-dvb-offset.iq\n')
+                    self.wait_log(p,b'[iq-record] started')
+                    device.send(0)
+                    self.assertEqual(self.read(p.stdout,len(expected)),expected)
+                    p.stdin.write(b'record-stop\n')
+                    self.wait_log(p,b'[iq-record] stopped')
+                    self.assertEqual(Path(tmp,'linrad-dvb-offset.iq').read_bytes(),PAYLOAD)
+                    meta=json.loads(Path(tmp,'linrad-dvb-offset.iq.json').read_text())
+                    self.assertEqual(meta['center_frequency_hz'],28000000)
+                    self.assertEqual(meta['sample_rate_hz'],200000)
+                    # A live filter must not be allowed to include wrapped IQ.
+                    p.stdin.write(b'bandwidth 150000\n')
+                    self.wait_log(p,b'Ignoring filter width')
+                    p.terminate(); p.communicate(timeout=4)
 
     def test_failed_start_and_missing_iq_stop_receiver(self):
         for failure, marker in (("start", b"rejected"), ("malformed", b"Protocol error"),

@@ -64,12 +64,13 @@ IQBandFilter *iq_bandfilter_create(double rate, double bandwidth) {
 fail:
     iq_bandfilter_destroy(f); return NULL;
 }
-void iq_bandfilter_process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8) {
-    size_t stride = u8 ? 2 : 4;
+static void process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8, int floats) {
+    size_t stride = floats ? 2*sizeof(float) : u8 ? 2 : 4;
     while (samples) {
         size_t n = samples < BLOCK ? samples : BLOCK;
         memcpy(f->time, f->history, HISTORY*sizeof(*f->time));
         for (size_t i = 0; i < n; ++i) for (size_t axis = 0; axis < 2; ++axis) {
+            if (floats) { f->time[HISTORY+i][axis]=((float *)iq)[2*i+axis]; continue; }
             size_t at = i*stride + axis*(u8 ? 1 : 2);
             int v = u8 ? (int)iq[at]-128 : (int)(iq[at] | (unsigned)iq[at+1]<<8);
             if (!u8 && v >= 32768) v -= 65536;
@@ -87,6 +88,7 @@ void iq_bandfilter_process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8)
             fftwf_execute(f->inverse);
             for (size_t i = 0; i < n; ++i) for (size_t axis = 0; axis < 2; ++axis) {
                 float v = f->time[HISTORY+i][axis]/NFFT;
+                if (floats) { ((float *)iq)[2*i+axis]=v; continue; }
                 int value = (int)lrintf(fmaxf(u8 ? -128 : -32768, fminf(u8 ? 127 : 32767, v)));
                 size_t at = i*stride + axis*(u8 ? 1 : 2);
                 if (u8) iq[at] = (uint8_t)(value+128);
@@ -95,4 +97,11 @@ void iq_bandfilter_process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8)
         }
         iq += n*stride; samples -= n;
     }
+}
+
+void iq_bandfilter_process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8) {
+    process(f,iq,samples,u8,0);
+}
+void iq_bandfilter_process_float(IQBandFilter *f, float *iq, size_t samples) {
+    process(f,(uint8_t *)iq,samples,0,1);
 }
