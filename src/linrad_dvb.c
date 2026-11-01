@@ -2146,7 +2146,7 @@ static void gui(App *a) {
     if (!monitor) monitor = gdk_display_get_monitor(display, 0);
     GdkRectangle work = {0, 0, 1600, 1000};
     if (monitor) gdk_monitor_get_workarea(monitor, &work);
-    gtk_window_set_default_size(GTK_WINDOW(a->window), work.width*0.8, work.height*0.9);
+    gtk_window_set_default_size(GTK_WINDOW(a->window), work.width*0.83, work.height*0.8);
     gtk_window_set_position(GTK_WINDOW(a->window), GTK_WIN_POS_CENTER);
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(a->window), root);

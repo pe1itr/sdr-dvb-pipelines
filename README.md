@@ -90,8 +90,9 @@ op Fedora, of `sudo apt install libzvbi-dev` op Debian/Ubuntu.
 Voor USB-audio zijn `alsa-lib-devel libsamplerate-devel` (Fedora) of
 `libasound2-dev libsamplerate0-dev` (Debian/Ubuntu) nodig.
 
-De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
-schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
+De GUI gebruikt één venster zonder tabs, standaard 83% van de beschikbare
+schermbreedte en 80% van de beschikbare hoogte.
+Bovenaan staan de menu's
 **Input**, **Mode**, **Renderer**, **TCI** en **About**. About toont uitleg over de
 bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
 projectlinks voor LeanDVB, LDPC en de acquisitiepatch van Ondřej OK1CDJ. Het
