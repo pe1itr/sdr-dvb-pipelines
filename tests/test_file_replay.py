@@ -88,7 +88,7 @@ class FileReplayTests(unittest.TestCase):
 class FilePipelineTests(unittest.TestCase):
     def config(self, tmp):
         cfg = configparser.ConfigParser(interpolation=None)
-        cfg.read(ROOT / 'linrad-dvb.ini')
+        cfg.read(ROOT / 'linrad-dvb.example.ini')
         cfg.remove_section('session')
         for key, value in cfg['paths'].items():
             if '/' in value:

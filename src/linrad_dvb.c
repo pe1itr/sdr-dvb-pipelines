@@ -1513,7 +1513,7 @@ static void source_defaults(App *a) {
         g_free(exe); g_free(dir); g_free(player);
     }
     const char *keys[] = {"sample_rate", "frequency", "gain", "args", "images", "antenna", "format"};
-    const char *values[] = {"10000000", "437000000", "30", "", "/home/rhardenb/repos/ettus/uhd-images", "TX/RX", "s16"};
+    const char *values[] = {"10000000", "437000000", "30", "", "", "TX/RX", "s16"};
     const char *sdriq_values[] = {"111111", "28000000", "10", "driver=rfspace,sdr-iq=/dev/ttyUSB0", "", "", "s16"};
     const char *rtlsdr_values[] = {"2400000", "437000000", "30", "driver=rtlsdr", "", "RX", "u8"};
     const char *funcube_values[] = {"192000", "437000000", "20", "lna=1,mixer=1", "", "", "s16"};

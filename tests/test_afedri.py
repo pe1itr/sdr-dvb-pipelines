@@ -355,7 +355,7 @@ class AfedriTests(unittest.TestCase):
 
     def test_gui_pipeline_and_legacy_config_defaults(self):
         cfg = configparser.ConfigParser()
-        cfg.read(ROOT / "linrad-dvb.ini")
+        cfg.read(ROOT / "linrad-dvb.example.ini")
         cfg.remove_section("afedri")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/"config.ini"

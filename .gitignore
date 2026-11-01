@@ -1,2 +1,27 @@
-/build/
+# Publish only the two receiver workflows and their development files.
+# New top-level files/directories must be deliberately added to this list.
+/*
+!/.gitignore
+!/LICENSE
+!/README.md
+!/Makefile
+!/rx_dvb_linrad_leandvb.sh
+!/linrad_udp_to_stdout_v2.py
+!/linrad_udp_to_stdout_v3.py
+!/afedri-udp.py
+!/hackrf_s8_to_u8.py
+!/soapy_sdriq_to_stdout_v2.py
+!/iq_band_snr_meter.py
+!/tsp_monitor.py
+!/linrad-dvb.example.ini
+!/direwolf-pcm.conf
+!/src/
+!/third_party/
+!/tests/
+!/tools/
+
+# Generated files inside the included directories also stay local.
 __pycache__/
+*.py[cod]
+*.o
+*.log

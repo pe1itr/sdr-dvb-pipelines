@@ -1,11 +1,26 @@
 # LeanDVB receive helpers for multiple SDR sources
 
 For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+ and IQ files), run `python3 tools/build.py` followed by
-`./build/linrad_dvb`. Set parameters directly in the GUI and edit
-`linrad-dvb.ini` for paths and startup options. See
+`./build/linrad_dvb`. First copy `linrad-dvb.example.ini` to `linrad-dvb.ini`.
+Set parameters directly in the GUI and edit the local `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
 The profile-driven scripts described elsewhere in this README are the older
 experimental workflow.
+
+Deze repository bevat de launcher `rx_dvb_linrad_leandvb.sh` met de lokale
+Python-helpers die hij gebruikt, en de broncode, buildhelper en tests voor
+`linrad_dvb`. De externe programma's waarnaar het shellscript verwijst
+(`../leansdr`, `../dvbt-rx`, `../TSscatterfix`, spelers en SDR-tools) worden
+niet meegeleverd. Installeer die afzonderlijk en pas zo nodig de paden in het
+shellscript aan. De vastgelegde broncode onder `third_party/` dient voor de
+ingebouwde decoders en tests van `linrad_dvb`; dit levert niet automatisch de
+losse programma's en modelbestanden voor het shellscript op.
+
+`linrad-dvb.ini`, opnamen, screenshots, logs, buildresultaten en lokale
+experimenten blijven buiten Git. `.gitignore` laat alleen de genoemde
+projectbestanden en bron-/testmappen toe; voeg nieuwe projectbestanden in de
+hoofdmap bewust aan die lijst toe. De bestaande commitgeschiedenis blijft
+behouden, inclusief oudere bestanden en onderzoeksnotities.
 
 This repository contains a small collection of experimental command-line helpers for receiving narrowband DVB-S and DVB-S2 signals with **LeanDVB**.
 
@@ -94,6 +109,8 @@ libsamplerate en libVLC 3
 
 ```bash
 python3 tools/build.py
+# Eenmalig, als linrad-dvb.ini nog niet bestaat:
+cp -n linrad-dvb.example.ini linrad-dvb.ini
 ./build/linrad_dvb
 ```
 
@@ -492,7 +509,8 @@ hardwaredecodering kan uitvallen of extra geheugenkopieën nodig hebben. Alleen
 `--avcodec-hw=none` vervangen is daarom geen bewezen oplossing voor dit paneel.
 De bestaande kleine weak-signalweergave is een andere toepassing.
 
-De reproduceerbare meettool staat in `scripts/benchmark_video_decode.py`.
+De lokale meettool was `scripts/benchmark_video_decode.py`; deze wordt niet
+meer meegeleverd en is terug te vinden in de commitgeschiedenis.
 De modi vergelijken alleen decodering, of decodering inclusief een CPU-RGB-frame;
 zij simuleren niet de volledige GTK-speler. CUDA-initialisatiefouten, lege
 uitvoer en afwijkende frameaantallen worden gemeld. Waarschuwingen en
@@ -998,6 +1016,13 @@ doorvoertests, geen langdurige RF- of belastingstest.
 
 ### Eigen configuratie
 
+Maak bij de eerste start een lokale kopie van `linrad-dvb.example.ini` als
+`linrad-dvb.ini` (zie de bouwinstructies hierboven). Dit lokale bestand wordt
+door Git genegeerd; **W** in de GUI bewaart alleen jouw instellingen. De
+voorbeeldconfiguratie gebruikt relatieve buildpaden, geen lokale opname en
+geen persoonlijke UHD-firmwaremap. Laat `[b210] images` leeg voor de normale
+UHD-zoekpaden, of stel daar je eigen map in.
+
 Pas `linrad-dvb.ini` aan voor de programmapaden en opstartopties:
 
 - `[paths]`: C-ontvanger, `leandvb` en externe renderers.
@@ -1089,12 +1114,6 @@ It also supports one-shot level measurement for both input and output IQ. fil
 
 ### `afedri-udp.py`
 Receives AFEDRI UDP IQ packets and writes raw `s16` IQ payload to stdout. It supports optional source IP filtering and packet loss statistics based on sequence numbers. fileciteturn1file10
-
-### `afedri-control.py`
-Original AFEDRI control helper for setting frequency, rate, and gain and starting/stopping the stream. fileciteturn1file9
-
-### `afedri-control-fixed.py`
-Improved AFEDRI/AFE822x control helper with more complete command handling, AGC support, corrected RF gain coding, single-channel mode handling, and detailed reply logging. fileciteturn1file6
 
 ### `soapy_sdriq_to_stdout_v2.py`
 Reads RFSpace SDR-IQ samples via SoapySDR and writes them to stdout as either `s16` IQ or converted `u8` IQ. It supports the same `u8` scaling philosophy as the Linrad helper. Supported sample rates are constrained to a defined set, and ATT gain is quantized to the device step values. fileciteturn1file1
@@ -1261,10 +1280,13 @@ vastgesteld; Ethernet heeft het verlies verminderd, maar niet volledig opgelost.
 
 Protocolreferentie: [AFE822x / AFEDRI protocol extensions](https://www.afedri-sdr.com/index.php/downloads/category/2-documentation?download=242:afe822x-sdr-protocol-extensions).
 
-The older helpers support two routes:
+The shellscript uses `afedri-udp.py` for UDP IQ reception. Configure and start
+the AFEDRI stream separately before using these profiles. The C receiver
+handles both device control and reception itself.
 
-- direct control/programming of the device
-- direct UDP IQ reception into the local pipeline
+The older `afedri-control.py` and `afedri-control-fixed.py` utilities described
+below are retained in the commit history, but are no longer shipped in the
+current checkout.
 
 ### Drivers / helpers used
 
@@ -1931,6 +1953,9 @@ Vanaf de opdrachtregel kan dit ook:
 ./build/linrad_dvb --iq-file /pad/naar/opname.iq --print-pipeline
 ./build/linrad_dvb --iq-file /pad/naar/opname.iq --run
 ```
+
+De onderstaande meetnotities verwijzen naar lokale opnamen; de opnamen en
+bijbehorende JSON-bestanden worden niet meegeleverd.
 
 De oude AFEDRI-opnamen `recordings/fbn2.raw`, `recordings/org.raw` en
 `recordings/h.raw` zijn Linrad RAW-bestanden met een header van **41 bytes** en

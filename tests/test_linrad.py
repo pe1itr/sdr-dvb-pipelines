@@ -19,6 +19,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 RX = ROOT / "build/linrad_udp_to_stdout"
 UI = ROOT / "build/linrad_dvb"
+EXAMPLE = ROOT / "linrad-dvb.example.ini"
 spec = importlib.util.spec_from_file_location("reference", ROOT / "linrad_udp_to_stdout_v3.py")
 reference = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reference)
@@ -208,13 +209,11 @@ class ReceiverTests(unittest.TestCase):
 
 class PipelineTests(unittest.TestCase):
     def preview(self, standard, sr, fec, gi="1/32", scatter=False, config=None):
-        args = [UI, "--print-pipeline", "--source", "linrad", "--standard", standard, "--sr", str(sr), "--fec", fec, "--gi", gi]
+        args = [UI, "--config", str(config or EXAMPLE), "--print-pipeline", "--source", "linrad", "--standard", standard, "--sr", str(sr), "--fec", fec, "--gi", gi]
         if config is None:
             args += ["--renderer", "cvlc"]
         if scatter:
             args += ["--scatterfix"]
-        if config:
-            args += ["--config", str(config)]
         p = subprocess.run(args, capture_output=True, text=True, cwd="/tmp", timeout=3)
         self.assertEqual(p.returncode, 0, p.stderr)
         return [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
@@ -250,7 +249,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(decoder[decoder.index('--ldpc-batch')+1], '1' if rate <= 333000 else '32')
                 self.assertEqual(decoder[decoder.index('--nhelpers')+1], '1')
         # The 5M 8PSK repeater uses the ordinary command line/configuration.
-        p = subprocess.run([UI, '--print-pipeline', '--source', 'b210', '--standard', 'DVB-S2',
+        p = subprocess.run([UI, '--config', EXAMPLE, '--print-pipeline', '--source', 'b210', '--standard', 'DVB-S2',
                             '--sr', '5000000', '--constellation', '8PSK', '--fec', '3/4'],
                            capture_output=True, text=True, timeout=3)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -284,7 +283,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_direct_sdr_5ms(self):
         for source, fmt in (("hackrf", "--u8"), ("b210", "--s16")):
-            p = subprocess.run([UI, "--print-pipeline", "--source", source,
+            p = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", "--source", source,
                                 "--standard", "DVB-S2", "--sr", "5000000", "--fec", "3/4"],
                                capture_output=True, text=True, timeout=3)
             self.assertEqual(p.returncode, 0, p.stderr)
@@ -524,7 +523,7 @@ class PipelineTests(unittest.TestCase):
         }
         for constellation, fecs in mappings.items():
             for fec, modcod in fecs.items():
-                p = subprocess.run([UI, "--print-pipeline", "--standard", "DVB-S2",
+                p = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", "--standard", "DVB-S2",
                                     "--constellation", constellation, "--fec", fec],
                                    capture_output=True, text=True, timeout=3)
                 self.assertEqual(p.returncode, 0, p.stderr)
@@ -536,21 +535,21 @@ class PipelineTests(unittest.TestCase):
                      ["--standard", "DVB-S2", "--constellation", "8PSK", "--fec", "4/5"],
                      ["--constellation", "8PSK"], ["--standard", "DVB-T", "--fec", "9/10"],
                      ["--standard", "DVB-S2", "--constellation", "16APSK"]):
-            p = subprocess.run([UI, "--print-pipeline", *args], capture_output=True, timeout=3)
+            p = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", *args], capture_output=True, timeout=3)
             self.assertNotEqual(p.returncode, 0)
 
     def test_invalid_selection(self):
         for args in (["--standard", "DVB-T", "--sr", "36000"], ["--fec", "1.2"],
                      ["--sr", "0"], ["--gi", "1/4"], ["--standard", "bogus"]):
             # File replay allows custom symbol rates; do not inherit that source.
-            p = subprocess.run([UI, "--source", "linrad", "--print-pipeline", *args],
+            p = subprocess.run([UI, "--config", EXAMPLE, "--source", "linrad", "--print-pipeline", *args],
                                capture_output=True, timeout=3)
             self.assertNotEqual(p.returncode, 0)
 
     def config(self, tmp):
         cfg = configparser.ConfigParser(interpolation=None)
-        cfg.read(ROOT / "linrad-dvb.ini")
-        # A saved user session is not a stable test fixture.
+        cfg.read(ROOT / "linrad-dvb.example.ini")
+        # Each test chooses its own session, independent of the example startup mode.
         cfg.remove_section("session")
         cfg["sdriq"].update(sample_rate="111111", frequency="28000000", gain="10",
                             lo_offset="0", tune_step="1000", format="s16",
@@ -655,7 +654,7 @@ class LifecycleTests(PipelineTests):
         cfg["paths"]["cvlc"] = "./player"
         cfg["paths"]["scatterfix"] = "./scatter"
         cfg["linrad"]["port"] = str(free_port())
-        cfg["scatterfix"]["udp_port"] = str(free_port())
+        cfg["scatterfix"] = {"udp_port": str(free_port())}
         for section, key in (("leandvb", "dvbs_args"), ("leandvb", "dvbs2_args"),
                              ("rbdvbt_rx", "args"), ("cvlc", "args"), ("scatterfix", "args")):
             cfg[section][key] = ""
@@ -809,6 +808,9 @@ class LifecycleTests(PipelineTests):
     def test_gui_controls_stop_restart_and_close(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.fixture(tmp)
+            # gui_smoke asserts this simulated receiver's address explicitly.
+            cfg["afedri"]["ip"] = "192.168.0.118"
+            self.write_config(cfg, path)
             from test_ts_info import Stream
             ts = Stream()
             Path(tmp, "information.ts").write_bytes(ts.pat(((1, 0x1000), (2, 0x1001))) + ts.sdt() +
