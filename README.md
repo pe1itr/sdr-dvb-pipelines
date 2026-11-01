@@ -222,6 +222,67 @@ korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
+### VLC bij onderbroken DVB-T-ontvangst
+
+**Bevinding van 1 november 2026, bij integratiecommit `6e76b83`:** de ingebouwde
+VLC-player gaf in deze casus uitsluitend grijs beeld, terwijl TSscatterFix het
+testbeeld **PE1ITR / 7950** toonde. In een afzonderlijke vergelijking was alleen
+`--avcodec-threads=1` toevoegen voldoende om ook VLC herkenbaar beeld te laten
+geven. **Besluit: deze playeraanpassing is nog niet toegepast; de integratie
+blijft voorlopig zoals gecommit.**
+
+De gebruikte opname staat lokaal onder
+`/home/rhardenb/repos/datv-transmitter/iq-output/`:
+`dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000-40s-jubzGI_rx.iq`.
+Dit is s16-IQ op 250000 samples/s, 40,01 seconden, DVB-T QPSK, BW 40000 Hz,
+FEC 1/2 en GI 1/32. Afspelen gebeurde op oorspronkelijke snelheid met
+`iq_file_to_stdout`; de decoder gebruikte `--live --resample-to-dvbt-rate --afc
+--live-symbols 64 --probe-symbols 64 --wait-video-start`.
+Versneld inlezen is voor deze vergelijking ongeschikt omdat het de livebuffers
+anders belast.
+
+Twee realtime runs leverden byte-identieke TS op: 105 pakketten, waarvan 88 op
+video-PID `0x100`, met H.264 van 160×120 bij 4 fps. Over alle decoderjobs waren
+508 van 705 onderzochte RS-blokken onherstelbaar. Op de video-PID zaten 15
+continuity-counteronderbrekingen. Vergelijking op dezelfde TS, met behoud van
+de relatieve aankomsttijden, gaf:
+
+| Weergave | Resultaat | Eerste herkenbare beeld vanaf eerste aangeboden TS-data |
+|---|---|---|
+| libVLC 3.0.24, bestaande opties | Alleen egaal grijs; zes frame-decoderthreads | Geen tijdens de meting |
+| libVLC, alleen `--avcodec-threads=1` toegevoegd | Herkenbaar testbeeld | Ongeveer 4,0 s |
+| Ingebouwde TSscatterFix-library | Herkenbaar stilbeeld | Ongeveer 3,1 s |
+| ffplay, standaard probe-instellingen | Eerst vijf grijze frames, daarna herkenbaar beeld | 26,74 s |
+| ffplay, `-probesize 4096 -analyzeduration 1000000` | Herkenbaar beeld, kortere opstarttijd | 17,75 s |
+
+De VLC-beelden zijn uit de video-outputcallbacks opgeslagen; herhaalde
+displaycallbacks tellen niet als unieke beelden. ffplay is zonder desktopvenster
+getest met SDL dummy-video/software-renderer en `-vf showinfo`: zijn tijden meten
+de aflevering aan het videofilter. Audio stond uit; de TS bevat geen audio.
+De oorspronkelijke IQ-replay leverde pas na 14,78 s de eerste TS-data aan,
+in blokken van 4096 bytes met maximaal 11,83 s ertussen. Deze aanlooptijd staat
+los van de tijden in de tabel.
+
+De VLC-logs bevatten TS-discontinuiteiten, PCR-resets en
+`buffer deadlock prevented`. [FFmpeg documenteert](https://github.com/FFmpeg/FFmpeg/blob/master/doc/multithreading.txt)
+dat frame-threading voor iedere extra thread één frame vertraging toevoegt.
+Dat verklaart waarom extra threads bij schaarse frames ongunstig kunnen zijn;
+de precieze interactie met de PCR-resets is niet afzonderlijk bewezen.
+Wel is het effect van de wijziging naar één thread hier direct gemeten.
+
+Er was dus nog een bruikbaar I-frame aanwezig. Deze casus toont ook de waarde van
+TSscatterFix' afzonderlijke beelddecodering, bewaarde headers en stilbeeldweergave
+zonder afspeelklok; hij bewijst niet dat samenvoegen van fragmenten voor dit beeld
+noodzakelijk was. Een mogelijke vervolgstap is één VLC-decoderthread voor zwakke,
+lage-bitrateontvangst, met aanvullende controle op normale video en audio.
+
+De lokale logs, TS, aankomsttijden en vergelijkingsbeelden staan in
+`build/diagnostics/jubzGI/`; deze meetartefacten zijn niet meegecommit en verdwijnen
+bij `make clean`. SHA-256 van de gebruikte IQ-opname:
+`ebc6f29aee1b70e36403f60dfeec38c6dc1d5ff71c68913ad3315ee4773acb5c`.
+SHA-256 van de ontvangen TS:
+`ffa449bb971f51b4813596264c45c46df99a14b6986e5329343de7709c9cc5bd`.
+
 ### EIT en klassieke teletekst
 
 Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.
