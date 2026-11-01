@@ -841,8 +841,10 @@ static void gain_step(App *a, int direction) {
     double high = a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
     if (next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
-        char command[64];
-        int length = g_snprintf(command, sizeof(command), "gain %.1f\n", next);
+        /* The helper expects a decimal point, regardless of GTK's locale. */
+        char command[64], value[G_ASCII_DTOSTR_BUF_SIZE];
+        g_ascii_formatd(value, sizeof(value), "%.1f", next);
+        int length = g_snprintf(command, sizeof(command), "gain %s\n", value);
         ssize_t sent;
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);

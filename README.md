@@ -1558,6 +1558,9 @@ standard via CLI resets incompatible mode defaults unless explicitly supplied.
 Closing without W leaves the previous saved settings intact.
 The internal `sdr_to_stdout --control-stdin` option accepts a frequency in Hz or `gain DB`
 per line on a private pipe from the launcher; stdout remains IQ only.
+Live gain commands always use a decimal point, including with Dutch or other
+comma-decimal desktop locales, so B210, HackRF, SDR-IQ and AFEDRI gain changes
+take effect without stopping and starting reception.
 
 The **IQ-bandfilter** checkbox enables a digital filter before the DVB decoder,
 for all sources including Linrad UDP. **[** narrows and **]** widens its total

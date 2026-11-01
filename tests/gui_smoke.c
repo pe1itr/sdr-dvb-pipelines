@@ -2,6 +2,55 @@
 #define main application_main
 #include "../src/linrad_dvb.c"
 #undef main
+#include "../src/tune_control.h"
+
+static void exercise_live_gain_locale(App *a) {
+    /* GTK uses the user's numeric locale; the SDR helper parses in C locale. */
+    locale_t decimal = newlocale(LC_NUMERIC_MASK, "nl_NL.UTF-8", (locale_t)0);
+    if (!decimal) decimal = newlocale(LC_NUMERIC_MASK, "de_DE.UTF-8", (locale_t)0);
+    if (!decimal) {
+        g_printerr("Skipping comma-locale gain regression: no Dutch/German locale installed\n");
+        return;
+    }
+    locale_t parser = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    g_assert_nonnull(parser);
+    locale_t saved_locale = uselocale((locale_t)0);
+    int source = a->source, saved_fd = a->tune_fd, fds[2];
+    g_assert_false(a->running);
+    g_assert_cmpint(pipe(fds), ==, 0);
+    g_assert_true(g_unix_set_fd_nonblocking(fds[0], TRUE, NULL));
+    a->running = TRUE; a->tune_fd = fds[1];
+    GPtrArray *source_args = a->stages[0].args;
+    const struct { int source; double initial, low, high, step; } cases[] = {
+        {1, 40, 0, 116, 1}, {2, 30.5, 0, 76, 1},
+        {3, -10, -20, 10, 10}, {SOURCE_AFEDRI, 14, -10, 35, 3}
+    };
+    for (unsigned i = 0; i < G_N_ELEMENTS(cases); ++i) {
+        a->source = cases[i].source;
+        const char *section = sources[a->source];
+        double saved_gain = g_key_file_get_double(a->config, section, "gain", NULL);
+        g_key_file_set_double(a->config, section, "gain", cases[i].initial);
+        TuneControl control = {0};
+        double received = cases[i].initial, frequency = 0, bandwidth = 0;
+        for (int direction = 1; direction >= -1; direction -= 2) {
+            uselocale(decimal);
+            gain_step(a, direction);
+            uselocale(parser);
+            g_assert_cmpint(tune_control_read(&control, fds[0], 1, 0, &frequency,
+                cases[i].low, cases[i].high, cases[i].source == 3 || cases[i].source == SOURCE_AFEDRI ? cases[i].step : 0,
+                &received, 111111, &bandwidth), ==, 2);
+            g_assert_cmpfloat(received, ==, cases[i].initial + (direction == 1 ? cases[i].step : 0));
+            g_assert_cmpfloat(received, ==, g_key_file_get_double(a->config, section, "gain", NULL));
+            g_assert_true(a->running);
+            g_assert_true(source_args == a->stages[0].args);
+        }
+        g_key_file_set_double(a->config, section, "gain", saved_gain);
+    }
+    uselocale(saved_locale); freelocale(decimal); freelocale(parser);
+    close(fds[0]); close(fds[1]);
+    a->source = source; a->tune_fd = saved_fd; a->running = FALSE;
+    tuning_refresh(a);
+}
 
 static void assert_no_tabs(GtkWidget *widget) {
     g_assert_false(GTK_IS_NOTEBOOK(widget));
@@ -848,6 +897,7 @@ static gboolean exercise(gpointer data) {
         exercise_file_selection(a);
         exercise_record_controls(a);
         exercise_afedri(a);
+        exercise_live_gain_locale(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
         g_assert_true(gtk_widget_get_parent(a->gain_display) == gtk_widget_get_parent(a->power_button));
