@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the new Linrad-only C receiver and GUI, run `make` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net and IQ files), run `make` followed by
 `./build/linrad_dvb`. Set parameters directly in the GUI and edit
 `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -135,6 +135,8 @@ melding; de ontvangst blijft doorlopen.
 - **Input**: input, samplerate, IQ-formaat, LO-offset, afstemstap,
   device-argumenten, antenne en UHD-images;
   bij Linrad het UDP-adres, de poort, de headerlengte en de frequentie voor de schaal.
+  Bij **Afedri Net** stel je het SDR-IP, de TCP/UDP-poort en het UDP-bindadres in;
+  zie [Native Afedri Net input](#native-afedri-net-input).
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
 - **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
@@ -543,7 +545,97 @@ The launcher includes several Linrad-based profiles, including DVB-S, DVB-S2, le
 
 ## 2. AFEDRI / AFE822x
 
-AFEDRI is supported in two ways:
+AFEDRI is supported directly in the C GUI, as well as through the older helpers.
+
+### Native Afedri Net input
+
+Kies **Input → Afedri Net** en druk op **Start SDR**. De standaardinstellingen
+zijn `192.168.0.118`, TCP/UDP-poort `50005`, single-channel DDC1, 16-bit IQ,
+`1010526` samples/s en 28 MHz. IP, poort en UDP-bindadres zijn instelbaar in Input;
+**W** slaat de instellingen op in `[afedri]` van `linrad-dvb.ini`.
+De netwerkgegevens en samplerate komen uit de bestaande Linrad-configuratie
+`linrad-afedri/par_netafedri`. Er is geen SoapyAfedri-plugin of los Python-programma
+nodig voor deze invoerbron.
+
+De aansluiting opent TCP, controleert het apparaatantwoord en zet de UDP-ontvanger
+klaar vóór het starten. Daarna volgen STOP, single-channel, samplerate, lange
+UDP-pakketten, frequentie en RF-gain. De wachttijden uit
+`afedri-control-fixed.py` blijven behouden: 100 ms per uitwisseling en 200 ms extra
+vóór START (`08 00 18 00 80 02 00 01`). STOP gebruikt
+`08 00 18 00 80 01 00 01`, zoals Linrad en de gecorrigeerde controle.
+Het experimentele `sdr-to-stout/start.py` heeft deze twee namen omgewisseld;
+die variant is niet overgenomen.
+
+UDP wordt door een eigen ontvangstthread in batches gelezen, met een begrensde
+buffer van één seconde. Deze thread wacht niet op TCP-afstemming, spectrum, filter,
+audio of decoder. De verwerking bundelt ongeveer 5 ms IQ (maximaal 8192 samples)
+in plaats van per UDP-pakket van 256 samples een volledige 16384-punts filter-FFT
+uit te voeren. Een onvolledig blok wordt binnen 10 ms doorgegeven. Dezelfde grotere
+blokken gaan naar de USB/FM-monitor, zodat de 128 audio-bufferslots ook bij
+piekgewijze netwerkontvangst bruikbaar blijven. De filterkwaliteit blijft gelijk.
+
+Het log toont iedere seconde aparte tellers:
+
+- `lost`: gaten in de ontvangen UDP-volgnummers; dit omvat eventuele socketdrops.
+- `socket-drops`: door Linux gemelde overflow van deze UDP-socket.
+- `input-queue-drops`: blokken die niet meer in onze eigen ontvangstbuffer passen.
+- `zero-filled`: ontbrekende pakketten waarvoor nul-IQ is ingevoegd.
+- `queued` / `peak`: actuele en maximale vulling van de ontvangstbuffer.
+
+Zoals Linrad vult de ontvanger kleine gaten (minder dan 25 pakketten) met nul-IQ
+om de sampletijd te behouden. Dat herstelt geen verloren signaal; verlies blijft
+zichtbaar in `lost`. Grote sprongen worden niet met onbeperkte stilte opgevuld.
+De decoderuitvoer en USB-monitor houden daarnaast hun eigen droptellers bij.
+
+De status toont afzonderlijk **Online**, bevestiging van START en **Receiving IQ**.
+De start/stopknop blijft geel totdat geldige UDP-IQ binnenkomt en wordt dan groen.
+TCP-uitval, ontbrekende/ongeldige antwoorden en drie seconden zonder geldige IQ
+geven een fout. Bij stoppen wordt STOP verzonden en worden beide sockets gesloten.
+Gebruik de Afedri op dat moment niet tegelijk vanuit Linrad of een ander programma.
+
+De ADC-klok wordt uitgelezen. Als de ingestelde samplerate niet overeenkomt met de
+hardwaredeling, stopt de aansluiting met de juiste waarde in het log; vul die in
+bij Input. Frequentie (0–35 MHz), LO-offset, gain (-10 tot +35 dB in stappen van
+3 dB), spectrum, decoderfilter, audio-monitor en IQ-opname werken via de bestaande
+pipeline. De aanwezige hardware-AGC-instelling blijft behouden. De ontvangst is
+single-channel s16; `u8` is een uitvoerconversie. Ongeldige UDP-pakketten worden
+verworpen, verlies wordt gemeld en dubbele/late pakketten worden overgeslagen.
+
+Losse ontvangst, met Ctrl+C om te stoppen:
+
+```bash
+./build/sdr_to_stdout --source afedri --ip 192.168.0.118 --port 50005 \
+  --sample-rate 1010526 --frequency 28000000 --gain 14 --format s16 > afedri.iq
+```
+
+`make test-afedri` test met een lokale TCP/UDP-simulator de exacte startvolgorde,
+wachttijden, gefragmenteerde antwoorden, vroege IQ, s16/u8, opname,
+pakketnummers, live afstemmen en fouten. Een vertraagd TCP-afstemantwoord wordt
+getest met 6500 doorgaande IQ-pakketten. Een aparte test voert een bekende toon
+via UDP, de echte USB-demodulator en PCM-uitvoer; ook bij 100-ms netwerkbursts
+blijven sampleaantal en toonamplitude intact, zonder monitorbufferverlies.
+
+Op de AFE822x-SDR op het ingestelde adres zijn TCP-identificatie, START, echte
+UDP-IQ en STOP bevestigd bij 28 MHz en 1010526 samples/s. In twee korte metingen
+met hetzelfde filter en spectrum daalde de CPU-tijd van de bron van 18,87 naar
+2,97 seconden per 20 seconden meettijd (ongeveer 94% naar 15% van één kern).
+Bij een vervolgmeting met de echte USB-audioketen bleven socket-, ontvangstbuffer-,
+uitvoerbuffer- en monitorbufferdrops op nul. Er waren nog gaten in de aangeleverde
+UDP-stroom over de wifi-verbinding; deze aanpassing garandeert dus geen verliesvrije
+radio- of netwerkverbinding. Een onafhankelijke meting met de oorspronkelijke
+Python-besturing en minimale UDP-lezer zag eveneens gaten (806 pakketten in
+20 seconden), zonder deze C-filter- of audiocode. Dit is geen DVB-lock- of duurtest.
+
+Na omschakelen van de laptop naar Ethernet daalde het pakketverlies in de
+aangeleverde logs van circa 2,54% naar 0,38%. Alle gaten in die Ethernet-log
+werden met nul-IQ opgevuld; socket- en ontvangstbufferdrops bleven nul.
+Een passieve vervolgmeting tijdens ontvangst liet geen toename van Ethernet-,
+IP- of UDP-fouttellers zien. De oorzaak van het resterende verlies is nog niet
+vastgesteld; Ethernet heeft het verlies verminderd, maar niet volledig opgelost.
+
+Protocolreferentie: [AFE822x / AFEDRI protocol extensions](https://www.afedri-sdr.com/index.php/downloads/category/2-documentation?download=242:afe822x-sdr-protocol-extensions).
+
+The older helpers support two routes:
 
 - direct control/programming of the device
 - direct UDP IQ reception into the local pipeline

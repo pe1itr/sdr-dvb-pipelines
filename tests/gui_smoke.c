@@ -66,6 +66,40 @@ static void exercise_record_controls(App *a) {
     status(a, "");
 }
 
+static void exercise_afedri(App *a) {
+    int source = a->source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_AFEDRI);
+    g_assert_true(hardware_source(a));
+    g_assert_true(gtk_widget_get_visible(a->rate_box));
+    g_assert_false(gtk_widget_get_visible(a->sdriq_rate_box));
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][0])), ==, "192.168.0.118");
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][1])), ==, "50005");
+    gtk_entry_set_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][1]), "50006");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), 28001);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box), 200000);
+    gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "afedri", "gain", NULL), ==, 17);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "afedri", "frequency", NULL), ==, 28001000);
+    char *preview = describe(a);
+    g_assert_nonnull(strstr(preview, "'--ip' '192.168.0.118'"));
+    g_assert_nonnull(strstr(preview, "'--port' '50006'"));
+    g_free(preview);
+    a->running = TRUE; a->afedri_receiving = FALSE;
+    power_refresh(a);
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->power_label)), "connecting Afedri"));
+    const char *online = "[AFEDRI] Online: AFE822x (192.168.0.118:50005), TCP reply confirmed\n";
+    record_log(a, online, strlen(online));
+    g_assert_false(a->afedri_receiving);
+    const char *iq = "[AFEDRI] Receiving IQ: single channel, s16, UDP confirmed\n";
+    record_log(a, iq, 12);
+    record_log(a, iq + 12, strlen(iq) - 12);
+    g_assert_true(a->afedri_receiving);
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->power_label)), "running"));
+    a->running = FALSE; a->afedri_receiving = FALSE;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
+    power_refresh(a);
+}
+
 static gboolean constellation_green_at(DecoderView *v, double re, double im) {
     int w=gtk_widget_get_allocated_width(v->area), h=gtk_widget_get_allocated_height(v->area);
     double size=MIN(w,h), scale=size/(4*.70710678);
@@ -690,6 +724,7 @@ static gboolean exercise(gpointer data) {
         exercise_decoder_view(a);
         exercise_file_selection(a);
         exercise_record_controls(a);
+        exercise_afedri(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
         g_assert_true(gtk_widget_get_parent(a->gain_display) == gtk_widget_get_parent(a->power_button));
@@ -970,6 +1005,8 @@ static gboolean exercise(gpointer data) {
         restored.config = g_key_file_new();
         g_assert_true(g_key_file_load_from_file(restored.config, a->config_path, G_KEY_FILE_NONE, NULL));
         load_session(&restored);
+        g_assert_cmpint(g_key_file_get_integer(restored.config, "afedri", "port", NULL), ==, 50006);
+        g_assert_cmpint(g_key_file_get_integer(restored.config, "afedri", "sample_rate", NULL), ==, 200000);
         g_assert_cmpint(restored.source, ==, 3);
         g_assert_cmpint(restored.standard, ==, 2);
         g_assert_cmpint(restored.sr, ==, 40000);

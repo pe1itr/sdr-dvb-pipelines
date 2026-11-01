@@ -87,8 +87,8 @@ test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/sdr_to_stdout: src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/tune_control.h src/iq_record.c src/iq_record.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd) src/sdr_to_stdout.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd) $(FILTER_LIBS) -lm $(LDLIBS)
+$(BUILD_DIR)/sdr_to_stdout: src/afedri.c src/afedri.h src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/tune_control.h src/iq_record.c src/iq_record.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd) src/sdr_to_stdout.c src/afedri.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_iq_output.c src/iq_output.c -o $@ $(LDFLAGS) -pthread $(LDLIBS)
@@ -193,3 +193,12 @@ test-usb: all $(BUILD_DIR)/usb_demod_probe $(BUILD_DIR)/usb_receiver_probe
 	python3 tests/test_usb.py
 
 test: test-usb
+
+.PHONY: test-afedri
+test-afedri: all $(BUILD_DIR)/afedri_audio_probe
+	python3 tests/test_afedri.py
+
+test: test-afedri
+
+$(BUILD_DIR)/afedri_audio_probe: tests/afedri_audio_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(USB_CFLAGS) tests/afedri_audio_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(USB_LIBS) -pthread -lm $(LDLIBS)

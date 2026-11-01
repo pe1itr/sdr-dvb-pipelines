@@ -33,7 +33,7 @@ typedef struct {
     GtkWidget *frequency_display, *frequency_calculation, *gain_display, *offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
-    GtkWidget *hardware_entries[4][3], *ip_box, *port_box, *header_box, *center_box;
+    GtkWidget *hardware_entries[5][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
@@ -41,7 +41,7 @@ typedef struct {
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
     int renderer;
     int tune_fd;
-    gboolean scatter, running, stopping, closing, headless;
+    gboolean scatter, running, stopping, closing, headless, afedri_receiving;
     guint kill_timer, drain_timer;
     gboolean replay_eof;
     Stage stages[4];
@@ -80,9 +80,9 @@ static gboolean valid_fec(App *a, int fec) {
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-enum { SOURCE_FILE = 4 };
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "file"};
-static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "File (IQ)"};
+enum { SOURCE_AFEDRI = 4, SOURCE_FILE = 5 };
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "file"};
+static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
@@ -201,8 +201,8 @@ static void build_pipeline(App *a) {
     if (a->window) add(s, "--control-stdin");
     } else {
         const char *section = sources[a->source];
-        sample_rate = integer_setting(a, section, "sample_rate", a->source == 3 ? 8138 : 2000000,
-                                      a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
+                                      a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
         if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
         if (strcmp(format, "s16") && strcmp(format, "u8")) fatal("Invalid SDR format");
@@ -213,9 +213,11 @@ static void build_pipeline(App *a) {
         add_number(s, "--sample-rate", sample_rate);
         const char *keys[] = {"frequency", "gain", "args", "images", "antenna"};
         const char *flags[] = {"--frequency", "--gain", "--args", "--images", "--antenna"};
+        const char *net_keys[] = {"frequency", "gain", "ip", "port", "bind"};
+        const char *net_flags[] = {"--frequency", "--gain", "--ip", "--port", "--bind"};
         for (int i = 0; i < 5; ++i) {
-            char *value = setting(a, section, keys[i]);
-            add(s, flags[i]); add(s, value); g_free(value);
+            char *value = setting(a, section, a->source == SOURCE_AFEDRI ? net_keys[i] : keys[i]);
+            add(s, a->source == SOURCE_AFEDRI ? net_flags[i] : flags[i]); add(s, value); g_free(value);
         }
     }
     const char *filter_section = sources[a->source];
@@ -334,6 +336,7 @@ static void log_text(App *a, const char *text) {
 }
 
 static void record_toggled(GtkToggleButton *button, gpointer data);
+static void power_refresh(App *a);
 
 static void record_refresh(App *a) {
     if (!a->record_button) return;
@@ -343,7 +346,7 @@ static void record_refresh(App *a) {
     gtk_button_set_label(GTK_BUTTON(a->record_button), a->record_pending ? "IQ · waiting…" :
         a->recording ? "● Stop IQ" : "● Record IQ");
     gtk_widget_set_sensitive(a->record_button,
-        a->source != SOURCE_FILE && a->running && !a->stopping && !a->record_pending && a->tune_fd >= 0);
+        a->source != SOURCE_FILE && (a->source != SOURCE_AFEDRI || a->afedri_receiving) && a->running && !a->stopping && !a->record_pending && a->tune_fd >= 0);
     gtk_widget_set_tooltip_text(a->record_button, a->source == SOURCE_FILE ?
         "IQ recording is unavailable during file playback." : !a->running ?
         "Start SDR to record full-band s16 IQ." : "Toggle full-band s16 IQ recording in the configuration directory.");
@@ -384,6 +387,14 @@ static void record_log(App *a, const char *text, size_t length) {
                 status(a, line + strlen("[iq-record] "));
                 record_refresh(a);
             }
+            if (a->source == SOURCE_AFEDRI && a->running && !a->stopping &&
+                g_str_has_prefix(line, "[AFEDRI] ")) {
+                if (g_str_has_prefix(line, "[AFEDRI] Receiving IQ:")) {
+                    a->afedri_receiving = TRUE;
+                    power_refresh(a);
+                }
+                status(a, line + strlen("[AFEDRI] "));
+            }
             a->record_log_used = 0;
         } else if (a->record_log_used < sizeof(a->record_log_line)-1)
             a->record_log_line[a->record_log_used++] = text[i];
@@ -421,15 +432,16 @@ static void power_refresh(App *a) {
     const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error"};
     for (unsigned i=0; i<G_N_ELEMENTS(states); ++i) gtk_style_context_remove_class(style, states[i]);
     int state = a->stopping ? 2 : a->running ? 1 : a->exit_code ? 3 : 0;
-    gtk_style_context_add_class(style, states[state]);
+    gboolean connecting = a->source == SOURCE_AFEDRI && a->running && !a->stopping && !a->afedri_receiving;
+    gtk_style_context_add_class(style, states[connecting ? 2 : state]);
     const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
     const char *file_labels[] = {"Play file", "Stop file · playing", "Stopping playback…", "Play file · error"};
     const char *tips[] = {"Receiver off. Click to start.",
         "Receiver pipeline running. Click to stop.",
         "Stopping the receiver pipeline. Please wait…",
         "Reception stopped due to an error. Check the status and log; click to restart."};
-    gtk_label_set_text(GTK_LABEL(a->power_label), a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
-    gtk_widget_set_tooltip_text(a->power_button, tips[state]);
+    gtk_label_set_text(GTK_LABEL(a->power_label), connecting ? "Stop SDR · connecting Afedri…" : a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
+    gtk_widget_set_tooltip_text(a->power_button, connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
     gtk_widget_set_sensitive(a->power_button, !a->stopping);
 }
 
@@ -535,6 +547,7 @@ static void child_setup(gpointer unused) {
 static void start_pipeline(App *a) {
     if (a->running) return;
     a->record_log_used = 0;
+    a->afedri_receiving = FALSE;
     build_pipeline(a); a->exit_code = 0;
     if (internal_player(a) && !a->video_view.area) {
         a->exit_code = 1;
@@ -752,8 +765,8 @@ static void tune_step(App *a, int direction) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
-    double low = a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
-    double high = a->source == 3 ? 30000000 : 6000000000.0;
+    double low = a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
+    double high = a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
     if (next < low || next > high) { status(a, "SDR tuning limit reached"); return; }
     if (a->running) {
         char command[64];
@@ -778,9 +791,9 @@ static void gain_step(App *a, int direction) {
     if (!hardware_source(a) || a->stopping) return;
     const char *section = sources[a->source];
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
-    double next = gain + direction*(a->source == 3 ? 10 : 1);
-    double low = a->source == 3 ? -20 : 0;
-    double high = a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
+    double low = a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
+    double high = a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
     if (next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
         char command[64];
@@ -1085,11 +1098,11 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->format_box, source_changed, a);
         g_signal_handlers_block_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
-                                  a->source == 3 ? 30000 : 6000000.0);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
+                                  a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
-                                  a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
+                                  a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),
             integer_setting(a, section, "sample_rate", 1, 100000000));
         if (a->source == 3) {
@@ -1321,10 +1334,16 @@ static void source_defaults(App *a) {
     const char *keys[] = {"sample_rate", "frequency", "gain", "args", "images", "antenna", "format"};
     const char *values[] = {"10000000", "437000000", "30", "", "/home/rhardenb/repos/ettus/uhd-images", "TX/RX", "s16"};
     const char *sdriq_values[] = {"111111", "28000000", "10", "driver=rfspace,sdr-iq=/dev/ttyUSB0", "", "", "s16"};
+    const char *afedri_values[] = {"1010526", "28000000", "14", "", "", "", "s16"};
+    const char *net_keys[] = {"ip", "port", "bind"};
+    const char *net_values[] = {"192.168.0.118", "50005", "0.0.0.0"};
+    for (int i = 0; i < 3; ++i)
+        if (!g_key_file_has_key(a->config, "afedri", net_keys[i], NULL))
+            g_key_file_set_string(a->config, "afedri", net_keys[i], net_values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j)
         for (int i = 0; i < 7; ++i)
             if (!g_key_file_has_key(a->config, sources[j], keys[i], NULL))
-                g_key_file_set_string(a->config, sources[j], keys[i], j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
+                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j) {
         if (!g_key_file_has_key(a->config, sources[j], "lo_offset", NULL))
             g_key_file_set_double(a->config, sources[j], "lo_offset", 0);
@@ -1486,16 +1505,31 @@ static GtkWidget *entry_field(GtkWidget *grid, const char *label, int row, App *
 static void hardware_entry_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     const char *keys[] = {"args", "images", "antenna"};
-    for (int source = 1; source < 4; ++source)
+    const char *net_keys[] = {"ip", "port", "bind"};
+    for (int source = 1; source < SOURCE_FILE; ++source)
         for (int field = 0; field < 3; ++field)
             if (widget == a->hardware_entries[source][field])
-                g_key_file_set_string(a->config, sources[source], keys[field],
+                g_key_file_set_string(a->config, sources[source], source == SOURCE_AFEDRI ? net_keys[field] : keys[field],
                                      gtk_entry_get_text(GTK_ENTRY(widget)));
     if (!a->running) refresh_preview(a);
 }
 
 static gboolean apply_hardware(App *a) {
     if (a->running) return TRUE;
+    if (a->source == SOURCE_AFEDRI) {
+        struct in_addr addr;
+        const char *net_ip = gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][0]));
+        const char *port = gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][1]));
+        const char *bind = gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_AFEDRI][2]));
+        char *end; errno = 0;
+        long value = strtol(port, &end, 10);
+        if (inet_pton(AF_INET, net_ip, &addr) != 1 || inet_pton(AF_INET, bind, &addr) != 1 ||
+            errno || end == port || *end || value < 1 || value > 65535) {
+            GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(a->config_dialog), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "Enter valid Afedri IPv4 addresses and a TCP / UDP port from 1 to 65535.");
+            gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog); return FALSE;
+        }
+    }
     const char *ip = gtk_entry_get_text(GTK_ENTRY(a->ip_box));
     struct in_addr address;
     if (inet_pton(AF_INET, ip, &address) != 1) {
@@ -1670,8 +1704,11 @@ static void create_config(App *a) {
         } else {
             const char *keys[] = {"args", "images", "antenna"};
             const char *labels[] = {"Device arguments", "UHD images (B210)", "Antenna"};
+            const char *net_keys[] = {"ip", "port", "bind"};
+            const char *net_labels[] = {"Afedri IP address", "TCP / UDP port", "UDP bind address"};
             for (int field=0; field<3; ++field) {
-                GtkWidget *entry = entry_field(grid, labels[field], field, a, sources[source], keys[field]);
+                GtkWidget *entry = entry_field(grid, source == SOURCE_AFEDRI ? net_labels[field] : labels[field],
+                    field, a, sources[source], source == SOURCE_AFEDRI ? net_keys[field] : keys[field]);
                 a->hardware_entries[source][field] = entry;
                 g_signal_connect(entry, "changed", G_CALLBACK(hardware_entry_changed), a);
             }
@@ -2138,7 +2175,7 @@ int main(int argc, char **argv) {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},

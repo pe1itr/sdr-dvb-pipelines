@@ -6,6 +6,7 @@
 #include "iq_output.h"
 #include "iq_convert.h"
 #include "sdriq.h"
+#include "afedri.h"
 #include "tune_control.h"
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
@@ -49,17 +50,22 @@ int main(int argc, char **argv) {
     const char *source = "", *args = "", *images = "", *antenna = "TX/RX", *format = "s16";
     double rate = 10000000, freq = 437000000, gain = 30, actual = 0;
     double bandwidth = 0;
+    const char *ip = "192.168.0.118", *bind_ip = "0.0.0.0";
+    double port = 50005;
     int control_stdin = 0;
     IQRecord capture = {0};
     TuneControl control = {.command=iq_record_command, .command_data=&capture};
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz]\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz]\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
         if (!strcmp(key, "--source")) source = v;
+        else if (!strcmp(key, "--ip")) ip = v;
+        else if (!strcmp(key, "--bind")) bind_ip = v;
+        else if (!strcmp(key, "--port")) port = number(v);
         else if (!strcmp(key, "--args")) args = v;
         else if (!strcmp(key, "--images")) images = v;
         else if (!strcmp(key, "--antenna")) antenna = v;
@@ -70,13 +76,17 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--gain")) gain = number(v);
         else { fprintf(stderr, "Unknown option: %s\n", key); return 2; }
     }
+    int afedri = !strcmp(source, "afedri");
     int sdriq = !strcmp(source, "sdriq");
     int hackrf = !strcmp(source, "hackrf"), u8 = !strcmp(format, "u8");
-    if ((!hackrf && !sdriq && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
-        (sdriq ? (!sdriq_rate_valid(rate) || freq < 500 || freq > 30000000 || !sdriq_gain_valid(gain)) :
+    if ((!hackrf && !sdriq && !afedri && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
+        (afedri ? (rate < 48000 || rate > 2400000 || rate != floor(rate) ||
+                   freq < 0 || freq > 35000000 || !afedri_gain_valid(gain) ||
+                   port < 1 || port > 65535 || port != floor(port)) : sdriq ? (!sdriq_rate_valid(rate) || freq < 500 || freq > 30000000 || !sdriq_gain_valid(gain)) :
          (rate < 2000000 || rate > (hackrf ? 20000000 : 61440000) ||
           freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < 0 || gain > (hackrf ? 116 : 76)))) {
         fprintf(stderr, "Invalid source, format, rate, frequency or gain\n");
+        if (afedri) fprintf(stderr, "AFEDRI: rate 48000..2400000; frequency 0..35000000 Hz; gain -10..35 dB in 3 dB steps; IPv4 and TCP/UDP port required\n");
         if (sdriq) fprintf(stderr, "SDR-IQ: rates 8138, 16276, 37793, 55556, 111111, 158730, 196078; frequency 500..30000000 Hz; ATT -20, -10, 0, 10 dB\n");
         return 2;
     }
@@ -92,6 +102,7 @@ int main(int argc, char **argv) {
     }
     sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
     uhd_usrp_handle usrp = NULL; uhd_rx_streamer_handle rx = NULL; uhd_rx_metadata_handle md = NULL;
+    Afedri *net = NULL;
     SoapySDRDevice *dev = NULL; SoapySDRStream *stream = NULL;
     int result = 1, started = 0;
     IQOutput *output = NULL;
@@ -102,8 +113,13 @@ int main(int argc, char **argv) {
     /* Blocks are kept large to amortize pipe and driver overhead at 10+ MS/s. */
     int16_t iq[65536 * 2]; unsigned char packed[65536 * 2];
     float float_iq[2048 * 2];
-    size_t block_samples = sdriq ? 2048 : 65536;
-    if (hackrf || sdriq) {
+    /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
+     * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
+    size_t block_samples = afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : 65536;
+    if (afedri) {
+        net = afedri_open(ip, (int)port, bind_ip, rate, freq, gain, &actual);
+        if (!net) goto done;
+    } else if (hackrf || sdriq) {
         dev = SoapySDRDevice_makeStrArgs(*args ? args :
             (sdriq ? "driver=rfspace,sdr-iq=/dev/ttyUSB0" : "driver=hackrf"));
         if (!dev) { fprintf(stderr, "%s: %s\n", source, SoapySDRDevice_lastError()); goto done; }
@@ -149,7 +165,7 @@ int main(int argc, char **argv) {
     }
     /* The downstream decoder uses the requested rate. Never silently feed a coerced rate. */
     /* SDR-IQ presets are integer-rounded; allow only that rounding difference. */
-    if (!isfinite(actual) || fabs(actual-rate) > (sdriq ? 0.5 : rate*1e-6)) {
+    if (!isfinite(actual) || fabs(actual-rate) > (sdriq || afedri ? 0.5 : rate*1e-6)) {
         fprintf(stderr, "Requested rate %.0f, hardware rate %.0f; select the hardware rate in the GUI\n", rate, actual); goto done;
     }
     fprintf(stderr, "[SDR] %s: %.0f Hz, %.0f samples/s, gain %.1f dB, %s IQ\n", source, freq, actual, gain, format);
@@ -158,7 +174,8 @@ int main(int argc, char **argv) {
     if (!output) { perror("IQ output queue"); goto done; }
     fprintf(stderr, "[SDR] Independent IQ writer: %.0f ms buffer, %.1f MiB\n",
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
-    if (hackrf || sdriq) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
+    if (afedri) { if (afedri_start(net)) goto done; }
+    else if (hackrf || sdriq) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
     else { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
     double last_report = monotonic_seconds();
@@ -168,12 +185,14 @@ int main(int argc, char **argv) {
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
-                sdriq ? 500 : hackrf ? 1000000 : 70000000,
-                sdriq ? 30000000 : 6000000000.0, &requested,
-                sdriq ? -20 : 0, sdriq ? 10 : hackrf ? 116 : 76,
-                sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+                afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
+                afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
+                afedri ? -10 : sdriq ? -20 : 0, afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
         if ((changed & 1) && requested != freq) {
-            if (dev) {
+            if (afedri) {
+                if (afedri_frequency(net, requested)) goto done;
+            } else if (dev) {
                 S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, requested, NULL));
             } else {
                 uhd_tune_request_t tune = {.target_freq=requested, .rf_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO,
@@ -185,7 +204,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[SDR] Tuned to %.0f Hz; decoder may need to reacquire\n", freq);
         }
         if ((changed & 2) && requested_gain != gain) {
-            if (sdriq) {
+            if (afedri) {
+                if (afedri_gain(net, requested_gain)) goto done;
+                gain = requested_gain;
+            } else if (sdriq) {
                 S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "ATT", requested_gain));
                 gain = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "ATT");
             } else if (hackrf) {
@@ -205,7 +227,12 @@ int main(int argc, char **argv) {
         int output_error = iq_output_error(output);
         if (output_error) { fprintf(stderr, "IQ output: %s\n", strerror(output_error)); goto done; }
         size_t got = 0; void *buffers[] = {sdriq ? (void *)float_iq : (hackrf && u8 ? (void *)packed : (void *)iq)};
-        if (hackrf || sdriq) {
+        if (afedri) {
+            int n = afedri_read(net, iq, block_samples);
+            if (n < 0) goto done;
+            if (!n) continue;
+            got = (size_t)n;
+        } else if (hackrf || sdriq) {
             int flags = 0; long long time = 0;
             int n = SoapySDRDevice_readStream(dev, stream, buffers, block_samples, &flags, &time, 100000);
             if (n == SOAPY_SDR_TIMEOUT) continue;
@@ -255,11 +282,13 @@ int main(int argc, char **argv) {
         double now = monotonic_seconds();
         if (now-last_report >= 1) {
             report_output(output, rate, u8 ? 2 : 4, now-last_report, &previous, "Throughput");
+            if (afedri) afedri_report(net);
             last_report = now;
         }
     }
     result = 0;
 done:
+    afedri_close(net);
     iq_record_stop(&capture);
     if (output) {
         IQOutputStats stats; iq_output_stats(output, &stats);
