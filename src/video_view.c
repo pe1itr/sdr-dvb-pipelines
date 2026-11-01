@@ -238,8 +238,11 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
     if (!g_unix_open_pipe(pipefd, FD_CLOEXEC, NULL)) goto fail;
     v->fd = pipefd[0]; v->video_fd = pipefd[1];
     if (!g_unix_set_fd_nonblocking(v->video_fd, TRUE, NULL)) goto fail;
+    /* Frame threading holds pictures until more frames arrive. During broken
+     * reception those frames may never arrive before Stop closes the stream. */
     const char *args[] = {"--no-video-title-show", "--no-video-deco", "--no-snapshot-preview",
-                          "--avcodec-hw=none", "--no-drop-late-frames", "--no-skip-frames"};
+                          "--avcodec-hw=none", "--avcodec-threads=1",
+                          "--no-drop-late-frames", "--no-skip-frames"};
     v->vlc = libvlc_new(G_N_ELEMENTS(args), args);
     if (!v->vlc) goto fail;
     libvlc_media_t *media = libvlc_media_new_fd(v->vlc, v->fd);

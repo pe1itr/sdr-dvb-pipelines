@@ -1277,13 +1277,18 @@ static gboolean decoder_tick(gpointer data) {
         a->exit_code = 1; status(a, "Video / UDP output failed; check the VLC plugins and received stream.");
         stop_pipeline(a);
     }
-    if (a->standard!=2) {
-        a->decoder_view.selected_service[0]=0; a->decoder_view.service_valid=FALSE;
+    {
+        a->decoder_view.selected_service[0]=a->decoder_view.selected_provider[0]=0;
+        a->decoder_view.selected_video_codec[0]=a->decoder_view.selected_audio_codec[0]=0;
+        a->decoder_view.service_valid=FALSE;
         if (a->running && !a->stopping && a->scatter_backend) {
             TsInfoSnapshot snapshot={0};
             ts_info_backend_snapshot(a->scatter_backend->information,&snapshot);
+            g_strlcpy(a->decoder_view.selected_video_codec,snapshot.video_codec,sizeof(a->decoder_view.selected_video_codec));
+            g_strlcpy(a->decoder_view.selected_audio_codec,snapshot.audio_codec,sizeof(a->decoder_view.selected_audio_codec));
             for (unsigned i=0;i<snapshot.count;++i) if (snapshot.services[i].id==snapshot.selected) {
                 g_strlcpy(a->decoder_view.selected_service,snapshot.services[i].name,sizeof(a->decoder_view.selected_service));
+                g_strlcpy(a->decoder_view.selected_provider,snapshot.services[i].provider,sizeof(a->decoder_view.selected_provider));
                 a->decoder_view.service_valid=snapshot.pmt_seen;
             }
             ts_info_snapshot_clear(&snapshot);
@@ -1514,7 +1519,7 @@ static void choose_iq_file(GtkWidget *widget, gpointer data) {
     GtkWidget *chooser=gtk_file_chooser_dialog_new("Open IQ file",GTK_WINDOW(a->config_dialog),GTK_FILE_CHOOSER_ACTION_OPEN,
         "Cancel",GTK_RESPONSE_CANCEL,"Open",GTK_RESPONSE_ACCEPT,NULL);
     GtkFileFilter *filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"IQ files");
-    const char *patterns[]={"*.iq","*.cf32","*.fc32","*.s16","*.u8"};
+    const char *patterns[]={"*.iq","*.raw","*.cf32","*.fc32","*.s16","*.u8"};
     for (unsigned i=0; i<G_N_ELEMENTS(patterns); ++i) gtk_file_filter_add_pattern(filter,patterns[i]);
     gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser),filter);
     filter=gtk_file_filter_new(); gtk_file_filter_set_name(filter,"All files"); gtk_file_filter_add_pattern(filter,"*");

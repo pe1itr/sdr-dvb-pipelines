@@ -21,6 +21,8 @@ static void report(const TsInfoSnapshot *s) {
     struct json_object *out=json_object_new_object(), *events=json_object_new_array(), *services=json_object_new_array();
     json_object_object_add(out,"selected",json_object_new_int(s->selected));
     json_object_object_add(out,"pmt",json_object_new_boolean(s->pmt_seen));
+    json_object_object_add(out,"video_codec",json_object_new_string(s->video_codec));
+    json_object_object_add(out,"audio_codec",json_object_new_string(s->audio_codec));
     json_object_object_add(out,"teletext",json_object_new_boolean(s->teletext_announced));
     json_object_object_add(out,"decoder",json_object_new_boolean(s->teletext_decoder));
     json_object_object_add(out,"eit_received",json_object_new_int64(s->eit_received));
@@ -33,6 +35,7 @@ static void report(const TsInfoSnapshot *s) {
         struct json_object *service=json_object_new_object();
         json_object_object_add(service,"id",json_object_new_int(s->services[i].id));
         json_object_object_add(service,"name",json_object_new_string(s->services[i].name));
+        json_object_object_add(service,"provider",json_object_new_string(s->services[i].provider));
         json_object_array_add(services,service);
     }
     for (unsigned i=0;i<2;i++) {

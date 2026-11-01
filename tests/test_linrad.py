@@ -695,6 +695,17 @@ class VideoTests(unittest.TestCase):
                 decode = subprocess.run(["ffmpeg", "-v", "error", "-i", str(output),
                                          "-frames:v", "1", "-f", "null", "-"], capture_output=True, timeout=5)
                 self.assertEqual(decode.returncode, 0, decode.stderr.decode())
+                # Four HEVC pictures, then an open but idle input: frame threads
+                # must not retain all video until EOF as in the PE1ORG recording.
+                sparse = Path(tmp, "sparse-hevc.ts")
+                subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                                "color=c=green:s=320x240:r=2", "-frames:v", "4",
+                                "-c:v", "libx265", "-x265-params",
+                                "pools=1:frame-threads=1:keyint=1:bframes=0:log-level=error",
+                                "-f", "mpegts", sparse], check=True, capture_output=True, timeout=15)
+                p = subprocess.run([ROOT / "build/video_smoke", "--sparse", sparse],
+                                   env=env, capture_output=True, timeout=10)
+                self.assertEqual(p.returncode, 0, p.stderr.decode())
             finally:
                 daemon.terminate()
                 daemon.communicate(timeout=3)

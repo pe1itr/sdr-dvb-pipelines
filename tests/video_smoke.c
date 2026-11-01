@@ -56,7 +56,46 @@ static void check_udp_only(VideoView *v, int receiver, const char *destination, 
     close(source[1]); g_free(url);
 }
 
+/* A handful of pictures followed by silence must display without closing the
+ * input. This catches frame-thread buffering that only drains on Stop/EOF. */
+static void check_sparse(const char *path) {
+    VideoView v = {0};
+    GtkWidget *window = gtk_offscreen_window_new();
+    gtk_container_add(GTK_CONTAINER(window), video_view_create(&v));
+    gtk_widget_show_all(window);
+    int input[2]; g_assert_cmpint(pipe(input), ==, 0);
+    GError *error = NULL;
+    g_assert_true(video_view_start(&v, input[0], NULL, NULL, TRUE, &error));
+    g_assert_no_error(error); close(input[0]);
+    char *data; gsize size;
+    g_assert_true(g_file_get_contents(path, &data, &size, NULL));
+    for (gsize at = 0; at < size;) {
+        ssize_t n = write(input[1], data + at, size - at);
+        g_assert_cmpint(n, >, 0); at += n;
+    }
+    g_free(data);
+    gboolean green = FALSE;
+    gint64 deadline = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+    while (g_get_monotonic_time() < deadline && !green) {
+        iterate();
+        g_mutex_lock(&v.mutex);
+        if (v.ready) {
+            const unsigned char *pixel = v.frame + v.height / 2 * v.pitch + v.width / 2 * 4;
+            green = pixel[1] > 80 && pixel[2] < 30;
+        }
+        g_mutex_unlock(&v.mutex);
+        g_assert_false(video_view_failed(&v));
+    }
+    g_assert_true(green); /* Still no EOF: input[1] remains open. */
+    video_view_stop(&v); close(input[1]);
+    video_view_destroy(&v); gtk_widget_destroy(window);
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 && !strcmp(argv[1], "--sparse")) {
+        signal(SIGPIPE, SIG_IGN); gtk_init(NULL, NULL);
+        check_sparse(argv[2]); return 0;
+    }
     g_assert_cmpint(argc, ==, 6);
     signal(SIGPIPE, SIG_IGN);
     gtk_init(NULL, NULL);

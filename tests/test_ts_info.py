@@ -48,14 +48,18 @@ class Stream:
         return self.table(0, section(0, 42, b''.join(struct.pack('>HH', sid, 0xe000 | pid)
                                                    for sid, pid in services), version))
 
-    def sdt(self):
-        desc = b'\x48\x0f\x01\x04TEST\x08PE1ITR A'
-        return self.table(0x11, section(0x42, 42, b'\0\1\xff' + struct.pack('>HBH', 1, 3, 0x8000 | len(desc)) + desc))
+    def sdt(self, service=1, provider=b'TEST', name=b'PE1ITR A'):
+        value = b'\x01' + bytes([len(provider)]) + provider + bytes([len(name)]) + name
+        desc = bytes([0x48, len(value)]) + value
+        return self.table(0x11, section(0x42, 42, b'\0\1\xff' + struct.pack('>HBH', service, 3, 0x8000 | len(desc)) + desc))
 
-    def pmt(self, teletext=True, service=1, pid=0x1000, ttx_pid=0x200):
+    def pmt(self, teletext=True, service=1, pid=0x1000, ttx_pid=0x200, video=0x1b, audio=None):
         desc = b'\x56\x05eng\x09\x00' if teletext else b''
         body = struct.pack('>HH', 0xe100, 0xf000)
-        body += b'\x1b\xe1\0\xf0\0'
+        if video is not None:
+            body += bytes([video])+b'\xe1\0\xf0\0'
+        if audio is not None:
+            body += bytes([audio])+b'\xe1\x01\xf0\0'
         if teletext:
             body += bytes([6]) + struct.pack('>HH', 0xe000 | ttx_pid, 0xf000 | len(desc)) + desc
         return self.table(pid, section(2, service, body))
@@ -321,6 +325,50 @@ class InformationTests(unittest.TestCase):
         self.assertEqual(result[2]['events'][0]['title'], 'Service two')
         self.assertEqual(result[3]['selected'], 3)
         self.assertFalse(result[3]['events'][0]['valid'])
+
+    def test_service_provider_survives_pat_and_gap_but_not_service_removal(self):
+        t = Stream()
+        result = self.run_streams(
+            t.pat()+t.sdt(provider=b'0201', name=b'PE1ORG'),
+            t.pat(version=1), '--gap', t.pat(version=2),
+            t.sdt(provider=b'\x15Caf\xc3\xa9'), t.sdt(provider=b''),
+            t.pat(((2, 0x1001),), version=3), '--reset')
+        for i in range(4):
+            self.assertEqual(result[i]['services'][0]['provider'], '0201')
+            self.assertEqual(result[i]['services'][0]['name'], 'PE1ORG')
+        self.assertEqual(result[4]['services'][0]['provider'], 'Café')
+        self.assertEqual(result[5]['services'][0]['provider'], '')
+        self.assertEqual(result[6]['services'][0]['provider'], '')
+        self.assertEqual(result[7]['services'], [])
+
+    def test_codecs_follow_selected_pmt_and_clear_on_track_removal(self):
+        t = Stream()
+        result = self.run_streams(
+            t.pat(((1, 0x1000), (2, 0x1001)))+t.pmt(video=0x24, audio=0x0f),
+            '--gap', t.pmt(video=0x1b, audio=None)+t.packet(0x1fff, b''),
+            '--select=2', t.pmt(False, 2, 0x1001, video=0x02, audio=0x03),
+            t.pmt(False, 2, 0x1001, video=None, audio=0x11), '--reset')
+        for i in (0, 1):
+            self.assertEqual(result[i]['video_codec'], 'H.265/HEVC')
+            self.assertEqual(result[i]['audio_codec'], 'AAC')
+        self.assertEqual(result[2]['video_codec'], 'H.264/AVC')
+        self.assertEqual(result[2]['audio_codec'], '')
+        for i in (3, 6):
+            self.assertEqual(result[i]['video_codec'], '')
+            self.assertEqual(result[i]['audio_codec'], '')
+        self.assertEqual(result[4]['video_codec'], 'MPEG-2')
+        self.assertEqual(result[4]['audio_codec'], 'MPEG-1 audio')
+        self.assertEqual(result[5]['video_codec'], '')
+        self.assertEqual(result[5]['audio_codec'], 'AAC (LATM)')
+
+    def test_malformed_pmt_does_not_replace_codecs(self):
+        t = Stream()
+        # Valid CRC, but the last ES claims a descriptor that is not present.
+        body = b'\xe1\0\xf0\0\x1b\xe1\0\xf0\0\x03\xe1\x01\xf0\x05'
+        result = self.run_streams(t.pat()+t.pmt(video=0x24, audio=0x0f),
+                                 t.table(0x1000, section(2, 1, body)))
+        self.assertEqual(result[1]['video_codec'], 'H.265/HEVC')
+        self.assertEqual(result[1]['audio_codec'], 'AAC')
 
     def test_classic_teletext_page_filter_updates_gap_and_removal(self):
         t=Stream()

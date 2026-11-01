@@ -222,14 +222,44 @@ korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
-### VLC bij onderbroken DVB-T-ontvangst
+### VLC bij onderbroken ontvangst
+
+Het ingebouwde **Received video**-paneel gebruikt `--avcodec-threads=1`.
+Bij sporadisch ontvangen beelden kan VLC met meerdere frame-decoderthreads
+beelden vasthouden totdat nieuwe frames of EOF binnenkomen. Eén thread voorkomt
+die extra wachtrij; ontbrekende of beschadigde videodata worden daarmee niet
+hersteld. TSscatterFix kan uit zulke fragmenten eerder een stilbeeld opbouwen.
+
+Dit is ook gereproduceerd met `recordings/org.raw` (PE1ORG, DVB-S 125k, FEC 1/2,
+HEVC). Twee VLC-instanties kregen gelijktijdig dezelfde realtime TS uit het
+opnamefragment van 60 tot 150 seconden. Met standaardthreads kwam het eerste
+herkenbare beeld pas bij het sluiten van de invoer, na 90,02 s. Met één thread
+verscheen **PE1ORG / 8723** al na 73,14 s, terwijl de invoer open bleef.
+Dit zijn tijden vanaf de start van dat fragment, geen gegarandeerde opstarttijd.
+De meetlogs, TS, aankomsttijden en het vergelijkingsbeeld staan lokaal in
+`build/diagnostics/pe1org/` (niet meegecommit; verdwijnt bij `make clean`).
+In een aparte test van de eerste minuut kreeg VLC nog geen beeld, terwijl
+TSscatterFix er wel een beeld uit kon herstellen. De regressietest biedt vier
+HEVC-beelden aan en houdt daarna de invoer open: het paneel moet dan al beeld
+tonen. Normale videoweergave, beeldverhouding, audio en UDP-doorgifte worden ook
+getest.
+
+De service-informatie voor DVB-S/S2 leest zowel de service- als providernaam uit
+de SDT; bij deze opname zijn dat **PE1ORG** en **0201**.
+**Service info** toont daarnaast **Video codec** en **Audio codec**, voor DVB-S,
+DVB-S2 en DVB-T. Deze komen uit de programmagegevens van de gekozen service en
+zijn dus ook beschikbaar voordat de speler beeld heeft. Bij PE1ORG verschijnt
+**H.265/HEVC** en **AAC**, bij DL4FBN **H.264/AVC**. De eerste herkende video- en
+audiotrack worden getoond; ontbrekende of nog onbekende codecs staan als **—**.
+Bij kort signaalverlies blijven de laatst ontvangen codecs zichtbaar; een
+servicewissel of Stop wist ze.
 
 **Bevinding van 1 november 2026, bij integratiecommit `6e76b83`:** de ingebouwde
 VLC-player gaf in deze casus uitsluitend grijs beeld, terwijl TSscatterFix het
 testbeeld **PE1ITR / 7950** toonde. In een afzonderlijke vergelijking was alleen
 `--avcodec-threads=1` toevoegen voldoende om ook VLC herkenbaar beeld te laten
-geven. **Besluit: deze playeraanpassing is nog niet toegepast; de integratie
-blijft voorlopig zoals gecommit.**
+geven. Deze aanpassing is inmiddels toegepast op het ingebouwde videopaneel,
+na bevestiging met de bovenstaande PE1ORG-casus.
 
 De gebruikte opname staat lokaal onder
 `/home/rhardenb/repos/datv-transmitter/iq-output/`:
@@ -273,8 +303,7 @@ Wel is het effect van de wijziging naar één thread hier direct gemeten.
 Er was dus nog een bruikbaar I-frame aanwezig. Deze casus toont ook de waarde van
 TSscatterFix' afzonderlijke beelddecodering, bewaarde headers en stilbeeldweergave
 zonder afspeelklok; hij bewijst niet dat samenvoegen van fragmenten voor dit beeld
-noodzakelijk was. Een mogelijke vervolgstap is één VLC-decoderthread voor zwakke,
-lage-bitrateontvangst, met aanvullende controle op normale video en audio.
+noodzakelijk was.
 
 De lokale logs, TS, aankomsttijden en vergelijkingsbeelden staan in
 `build/diagnostics/jubzGI/`; deze meetartefacten zijn niet meegecommit en verdwijnen
@@ -361,6 +390,13 @@ De vastgelegde bronversies en wijzigingen staan in
 [third_party/leansdr/ORIGIN](third_party/leansdr/ORIGIN) en
 [third_party/ldpc/ORIGIN](third_party/ldpc/ORIGIN). `make package` levert ook de
 bijbehorende licenties mee. De oorspronkelijke checkouts worden niet aangepast.
+
+De gekozen DVB-S2-constellatie en FEC vormen een vaste beperking: bij **QPSK 1/2**
+wordt uitsluitend MODCOD 4 geaccepteerd. De decoder moet de frameheader nog lezen
+voor onder meer framelengte en pilots, maar frames met een andere MODCOD worden
+niet doorgestuurd naar de foutcorrectie. Alleen geaccepteerde frames mogen het
+infopaneel bijwerken. Zonder lock toont dat paneel de ingestelde modulatie en
+FEC; de lockindicatoren geven afzonderlijk aan of er werkelijk ontvangst is.
 
 In **Mode** staan drie DVB-S2-instellingen:
 
@@ -1165,8 +1201,8 @@ DVB-T bandwidth **35 kHz** is also selectable in the C GUI as `35000`
 
 For the first 5 MSym/s test, select DVB-S2, symbol rate `5000000`, FEC `3/4`, and
 sample rate `10000000`. This selects **QPSK 3/4** (`--modcods 0x80`). Set frequency
-and gain for the actual signal. The default DVB-S2 arguments accept normal frames;
-change `--framesizes 1` in `[leandvb]` if the transmitter uses short frames.
+and gain for the actual signal. The DVB-S2 arguments use `--framesizes 3` in
+`[leandvb]` to accept both normal and short frames.
 
 HackRF defaults to `u8`: native signed 8-bit samples are offset to unsigned IQ
 without increasing their size. B210 defaults to `s16` to preserve its resolution;
@@ -1335,6 +1371,31 @@ Vanaf de opdrachtregel kan dit ook:
 ./build/linrad_dvb --iq-file /pad/naar/opname.iq --print-pipeline
 ./build/linrad_dvb --iq-file /pad/naar/opname.iq --run
 ```
+
+De oude AFEDRI-opnamen `recordings/fbn2.raw`, `recordings/org.raw` en
+`recordings/h.raw` zijn Linrad RAW-bestanden met een header van **41 bytes** en
+daarachter ongecomprimeerde `cs16_le` IQ-data. Hun headers vermelden
+**1010526 samples/s** en een ontvangermiddenfrequentie van **28 MHz** (de eventuele
+RF-frequentie vóór een converter is onbekend). Conversie is niet nodig: de
+bijbehorende `.raw.json`-bestanden stellen dit automatisch in. De opnamen duren
+respectievelijk ongeveer 3 min 36 s, 10 min 18 s en 1,11 s.
+
+Decodertests op fragmenten bevestigen **DVB-S2 QPSK, 125 ksym/s, FEC 1/2**
+voor `fbn2.raw` (DL4FBN, H.264) en **DVB-S QPSK, 125 ksym/s, FEC 1/2** voor
+`org.raw` (PE1ORG, HEVC en AAC). `fbn2.raw` gebruikt korte DVB-S2-frames;
+`[leandvb] dvbs2_args` bevat daarom `--framesizes 3` om zowel normale als korte
+frames te accepteren. De ontvangst is in de geteste fragmenten onderbroken;
+continu beeld is niet bevestigd. Voor `h.raw` is geen lock gevonden; daar blijft
+DVB-S, 125 ksym/s, FEC 1/2 een voorlopige instelling.
+
+```bash
+./build/linrad_dvb --iq-file recordings/fbn2.raw
+./build/linrad_dvb --iq-file recordings/org.raw
+./build/linrad_dvb --iq-file recordings/h.raw
+```
+
+Druk in de GUI op **Play file**. Via **Input → File (IQ) → Browse** kun je een
+andere opname kiezen. Bewaar de `.raw.json` naast de bijbehorende `.raw`.
 
 ### USB/FM/FM-DATA-monitor voor bakens, spraak en packet
 

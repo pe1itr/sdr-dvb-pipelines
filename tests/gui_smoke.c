@@ -130,12 +130,16 @@ static void exercise_decoder_view(App *a) {
     DecoderBuffer queue={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_BUFFER,.queued=256,.capacity=1024};
     DecoderConstellation points={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_CONSTELLATION,.count=4,
         .iq={.707,.707,-.707,.707,-.707,-.707,.707,-.707}};
+    g_strlcpy(v->selected_video_codec,"H.264/AVC",sizeof(v->selected_video_codec));
+    g_strlcpy(v->selected_audio_codec,"AAC",sizeof(v->selected_audio_codec));
     g_assert_cmpint(sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(status));
     g_assert_cmpint(sendto(sender,&queue,sizeof(queue),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(queue));
     g_assert_cmpint(sendto(sender,&points,sizeof(points),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(points));
     decoder_view_tick(v,TRUE,"DVB-T");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"Test <service>");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->provider)),==,"PE1ITR");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->video_codec)),==,"H.264/AVC");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->audio_codec)),==,"AAC");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->buffer)),==,"25");
     g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->lamps[1])),"#36d866"));
     g_assert_cmpint(v->points.count,==,4);
@@ -173,9 +177,18 @@ static void exercise_decoder_view(App *a) {
     status.modcod=14; status.short_frame=1; status.pilots=1;
     status.lock_valid=DECODER_OFDM|DECODER_FEC|DECODER_TS;
     status.fec_good=42; status.fec_bad=2;
+    g_strlcpy(v->selected_service,"PE1ORG",sizeof(v->selected_service));
+    g_strlcpy(v->selected_provider,"0201",sizeof(v->selected_provider));
+    g_strlcpy(v->selected_video_codec,"H.265/HEVC",sizeof(v->selected_video_codec));
+    g_strlcpy(v->selected_audio_codec,"AAC",sizeof(v->selected_audio_codec));
+    v->service_valid=TRUE;
     g_strlcpy(status.modulation,"DVB-S2 8PSK",sizeof(status.modulation));
     sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest));
     decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"PE1ORG");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->provider)),==,"0201");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->video_codec)),==,"H.265/HEVC");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->audio_codec)),==,"AAC");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->snr)),==,"12.5");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->guard)),==,"short");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->pilot)),==,"on");
@@ -184,7 +197,10 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption"))),==,"MER");
     g_assert_cmpuint(v->status.constellation_order,==,8);
     decoder_view_stop(v); close(sender);
+    g_assert_cmpstr(v->selected_provider,==,"");
     decoder_view_tick(v,FALSE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->video_codec)),==,"—");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->audio_codec)),==,"—");
     g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"stopped"));
     g_assert_cmpint(abs(gtk_widget_get_allocated_width(v->area)-gtk_widget_get_allocated_height(v->area)),<=,1);
 }
@@ -672,6 +688,7 @@ static void exercise_information(App *a) {
         g_usleep(1000);
     } while (g_get_monotonic_time()<deadline);
     g_assert_nonnull(v->snapshot.page);
+    g_assert_cmpstr(v->snapshot.video_codec,==,"H.264/AVC");
     g_assert_true(v->snapshot.events[0].valid);
     for (unsigned i=0;i<2;i++)
         g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[i]),"information-ready"));

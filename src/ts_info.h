@@ -4,7 +4,7 @@
 
 #define TS_INFO_SERVICES 32
 #define TS_INFO_QUEUE_LIMIT (1024u * 1024)
-typedef struct { guint16 id, pmt_pid; char name[128]; } TsInfoService;
+typedef struct { guint16 id, pmt_pid; char name[128], provider[128]; } TsInfoService;
 typedef struct {
     gboolean valid;
     guint16 id;
@@ -17,6 +17,7 @@ typedef struct {
     unsigned count;
     guint16 selected;
     gboolean pmt_seen, teletext_announced, teletext_decoder;
+    char video_codec[32], audio_codec[32]; /* first recognized tracks in selected PMT */
     TsInfoEvent events[2];
     gint64 eit_received, teletext_received; /* wall-clock microseconds */
     GBytes *page; /* immutable native Cairo RGB24 pixels */

@@ -61,6 +61,7 @@ static void content_clear(TsInfoParser *p) {
     p->state.eit_received=p->state.teletext_received=0;
     page_clear(&p->state);
     p->state.pmt_seen=p->state.teletext_announced=FALSE;
+    p->state.video_codec[0]=p->state.audio_codec[0]=0;
     p->ttx_pid=0x1fff; p->eit_version=-1;
     assembly_clear(&p->eit); assembly_clear(&p->pmt); teletext_clear(p);
 }
@@ -216,6 +217,7 @@ static void pat_read(TsInfoParser *p, const guint8 *b, gsize n) {
     for (unsigned i=0;i<p->pending_count;i++) {
         for (unsigned j=0;j<p->state.count;j++) if (p->pending[i].id==p->state.services[j].id) {
             copy_text(p->pending[i].name,sizeof(p->pending[i].name),p->state.services[j].name);
+            copy_text(p->pending[i].provider,sizeof(p->pending[i].provider),p->state.services[j].provider);
             if (p->pending[i].id==p->state.selected && p->pending[i].pmt_pid!=p->state.services[j].pmt_pid)
                 content_clear(p);
         }
@@ -235,9 +237,12 @@ static void sdt_read(TsInfoParser *p, const guint8 *b, gsize n) {
             const guint8 *v=b+d+2;
             if (b[d]==0x48 && len>=3 && 3u+v[1]<=len && 3u+v[1]+v[2+v[1]]<=len) {
                 char *name=dvb_text(v+3+v[1],v[2+v[1]]);
-                for (unsigned i=0;i<p->state.count;i++) if (p->state.services[i].id==sid)
+                char *provider=dvb_text(v+2,v[1]);
+                for (unsigned i=0;i<p->state.count;i++) if (p->state.services[i].id==sid) {
                     copy_text(p->state.services[i].name,sizeof(p->state.services[i].name),name);
-                g_free(name);
+                    copy_text(p->state.services[i].provider,sizeof(p->state.services[i].provider),provider);
+                }
+                g_free(name); g_free(provider);
             }
             d+=2+len;
         }
@@ -247,10 +252,24 @@ static void sdt_read(TsInfoParser *p, const guint8 *b, gsize n) {
 static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
     if (n<16 || u16(b+3)!=p->state.selected || b[6] || b[7]) return;
     gsize at=12+(u16(b+10)&0xfff); guint16 pid=0x1fff; int best=0;
+    const char *video="", *audio="";
     if (at>n-4) return;
     while (at<n-4) {
         if (at+5>n-4) return;
         gsize end=at+5+(u16(b+at+3)&0xfff); if (end>n-4) return;
+        if (!*video) switch (b[at]) {
+            case 0x01: video="MPEG-1"; break;
+            case 0x02: video="MPEG-2"; break;
+            case 0x10: video="MPEG-4"; break;
+            case 0x1b: video="H.264/AVC"; break;
+            case 0x24: video="H.265/HEVC"; break;
+        }
+        if (!*audio) switch (b[at]) {
+            case 0x03: audio="MPEG-1 audio"; break;
+            case 0x04: audio="MPEG-2 audio"; break;
+            case 0x0f: audio="AAC"; break;
+            case 0x11: audio="AAC (LATM)"; break;
+        }
         for (gsize d=at+5;d<end;) {
             if (d+2>end || d+2+b[d+1]>end) return;
             if (b[at]==0x06 && b[d]==0x56 && b[d+1]>=5 && b[d+1]%5==0) {
@@ -271,6 +290,8 @@ static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
         p->state.teletext_received=0;
     }
     p->ttx_pid=pid; p->state.pmt_seen=TRUE; p->state.teletext_announced=pid!=0x1fff;
+    copy_text(p->state.video_codec,sizeof(p->state.video_codec),video);
+    copy_text(p->state.audio_codec,sizeof(p->state.audio_codec),audio);
 }
 static void section_read(TsInfoParser *p, Assembly *a) {
     const guint8 *b=a->data; gsize n=a->used;

@@ -8,11 +8,13 @@ typedef struct {
     GtkWidget *area, *service_frame, *state, *lamps[4], *service, *provider;
     GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer;
     GtkWidget *modulation, *fec, *guard, *packets, *written, *rs_ok, *rs_errors, *cc_errors;
+    GtkWidget *video_codec, *audio_codec;
     int fd, port;
     gint64 status_time, points_time, buffer_time;
     gboolean active;
     DecoderStatus status;
-    char selected_service[128];
+    char selected_service[128], selected_provider[128];
+    char selected_video_codec[32], selected_audio_codec[32];
     gboolean service_valid;
     DecoderConstellation points;
     DecoderConstellation history[DECODER_HISTORY_FRAMES];

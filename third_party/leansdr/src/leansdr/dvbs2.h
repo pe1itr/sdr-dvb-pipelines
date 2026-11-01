@@ -745,7 +745,6 @@ namespace leansdr {
       pls.modcod = plscode_index >> 2;  // Guaranteed 0..31
       pls.sf = plscode_index & 2;
       pls.pilots = plscode_index & 1;
-      linrad_s2_pls(pls.modcod, !!pls.sf, pls.pilots);
 
       plslot<SOFTSYMB> *pout=out.wr(), *pout0=pout;
 
@@ -969,10 +968,12 @@ namespace leansdr {
 	return;
       }
 
-      // Commit whole frame after final SOF.
+      // Commit whole frame after final SOF. Only publish accepted frames.
       if ( ! pls.is_dummy() ) {
-	if ( (modcods&(1<<pls.modcod)) && (framesizes&(1<<pls.sf)) )
+	if ( (modcods&(uint32_t(1)<<pls.modcod)) && (framesizes&(1<<pls.sf)) ) {
+	  linrad_s2_pls(pls.modcod, !!pls.sf, pls.pilots);
 	  out.written(pout-pout0);
+	}
 	else {
 	  if ( sch->debug2 )
 	    fprintf(stderr, "modcod %d size %d rejected\n", pls.modcod, pls.sf);

@@ -11,6 +11,8 @@ Local integration changes:
 - Scheduler keeps running while asynchronous FEC work is outstanding.
 - --ldpc-batch accepts 1..32; --nhelpers is a global 1..8 worker limit.
 - RS/BCH result and detected PLS callbacks into the local monitor.
+- Publish PLS telemetry only after the selected DVB-S2 MODCOD/frame-size mask
+  accepts a frame, keeping the fixed GUI mode stable across corrupted headers.
 - Fix fd_const >= 0 check; explicit return for invalid decoder standard.
 - Add --help alias and document embedded options, helper framing and worker limits.
 

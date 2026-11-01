@@ -17,14 +17,17 @@ extern "C" void linrad_fec_result(int good, int corrected) {
     else satellite_status.locks &= ~DECODER_FEC;
     satellite_fec_time=monitor_seconds();
 }
-extern "C" void linrad_s2_pls(int mc, int sf, int pilots) {
-    if (mc<1 || mc>28) return;
-    satellite_status.modcod=mc; satellite_status.short_frame=sf; satellite_status.pilots=pilots;
+static void satellite_modulation(int mc) {
     auto info=&modcod_infos[mc];
     satellite_status.constellation_order=info->nsymbols;
     snprintf(satellite_status.modulation,sizeof(satellite_status.modulation),"%s (MC %d)",cstln_base::names[info->c],mc);
     auto fec=&fec_specs[info->rate];
     snprintf(satellite_status.fec,sizeof(satellite_status.fec),"%d/%d",fec->bits_in,fec->bits_out);
+}
+extern "C" void linrad_s2_pls(int mc, int sf, int pilots) {
+    if (mc<1 || mc>28 || !modcod_infos[mc].nslots_nf) return;
+    satellite_status.modcod=mc; satellite_status.short_frame=sf; satellite_status.pilots=pilots;
+    satellite_modulation(mc);
 }
 
 struct linrad_monitor : runnable {
@@ -49,6 +52,12 @@ struct linrad_monitor : runnable {
             snprintf(satellite_status.modulation,sizeof(satellite_status.modulation),"DVB-S QPSK");
             auto fec=&fec_specs[cfg.fec];
             snprintf(satellite_status.fec,sizeof(satellite_status.fec),"%d/%d",fec->bits_in,fec->bits_out);
+        } else if (cfg.modcods && !(cfg.modcods & (cfg.modcods-1))) {
+            // The GUI chooses one MODCOD. Show that fixed choice even before
+            // lock, keeping frame length and pilots unknown until confirmed.
+            for (int mc=1; mc<=28; ++mc)
+                if ((cfg.modcods & (uint32_t(1)<<mc)) && modcod_infos[mc].nslots_nf)
+                    satellite_modulation(mc);
         }
         const char *port=getenv("LINRAD_DECODER_MONITOR_PORT");
         char *end=nullptr; long number=port ? strtol(port,&end,10) : 0;

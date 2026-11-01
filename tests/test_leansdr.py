@@ -218,6 +218,39 @@ class LeanDvbTests(unittest.TestCase):
                                 '--sampler', 'rrc', *args], input=self.iq(), capture_output=True, timeout=10)
             self.assertNotEqual(p.returncode, 0, args)
 
+    def test_fixed_qpsk_mode_does_not_report_rejected_8psk(self):
+        # A real, clean 8PSK carrier must not change the displayed modulation or
+        # reach FEC decoding when the receiver is fixed to QPSK 1/2 (MODCOD 4).
+        iq = self.iq(modcod=14)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(('127.0.0.1', 0)); sock.settimeout(.1)
+            env = dict(os.environ, LINRAD_DECODER_MONITOR_PORT=str(sock.getsockname()[1]))
+            frames = []; stop = threading.Event()
+            def reader():
+                while not stop.is_set():
+                    try:
+                        frames.append(sock.recv(8192))
+                    except socket.timeout:
+                        pass
+            t = threading.Thread(target=reader); t.start()
+            try:
+                p = subprocess.run([RX, '--decoder-worker=leansdr', '--standard', 'DVB-S2',
+                                    '--s16', '-f', '500000', '--sr', '125000', '--modcods', '16',
+                                    '--sampler', 'rrc', '--rrc-rej', '30', '--ldpc-helper', 'builtin'],
+                                   input=iq, capture_output=True, env=env, timeout=30)
+            finally:
+                stop.set(); t.join(2)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout, b'')
+        statuses = [DecoderStatus.from_buffer_copy(f) for f in frames if len(f)==ctypes.sizeof(DecoderStatus)]
+        self.assertTrue(statuses)
+        for s in statuses:
+            self.assertIn(s.modcod, (-1, 4))
+            self.assertEqual(s.constellation_order, 4)
+            self.assertEqual(s.modulation, b'QPSK (MC 4)')
+            self.assertEqual(s.fec, b'1/2')
+            self.assertEqual(s.fec_good+s.fec_bad, 0)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

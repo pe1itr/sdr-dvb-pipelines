@@ -153,23 +153,26 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     v->service=name_field(grid,3,"Service");
     v->provider=name_field(grid,4,"Provider");
     v->modulation=name_field(grid,5,"Mode");
-    v->fec=field(grid,0,6,"FEC","",FALSE);
-    v->guard=field(grid,3,6,"GI","",FALSE);
-    v->packets=field(grid,0,7,"TS","",TRUE);
-    v->written=field(grid,3,7,"Output","",TRUE);
-    v->rs_ok=field(grid,0,8,"RS OK","",TRUE);
-    v->rs_errors=field(grid,3,8,"RS errors","",TRUE);
-    v->cc_errors=field(grid,0,9,"CC errors","",TRUE);
+    v->video_codec=field(grid,0,6,"Video codec","",FALSE);
+    v->audio_codec=field(grid,3,6,"Audio codec","",FALSE);
+    v->fec=field(grid,0,7,"FEC","",FALSE);
+    v->guard=field(grid,3,7,"GI","",FALSE);
+    v->packets=field(grid,0,8,"TS","",TRUE);
+    v->written=field(grid,3,8,"Output","",TRUE);
+    v->rs_ok=field(grid,0,9,"RS OK","",TRUE);
+    v->rs_errors=field(grid,3,9,"RS errors","",TRUE);
+    v->cc_errors=field(grid,0,10,"CC errors","",TRUE);
     GtkWidget *empty=gtk_label_new("");
     gtk_style_context_add_class(gtk_widget_get_style_context(empty),"decoder-caption");
-    gtk_grid_attach(GTK_GRID(grid),empty,3,9,3,1);
+    gtk_grid_attach(GTK_GRID(grid),empty,3,10,3,1);
     return row;
 }
 
 void decoder_view_stop(DecoderView *v) {
     if (v->fd>=0 && v->port) close(v->fd);
     v->fd=-1; v->port=0; v->active=FALSE;
-    v->service_valid=FALSE; v->selected_service[0]=0;
+    v->service_valid=FALSE; v->selected_service[0]=v->selected_provider[0]=0;
+    v->selected_video_codec[0]=v->selected_audio_codec[0]=0;
     v->status_time=v->points_time=v->buffer_time=0;
     memset(v->history_time,0,sizeof(v->history_time));
     v->history_next=0;
@@ -251,6 +254,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         s->lock_valid |= DECODER_SERVICE;
         if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
         g_strlcpy(s->service,v->selected_service,sizeof(s->service));
+        g_strlcpy(s->provider,v->selected_provider,sizeof(s->provider));
     }
     char text[512];
     g_snprintf(text,sizeof(text),"%s · %s",mode,!active ? "stopped" : fresh ? "live" : "waiting for decoder status");
@@ -291,5 +295,8 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         g_snprintf(text,sizeof(text),"%.0f",CLAMP(100. * v->queue.queued/v->queue.capacity,0,100));
         gtk_label_set_text(GTK_LABEL(v->buffer),text);
     }
+    /* Service metadata remains useful through brief losses of decoder lock. */
+    set_value(v->video_codec,active ? v->selected_video_codec : "");
+    set_value(v->audio_codec,active ? v->selected_audio_codec : "");
     gtk_widget_queue_draw(v->area);
 }
