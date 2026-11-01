@@ -529,6 +529,7 @@ static void stop_pipeline(App *a) {
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     scatter_backend_stop(a->scatter_backend);
+    if (a->video_view.area) video_view_stop(&a->video_view);
     scatter_view_reset(&a->scatter_view);
     decoder_view_stop(&a->decoder_view);
     decoder_view_tick(&a->decoder_view, FALSE, standards[a->standard]);
@@ -1469,6 +1470,10 @@ static void source_defaults(App *a) {
         g_key_file_set_string(a->config, "paths", "ffplay", "ffplay");
     if (!g_key_file_has_key(a->config, "ffplay", "args", NULL))
         g_key_file_set_string(a->config, "ffplay", "args", ffplay_args);
+    if (!g_key_file_has_key(a->config, "ffplay", "gpu_program", NULL))
+        g_key_file_set_string(a->config, "ffplay", "gpu_program", "/usr/bin/ffplay");
+    if (!g_key_file_has_key(a->config, "ffplay", "gpu_device", NULL))
+        g_key_file_set_string(a->config, "ffplay", "gpu_device", "NVIDIA");
     if (!g_key_file_has_key(a->config, "paths", "custom_renderer", NULL))
         g_key_file_set_string(a->config, "paths", "custom_renderer", "mpv");
     if (!g_key_file_has_key(a->config, "renderer", "args", NULL))
@@ -2257,6 +2262,9 @@ static void gui(App *a) {
     gtk_widget_set_halign(receiver_row, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(receiver_row), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
     GtkWidget *video_frame = video_view_create(&a->video_view);
+    char *gpu_program = setting(a, "ffplay", "gpu_program"), *gpu_device = setting(a, "ffplay", "gpu_device");
+    video_view_set_gpu_player(&a->video_view, gpu_program, gpu_device);
+    g_free(gpu_program); g_free(gpu_device);
     gtk_widget_set_hexpand(video_frame, FALSE);
     GtkSizeGroup *panel_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
     gtk_size_group_add_widget(panel_width, a->decoder_view.service_frame);

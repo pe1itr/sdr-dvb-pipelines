@@ -702,6 +702,74 @@ class LifecycleTests(PipelineTests):
 @unittest.skipUnless(shutil.which("broadwayd") and shutil.which("ffmpeg") and shutil.which("ffprobe"),
                      "Video smoke test needs Broadway and FFmpeg")
 class VideoTests(unittest.TestCase):
+    def test_live_external_switch_failure_and_stalled_player(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "switch.ts")
+            subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                            "color=c=green:s=320x240:r=25", "-t", "120", "-c:v", "mpeg2video",
+                            "-g", "12", "-program", "program_num=101:st=0",
+                            "-muxrate", "1000000", "-f", "mpegts", str(path)],
+                           check=True, capture_output=True, timeout=20)
+            player = Path(tmp, "fake player")
+            player.write_text("""#!/usr/bin/python3
+import json, os, signal, sys, time
+from pathlib import Path
+root=Path(__file__).parent
+mode=(root/'mode').read_text()
+if mode in ('blocked','stop'):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+(root/(mode+'.json')).write_text(json.dumps(sys.argv[1:]))
+(root/(mode+'.pid')).write_text(str(os.getpid()))
+if mode=='failure':
+    sys.exit(1)
+if mode in ('blocked','stop'):
+    time.sleep(60)
+if mode=='first':
+    time.sleep(0.4)  # Simulate initialization while HD data keeps arriving.
+with (root/(mode+'.ts')).open('wb') as out:
+    while True:
+        data=os.read(0,65536)
+        if not data: break
+        out.write(data); out.flush()
+""")
+            player.chmod(0o755)
+            display = free_port()
+            env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",
+                       XDG_RUNTIME_DIR=tmp, NO_AT_BRIDGE="1")
+            daemon = subprocess.Popen(["broadwayd", "--address", "127.0.0.1", "--port", str(free_port()),
+                                       f":{display}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                time.sleep(0.2)
+                result = subprocess.run([ROOT / "build/video_smoke", "--external", path, tmp],
+                                        env=env, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertNotIn(b"CRITICAL", result.stderr)
+                captured = Path(tmp, "first.ts").read_bytes()
+                self.assertGreater(len(captured), 250000)
+                self.assertTrue(captured in path.read_bytes(),
+                                "External startup buffer lost/reordered TS bytes")
+                for mode, program, volume in (("first",101,"0"),("service",202,"0"),
+                                              ("muted",202,"100"),("return",101,"100")):
+                    argv = json.loads(Path(tmp, mode+".json").read_text())
+                    self.assertEqual(argv[argv.index("-hwaccel")+1], "cuda")
+                    self.assertEqual(argv[argv.index("-vulkan_params")+1], "device=NVIDIA test GPU")
+                    self.assertEqual(argv[argv.index("-vst")+1], f"p:{program}:v:0")
+                    self.assertEqual(argv[argv.index("-ast")+1], f"p:{program}:a:0")
+                    self.assertEqual(argv[argv.index("-volume")+1], volume)
+                self.assertGreater(sum(p.stat().st_size for p in Path(tmp).glob("*.ts")
+                                       if p.name != "switch.ts"), 188)
+            finally:
+                # Also clean up deliberately stubborn fakes if an assertion fails.
+                for pidfile in Path(tmp).glob("*.pid"):
+                    try:
+                        pid = int(pidfile.read_text())
+                        command = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                        if os.fsencode(player) in command:
+                            os.kill(pid, signal.SIGKILL)
+                    except (FileNotFoundError, ProcessLookupError):
+                        pass
+                daemon.terminate(); daemon.communicate(timeout=3)
+
     def test_live_program_switch_keeps_audio_video_and_udp(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "programs.ts")
@@ -750,8 +818,11 @@ class VideoTests(unittest.TestCase):
             try:
                 time.sleep(0.2)
                 output = Path(tmp, "forwarded.ts")
-                p = subprocess.run([ROOT / "build/video_smoke", *inputs, output],
-                                   env=env, capture_output=True, timeout=35)
+                try:
+                    p = subprocess.run([ROOT / "build/video_smoke", *inputs, output],
+                                       env=env, capture_output=True, timeout=35)
+                except subprocess.TimeoutExpired as exc:
+                    self.fail(f"Video smoke timed out: {(exc.stderr or b'').decode(errors='replace')}")
                 self.assertEqual(p.returncode, 0, p.stderr.decode())
                 self.assertNotIn(b"CRITICAL", p.stderr)
                 probe = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",

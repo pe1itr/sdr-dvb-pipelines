@@ -92,17 +92,127 @@ static void check_sparse(const char *path) {
     video_view_destroy(&v); gtk_widget_destroy(window);
 }
 
-typedef struct { int fd; const char *bytes; gsize size; gint stop; } LiveStream;
+typedef struct { int fd; const char *bytes; gsize size; gint stop, sent, pace_us; } LiveStream;
 
 static gpointer feed_live(gpointer data) {
     LiveStream *s = data;
     for (gsize at = 0; at < s->size && !g_atomic_int_get(&s->stop);) {
         ssize_t n = write(s->fd, s->bytes + at, MIN((gsize)1316, s->size - at));
-        if (n > 0) at += n;
+        if (n > 0) { at += n; g_atomic_int_set(&s->sent, (gint)at); }
         else if (errno != EAGAIN && errno != EINTR) break;
-        g_usleep(10000);
+        gint pace = g_atomic_int_get(&s->pace_us);
+        g_usleep(pace > 0 ? pace : 10000);
     }
     return NULL;
+}
+
+static void wait_embedded(VideoView *v) {
+    gint64 until = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+    gboolean ready = FALSE;
+    while (!ready && g_get_monotonic_time() < until) {
+        iterate();
+        g_mutex_lock(&v->mutex);
+        ready = v->ready;
+        g_mutex_unlock(&v->mutex);
+        g_assert_false(video_view_failed(v));
+    }
+    g_assert_true(ready); g_assert_nonnull(v->player); g_assert_false(v->external);
+}
+
+static void fake_mode(const char *directory, const char *mode) {
+    char *path = g_build_filename(directory, "mode", NULL);
+    g_assert_true(g_file_set_contents(path, mode, -1, NULL)); g_free(path);
+}
+
+static pid_t fake_pid(const char *directory, const char *mode) {
+    char *name = g_strdup_printf("%s.pid", mode), *path = g_build_filename(directory, name, NULL);
+    char *text = NULL;
+    gint64 until = g_get_monotonic_time() + 3 * G_USEC_PER_SEC;
+    while (!g_file_get_contents(path, &text, NULL, NULL) && g_get_monotonic_time() < until) iterate();
+    g_assert_nonnull(text);
+    pid_t pid = (pid_t)g_ascii_strtoll(text, NULL, 10);
+    g_assert_cmpint(pid, >, 0);
+    g_free(text); g_free(path); g_free(name); return pid;
+}
+
+/* No actual GPU/desktop access: fake FFplay tests pipe/lifecycle behavior. */
+static void check_external(const char *path, const char *directory) {
+    VideoView v = {0}; GError *error = NULL;
+    GtkWidget *window = gtk_offscreen_window_new();
+    gtk_container_add(GTK_CONTAINER(window), video_view_create(&v)); gtk_widget_show_all(window);
+    g_assert_false(gtk_widget_get_sensitive(v.output_button));
+    char *bytes; gsize size;
+    g_assert_true(g_file_get_contents(path, &bytes, &size, NULL));
+    int input[2]; g_assert_cmpint(pipe(input), ==, 0);
+    g_assert_cmpint(fcntl(input[1], F_SETFL, O_NONBLOCK), ==, 0);
+    video_view_set_muted(&v, TRUE);
+    g_assert_true(video_view_start(&v, input[0], NULL, NULL, TRUE, &error)); close(input[0]);
+    g_assert_true(video_view_select_program(&v, 101, &error));
+    LiveStream stream = {.fd=input[1], .bytes=bytes, .size=size};
+    GThread *feeder = g_thread_new("switch-test-ts", feed_live, &stream);
+    wait_embedded(&v);
+    GThread *relay = v.relay; int source = v.source_fd;
+    libvlc_media_player_t *player = v.player;
+    video_view_set_gpu_player(&v, "/no/such/ffplay", "NVIDIA");
+    g_assert_false(video_view_set_external(&v, TRUE, &error)); g_clear_error(&error);
+    g_assert_true(v.player == player); g_assert_false(v.external);
+
+    char *fake = g_build_filename(directory, "fake player", NULL);
+    video_view_set_gpu_player(&v, fake, "NVIDIA test GPU");
+    fake_mode(directory, "first");
+    g_atomic_int_set(&stream.pace_us, 1000);
+    gtk_button_clicked(GTK_BUTTON(v.output_button));
+    fake_pid(directory, "first");
+    gint64 startup_until = g_get_monotonic_time() + G_USEC_PER_SEC;
+    while (g_get_monotonic_time() < startup_until) iterate();
+    g_atomic_int_set(&stream.pace_us, 10000);
+    g_assert_null(v.player); g_assert_true(v.external); g_assert_false(v.ready);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(v.output_button)), ==, "Terug in venster");
+    fake_mode(directory, "service");
+    g_assert_true(video_view_select_program(&v, 202, &error)); g_assert_no_error(error);
+    fake_pid(directory, "service");
+    fake_mode(directory, "muted");
+    video_view_set_muted(&v, FALSE); fake_pid(directory, "muted");
+    fake_mode(directory, "return");
+    g_assert_true(video_view_select_program(&v, 101, &error));
+    pid_t pid = fake_pid(directory, "return");
+    g_assert_cmpint(kill(pid, SIGTERM), ==, 0); /* Closing the external window. */
+    wait_embedded(&v);
+    g_assert_cmpuint(v.program, ==, 101);
+    g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 0);
+    g_assert_true(v.relay == relay); g_assert_cmpint(v.source_fd, ==, source);
+
+    fake_mode(directory, "blocked");
+    g_assert_true(video_view_set_external(&v, TRUE, &error));
+    pid = fake_pid(directory, "blocked");
+    gint before = g_atomic_int_get(&stream.sent);
+    g_atomic_int_set(&stream.pace_us, 1000);
+    gint64 until = g_get_monotonic_time() + 6 * G_USEC_PER_SEC;
+    while (g_get_monotonic_time() < until) iterate();
+    g_atomic_int_set(&stream.pace_us, 10000);
+    /* More than the 4 MiB queue plus all pipes: a nonreading player must not
+     * backpressure the source. */
+    g_assert_cmpint(g_atomic_int_get(&stream.sent) - before, >, 5000000);
+    gtk_button_clicked(GTK_BUTTON(v.output_button));
+    wait_embedded(&v);
+    until = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+    while (kill(pid, 0) == 0 && g_get_monotonic_time() < until) iterate();
+    g_assert_cmpint(kill(pid, 0), ==, -1); g_assert_cmpint(errno, ==, ESRCH);
+
+    fake_mode(directory, "failure");
+    g_assert_true(video_view_set_external(&v, TRUE, &error));
+    wait_embedded(&v); /* Exec succeeds but GPU initialization would fail. */
+    g_assert_true(v.relay == relay); g_assert_cmpint(v.source_fd, ==, source);
+    fake_mode(directory, "stop");
+    g_assert_true(video_view_set_external(&v, TRUE, &error));
+    pid = fake_pid(directory, "stop");
+    g_atomic_int_set(&stream.stop, TRUE); g_thread_join(feeder);
+    video_view_stop(&v); close(input[1]);
+    video_view_destroy(&v); gtk_widget_destroy(window);
+    until = g_get_monotonic_time() + 2 * G_USEC_PER_SEC;
+    while (kill(pid, 0) == 0 && g_get_monotonic_time() < until) iterate();
+    g_assert_cmpint(kill(pid, 0), ==, -1); g_assert_cmpint(errno, ==, ESRCH);
+    g_free(fake); g_free(bytes);
 }
 
 static void check_programs(const char *path) {
@@ -171,6 +281,10 @@ static void check_programs(const char *path) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 4 && !strcmp(argv[1], "--external")) {
+        signal(SIGPIPE, SIG_IGN); gtk_init(NULL, NULL);
+        check_external(argv[2], argv[3]); return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "--programs")) {
         signal(SIGPIPE, SIG_IGN); gtk_init(NULL, NULL);
         check_programs(argv[2]); return 0;
@@ -247,8 +361,12 @@ int main(int argc, char **argv) {
         g_assert_cmpuint((center >> 8) & 255, >, 80); /* Green test picture. */
         g_assert_cmpuint((center >> 16) & 255, <, 30);
         if (i % 2 == 0) {
-            uint32_t top = *(uint32_t *)(pixels + 5 * stride + width / 2 * 4);
-            g_assert_cmpuint(top & 0xffffff, ==, 0); /* Wide picture: black top bar. */
+            /* Controls reduce the available height: the black bars can be
+             * above/below or beside the picture, depending on panel aspect. */
+            uint32_t bar = (double)width / height < 16.0 / 9 ?
+                *(uint32_t *)(pixels + 5 * stride + width / 2 * 4) :
+                *(uint32_t *)(pixels + height / 2 * stride + 5 * 4);
+            g_assert_cmpuint(bar & 0xffffff, ==, 0);
         }
         int colored_width = 0, colored_height = 0;
         for (int x = 0; x < width; ++x)

@@ -2474,10 +2474,12 @@ static int ts_output_gate_try_write(ts_output_gate_t *gate,
             }
             (*written_packets)++;
         }
-    }
-
-    if (psi_packet && gate->stdout_enabled) {
-        return 0;
+        /* The opening PAT/PMT packet was already emitted from the cache.
+         * Later PSI must pass through: a player joining/reopening the live
+         * stream needs repeated tables to discover its selected service. */
+        if (psi_packet) {
+            return 0;
+        }
     }
     if (ts_output_gate_write_packet(gate, sink, ts_path, packet) != 0) {
         return -1;

@@ -185,8 +185,12 @@ $(BUILD_DIR)/test_dvbt_stream: tests/test_dvbt_stream.c $(DVBT_DIR)/src/probe_co
 	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
 .PHONY: test-dvbt
-test-dvbt: $(BUILD_DIR)/test_dvbt_stream
+$(BUILD_DIR)/test_dvbt_psi: tests/test_dvbt_psi.c $(DVBT_DIR)/src/dvbt_outer.c $(DVBT_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/dvbt/dvbt_outer.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+
+test-dvbt: $(BUILD_DIR)/test_dvbt_stream $(BUILD_DIR)/test_dvbt_psi
 	./$(BUILD_DIR)/test_dvbt_stream
+	./$(BUILD_DIR)/test_dvbt_psi
 
 test: test-dvbt
 

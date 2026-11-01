@@ -637,7 +637,7 @@ static void exercise_scatter_view(App *a) {
     g_assert_false(gtk_widget_get_visible(a->programs.frame));
     g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
     g_assert_true(gtk_widget_get_parent(a->scatter_view.frame) ==
-                  gtk_widget_get_parent(gtk_widget_get_parent(a->video_view.area)));
+                  gtk_widget_get_parent(a->video_view.container));
     ScatterBackend sample = {0};
     g_mutex_init(&sample.mutex);
     const guint8 rgb[] = {255,0,0, 0,255,0, 0,0,255, 255,255,255};

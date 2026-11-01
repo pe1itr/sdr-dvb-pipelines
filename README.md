@@ -222,6 +222,257 @@ korte afsluitperiode (1,5 seconde) worden achtergebleven processen geforceerd
 gestopt. Ook sluiten van het venster en uitval van een pipelineonderdeel stoppen
 de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
+### Tijdens ontvangst overschakelen naar de NVIDIA-speler
+
+Bij **Renderer → ingebouwde player** staat onder **Received video** de knop
+**Extern op GPU**. Klik tijdens ontvangst om het beeld naar systeem-FFplay met
+CUDA-decodering en NVIDIA Vulkan-weergave te verplaatsen. De ingebouwde
+VLC-videospeler stopt daarbij, zodat hij dezelfde stream niet ook op de CPU
+blijft decoderen. De SDR, DVB-decoder, programmaselectie en eventuele UDP-uitvoer
+blijven draaien. TSscatterFix blijft onafhankelijk aan of uit staan.
+
+Met **Terug in venster**, of door het FFplay-venster te sluiten, komt het beeld
+terug in het ingebouwde paneel. Een spelerfout schakelt eveneens terug zolang
+er nog ontvangst is. Schakelen vraagt enige tijd voor initialisatie, streamheaders
+en een volgend keyframe. Een begrensde buffer van 4 MiB vangt opstarten en
+kortstondige pauzes in het lezen op. Een vastgelopen externe speler blokkeert de
+ontvangst niet: bij een volle buffer worden alleen achterlopende videodata voor
+die speler overgeslagen.
+**Stop SDR** en sluiten van de GUI sluiten ook de externe speler af.
+
+Schakelen gebeurt uitsluitend met de knop, niet automatisch bij HD. Iedere nieuwe
+ontvangstsessie begint weer ingebouwd. De gekozen service en dempstand gaan mee;
+een servicewissel of **M** in het hoofdvenster heropent uitsluitend FFplay wanneer
+de externe speler actief is. FFplay heeft in zijn eigen venster ook **M** voor
+lokale demping en **F** voor volledig scherm.
+
+De knop gebruikt standaard `/usr/bin/ffplay` en selecteert een Vulkan-device
+waarvan de naam `NVIDIA` bevat. Dit staat los van de bestaande FFplay-renderer
+in het Renderer-menu. Zo wordt de oudere eigen FFplay-build in de home-directory
+niet per ongeluk gebruikt. Eventuele aanpassingen in het INI-bestand:
+
+```ini
+[ffplay]
+gpu_program=/usr/bin/ffplay
+gpu_device=NVIDIA
+```
+
+Deze FFplay-build moet CUDA én Vulkan/libplacebo ondersteunen. De ingebouwde
+weergave blijft softwaredecodering gebruiken; de knop activeert de hieronder
+geteste externe route.
+
+De integratie is op 1 november 2026 gecontroleerd met een opgenomen H.264-stream
+van 1920×1080, stille MP2-audio en een TS-muxrate van 8 Mbit/s, gevoed via een
+lopende pipe. De proef schakelde ingebouwd → FFplay → ingebouwd met behoud van
+dezelfde bron en relay. Beide ingebouwde weergaven zijn visueel bevestigd. Het
+laatste FFplay-log bevestigt NVIDIA CUDA/Vulkan-weergave en bevat geen
+TS-continuïteits- of corrupte-pakketmeldingen. Er draaide hierbij geen SDR-decoder.
+De korte proef bewijst geen langdurige stabiliteit; lokale log en testhulp staan
+onder `build/diagnostics/gpu-video/live-switch-final.log` en `live-switch.c`.
+Geautomatiseerde tests controleren ook behoud van bytes tijdens spelerinitialisatie,
+service/dempstand, terugkeer bij sluiten/fouten en doorlopende aanvoer bij een
+vastgelopen speler.
+
+### Onderzoek GPU-videodecodering bij HD
+
+**Status: systeem-FFplay met CUDA/Vulkan werkt in korte tests en bespaart CPU.
+De geteste VLC/OpenGL-route bespaart geen CPU; directe VDPAU-weergave blijft
+uitgesloten wegens de eerdere schermblokkade.**
+
+#### FFplay: werkende CUDA/Vulkan-route
+
+Op 1 november 2026 tussen 09:52 en 09:56 is `/usr/bin/ffplay` 7.1.5 getest met
+expliciete selectie van de NVIDIA RTX 3050 Laptop GPU voor Vulkan en
+`-hwaccel cuda`. Deze build bevat libplacebo en Vulkan. De logs bevestigen
+zowel de geselecteerde NVIDIA Vulkan-device als herhaalde
+`Transferred CUDA image to Vulkan!`-meldingen, zonder fout- of fallbackmeldingen.
+Dit is de [CUDA/Vulkan-route van FFplay](https://ffmpeg.org/pipermail/ffmpeg-cvslog/2023-November/139792.html),
+die de falende VDPAU/OpenGL-koppeling van VLC niet gebruikt.
+
+Na een test van vijf seconden bevestigde de gebruiker goed beeld en normale
+bediening. Daarna zijn twee H.264-meetparen (ook in omgekeerde volgorde) en één
+HEVC-meetpaar van elk vijftien seconden uitgevoerd. Alle zeven runs eindigden
+normaal; in het kerneljournal verschenen geen nieuwe GPU-fouten.
+
+| FFplay tijdens afspelen | CPU-decodering met standaard SDL-weergave | CUDA-decodering met NVIDIA Vulkan-weergave |
+|---|---:|---:|
+| H.264, twee runs | 42,2–43,3% | 7,8–8,3% |
+| HEVC, één run | 48,2% | 8,0% |
+
+Percentages zijn van **één CPU-kern**, inclusief videoweergave. De meting leest
+de CPU-tijd van alleen het FFplay-proces via `/proc` ongeveer eenmaal per seconde
+en neemt het verschil tussen meetpunten circa 5 en 13 seconden na processtart.
+Zo tellen de relatief dure CUDA/Vulkan-initialisatie en afsluiting niet mee.
+Dit vergelijkt de complete spelerconfiguraties, niet alleen de decoder.
+De hele vijftienseconden-run inclusief initialisatie gebruikte bij H.264
+mediaan 6,91 s CPU-tijd zonder CUDA en 4,67 s met CUDA; bij HEVC 7,69 s en 4,49 s.
+CUDA/Vulkan had circa 3,5 s extra wandkloktijd bij het opstarten/afsluiten.
+
+Getest met dezelfde afgeleide 1920×1080-video's als hieronder, één decoderthread,
+één filterthread, aangevraagde venstermaat 960×540 en geen audio. HEVC is opnieuw
+gecodeerd uit de ontvangen beelden. SDR-verwerking liep niet mee. Dit zijn
+korte functionele en CPU-metingen, geen langdurige live-ontvangsttest.
+Meetcommando's, CPU-monsters en logs staan lokaal onder
+`build/diagnostics/gpu-video/ffplay-comparison/` en verdwijnen bij `make clean`.
+Een overeenkomstige korte afspeelopdracht is:
+
+```sh
+/usr/bin/ffplay -hwaccel cuda \
+  -vulkan_params 'device=NVIDIA GeForce RTX 3050 Laptop GPU' \
+  -threads 1 -filter_threads 1 -autoexit -t 15 -an -x 960 -y 540 \
+  build/diagnostics/gpu-video/derived-h264.mkv
+```
+
+De gebruiker bevestigde dat de eigen build
+`/home/rhardenb/repoc/ffmpeg/ffplay` de eerder gebruikte CUDA-build is.
+Die start op dit systeem momenteel niet: de loader mist `libx264.so.164`
+(exitcode 127); geïnstalleerd is `libx264.so.165`. De bijbehorende bouwconfiguratie
+heeft `CONFIG_CUDA=1`, `CONFIG_CUDA_NVCC=1` en `CONFIG_VULKAN=1`, maar
+`CONFIG_LIBPLACEBO=0`. Alleen de CUDA-buildopties leveren de benodigde
+FFplay-Vulkan-renderer dus niet. Deze eigen build is niet afgespeeld of aangepast;
+de getoonde resultaten gelden voor de systeemversie. Ook de opgeslagen
+rendererkeuze en FFplay-argumenten van de ontvanger zijn niet gewijzigd.
+
+#### VLC: vergelijking en eerdere schermblokkade
+
+De gebruiker meldde een volledige laptopcrash bij NVIDIA-tests van de vorige dag.
+De losse VLC-tests tijdens dit onderzoek gaven eveneens problemen:
+NVIDIA/OpenGL meldde `glVDPAUInitNV failed: 0x502`, automatische hardwarekeuze
+meldde `existing hardware acceleration cannot be reused`, en directe
+VDPAU-weergave liep vast tijdens afsluiten. Daarmee is niet aangetoond dat deze
+fouten de eerdere systeemcrash veroorzaakten. De CPU-metingen hieronder zijn
+geen stabiliteitsbewijs en de voorgestelde GPU-route is niet als standaard
+ingeschakeld. Eerst bestaande systeem-/crashlogs onderzoeken; geen verdere
+GPU-belastingstests zonder nieuwe afstemming met de gebruiker.
+
+De gebruiker bevestigde vervolgens dat de eerste losse VLC-tests zichtbaar
+goed beeld gaven, maar dat bij de laatste test het **volledige scherm vastliep**.
+Die laatste opdracht combineerde `VDPAU_DRIVER=nvidia`,
+`--avcodec-hw=vdpau_avcodec` en `--vout=vdpau_display`.
+De vier eerdere VLC-runs hebben een afsluitende tijdmeting; deze laatste niet.
+Bij de daaropvolgende procescontrole was dit testproces niet meer aanwezig.
+Deze directe VDPAU-route niet opnieuw uitvoeren zonder onderzoek naar de
+vastloper en expliciete afstemming. Zichtbaar beeld in de eerdere runs bewijst
+op zichzelf geen werkende GPU-versnelling of lagere CPU-belasting.
+
+Na expliciete gebruikersgoedkeuring zijn op 1 november tussen 09:43 en 09:46
+drie korte CPU/NVIDIA-meetparen uitgevoerd met uitsluitend de eerdere
+OpenGL-instellingen. De gebruiker bevestigde na het eerste paar goed beeld en
+normale bediening. Alle zes processen eindigden normaal, zonder gemelde late
+beelden of nieuwe kernel-GPU-fouten. De tweede ronde had omgekeerde volgorde.
+
+| Externe VLC, dezelfde 10 s H.264-video | CPU-tijd ronde 1 | Ronde 2 | Ronde 3 | Mediaan |
+|---|---:|---:|---:|---:|
+| Softwaredecodering (`--avcodec-hw=none`) | 4,90 s | 4,20 s | 4,25 s | **4,25 s** |
+| NVIDIA-decodering (`--avcodec-hw=vdpau_avcodec`) | 6,22 s | 6,46 s | 6,36 s | **6,36 s** |
+
+Beide gebruiken `--vout=gl --gl=glx`, één decoderthread, geen audio, aangevraagde
+vensterafmetingen van 960×540 en dezelfde afgeleide H.264-video van 1920×1080.
+VLC meldt vervolgens in het log een venstergrootte van 1920×1011; de
+opgegeven 960×540 is dus niet de bewezen uiteindelijke weergavegrootte. De omgeving zet
+`VDPAU_DRIVER=nvidia`, `__NV_PRIME_RENDER_OFFLOAD=1` en
+`__GLX_VENDOR_LIBRARY_NAME=nvidia`; `WAYLAND_DISPLAY` is verwijderd uit de
+omgeving van alleen het testproces. CPU-tijd is user plus system van de speler,
+inclusief initialisatie en weergave, gemeten met `/usr/bin/time`. De tijd is
+genormaliseerd naar de ingestelde tien seconden video, niet naar verstreken
+wandkloktijd. De medianen komen zo overeen met 42,5% en 63,6% van één CPU-kern.
+NVIDIA gebruikte hier ongeveer **50% meer CPU-tijd**. De SDR-keten draaide niet
+mee; dit is geen meting van de hele ontvanger of een HEVC-weergavetest.
+
+De NVIDIA-runs melden zowel de NVIDIA-decoder als `pix_fmt: vdpau`; er was dus
+werkelijk hardwaredecodering. Alle runs melden de reeds bekende
+`glVDPAUInitNV failed: 0x502`, gevolgd door `vdpau_chroma` en `swscale`-conversie.
+Dat is consistent met verlies van de decodeerwinst bij de weergave, maar deze
+meting splitst de kosten van de afzonderlijke weergavestappen niet uit.
+Werkend beeld is hier bevestigd; CPU-besparing via deze configuratie niet.
+De bestaande softwaredecodering blijft daarom de bruikbare uitgangspositie.
+
+Een latere controle van bestaande logs en documentatie geeft een sterke
+aanwijzing voor de mislukte koppeling. GNOME selecteert `/dev/dri/card1`
+(`amdgpu`) als primaire GPU vanwege het ingebouwde scherm; NVIDIA decodeert
+de video. De desktop gebruikt Wayland en de test gebruikt GLX.
+[NVIDIA documenteert expliciet dat VDPAU Optimus/PRIME-laptops en Wayland niet ondersteunt](https://docs.nvidia.com/datacenter/tesla/driver-installation-guide/optimus-laptops-and-multi-gpu-desktop-systems.html#vdpau-context).
+Deze hybride weergaveomgeving is daarom een waarschijnlijke verklaring voor
+de mislukte VDPAU/OpenGL-koppeling. De fout `0x502` is `GL_INVALID_OPERATION`;
+[de interopspecificatie](https://registry.khronos.org/OpenGL/extensions/NV/NV_vdpau_interop.txt)
+staat die fout onder meer toe als de VDPAU-driver het verzoek weigert. De code
+alleen bewijst niet welke driver-/contextincompatibiliteit hier precies optreedt.
+De bestaande VLC-logs identificeren de OpenGL-renderer niet voldoende om te
+bewijzen op welke GPU die specifieke context draaide; de aangevraagde
+NVIDIA-omgevingsvariabelen zijn daarvoor geen bewijs.
+
+De afzonderlijke directe-VDPAU-vastloper is niet herhaald. In het bestaande
+kerneljournal staan rond 05:09:57 herhaalde AMD-driverfouten:
+`[drm] *ERROR* Not enough memory for command submission!`. Dat is een
+aanknopingspunt voor de schermblokkade, geen bewezen hoofdoorzaak.
+De korte herhaling bewaakte nieuwe kernel-GPU-fouten en had een proceslimiet
+van 20 s met geforceerd stoppen na nog 2 s; dit beschermt niet tegen een
+eventuele volledige systeemvastloper en vormt geen langdurige stabiliteitstest.
+Meetopdrachten, omgeving, logs en resultaten staan lokaal onder
+`build/diagnostics/gpu-video/vlc-comparison/` (niet meegecommit).
+
+Op 1 november 2026 is H.264/HEVC-decodering afzonderlijk gemeten op de Ryzen 7
+5800H met een NVIDIA RTX 3050 Laptop GPU (driver 580.178.04, FFmpeg 7.1.5).
+De GPU werkt; binnen de Codex-sandbox zijn de GPU-devices niet zichtbaar, zodat
+een mislukte `nvidia-smi` daar geen bewijs is van een defecte driver.
+
+De lokale `build/diagnostics/dvbs2-5msym.ts` bevat service **PI6EHV HD**:
+1920×1080 H.264, 30000/1001 beelden/s, met interlacingmetadata. De opname bevat
+beschadigde videodata. Daarom zijn daarnaast opnieuw gecodeerde H.264- en
+HEVC-testbestanden gemaakt van de 562 gedecodeerde beelden (circa 18,75 s).
+HEVC is hier een afgeleide testvideo, geen ontvangen HEVC-uitzending.
+
+Een controle op normale afspeelsnelheid met die twee testbestanden gaf:
+
+| Verwerking | H.264 | HEVC |
+|---|---:|---:|
+| CPU-decodering | 36,2% | 49,7% |
+| NVIDIA-decodering, beelden blijven in GPU-geheugen | 14,2% | 13,4% |
+| CPU-decodering plus RGB-conversie | 41,0% | 55,0% |
+| NVIDIA-decodering plus terugkopiëren en RGB-conversie | 44,4% | 43,4% |
+
+Dit is **CPU-tijd gedeeld door videoduur**, uitgedrukt als percentage van één
+CPU-kern, inclusief procesinitialisatie. Het is niet het percentage van de hele
+16-thread CPU. Elke combinatie is één keer op afspeelsnelheid gemeten, met één
+decoderthread en één filterthread; alle acht runs leverden 562 beelden zonder
+decodeerfouten. De GPU-runs duurden door initialisatie ongeveer twee seconden
+langer. Dit zijn korte, indicatieve metingen, geen geïsoleerde prestatienorm.
+Audio, deinterlacing, tekenen van het venster en de SDR-keten zijn niet inbegrepen.
+Drie eerdere runs zonder afspeelpauzes bevestigden lagere decodeer-CPU-tijd,
+maar met aanzienlijke spreiding. Voor de beschadigde oorspronkelijke H.264
+waren de medianen 5,12 s op CPU en 2,04 s op NVIDIA; voor de HEVC-testvideo
+5,83 s en 0,67 s. Gelijke frameaantallen bewijzen bij beschadigde invoer geen
+gelijke beeldkwaliteit.
+
+De meest kansrijke vervolgstap is een **losse speler met hardwaredecodering én
+GPU-weergave**. Die kan CPU-ruimte voor de SDR-verwerking vrijmaken zonder de
+grote beelden eerst naar RGB-buffers op de CPU terug te halen. Het ingebouwde
+paneel gebruikt nu `libvlc_video_set_callbacks`, RGB-buffers en Cairo.
+[VideoLAN beschrijft de beperkingen van deze callbacks](https://videolan.videolan.me/vlc-3.0/group__libvlc__media__player.html):
+hardwaredecodering kan uitvallen of extra geheugenkopieën nodig hebben. Alleen
+`--avcodec-hw=none` vervangen is daarom geen bewezen oplossing voor dit paneel.
+De bestaande kleine weak-signalweergave is een andere toepassing.
+
+De reproduceerbare meettool staat in `scripts/benchmark_video_decode.py`.
+De modi vergelijken alleen decodering, of decodering inclusief een CPU-RGB-frame;
+zij simuleren niet de volledige GTK-speler. CUDA-initialisatiefouten, lege
+uitvoer en afwijkende frameaantallen worden gemeld. Waarschuwingen en
+decodeerfouten staan per run in het log, ook bij exitcode nul.
+Voorbeeld met de lokale meetbestanden (kies een nieuwe uitvoermap):
+
+```sh
+python3 scripts/benchmark_video_decode.py \
+  --output build/diagnostics/gpu-video/realtime-repeat \
+  --realtime --repeats 3 --fps 30000/1001 \
+  build/diagnostics/gpu-video/derived-h264.mkv \
+  build/diagnostics/gpu-video/derived-hevc.mkv
+```
+
+Gebruik bij ruwe H.264 expliciet de bekende beeldsnelheid: `ffprobe` rapporteert
+voor deze uitgepakte stream 25 fps, terwijl de oorspronkelijke TS 30000/1001
+beelden/s aangeeft. De lokale logs en JSON-metingen staan onder
+`build/diagnostics/gpu-video/` en verdwijnen bij `make clean`.
+
 ### VLC bij onderbroken ontvangst
 
 Het ingebouwde **Received video**-paneel gebruikt `--avcodec-threads=1`.

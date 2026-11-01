@@ -18,6 +18,12 @@ Local changes are limited to `probe_constellation.c` and `dvbt_outer.c`:
   puncturing, byte identity, injected bit errors, chunk continuity and resets.
   Each 1512-cell OFDM symbol contains complete puncturing groups for every rate
   (1, 2, 3 or 4 dibits per group).
+- The live TS output gate forwards repeated PAT/PMT packets after startup.
+  Previously it suppressed these tables for the rest of reception, preventing
+  players from discovering the service after a program switch or a late join.
+  Only the PSI packet already emitted in the opening bootstrap is skipped;
+  later packets, including section continuations, retain their original bytes.
+  `test_dvbt_psi` covers startup and subsequent table delivery.
 
 For an update, replace this snapshot from a known revision, reapply these small
 changes, update this file, and run `make test` plus a known-signal replay. Keep

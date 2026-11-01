@@ -5,10 +5,46 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/wait.h>
+
+struct VideoExternalChild {
+    VideoView *view, *owner;
+    GPid pid;
+    guint kill_timer;
+};
+
+static void output_controls(VideoView *v) {
+    const char *label = v->external ? "Terug in venster" : "Extern op GPU";
+    if (g_strcmp0(gtk_button_get_label(GTK_BUTTON(v->output_button)), label))
+        gtk_button_set_label(GTK_BUTTON(v->output_button), label);
+    gtk_widget_set_sensitive(v->output_button, v->active && v->local_display &&
+        !g_atomic_int_get(&v->stopping) && !g_atomic_int_get(&v->input_ended));
+}
+
+static void replace_output(VideoView *v, int fd, gboolean external) {
+    g_mutex_lock(&v->output_mutex);
+    if (v->video_fd >= 0) close(v->video_fd);
+    if (fd >= 0 && g_atomic_int_get(&v->input_ended)) { close(fd); fd = -1; }
+    v->video_fd = fd;
+    v->external = external;
+    ++v->output_generation;
+    g_mutex_unlock(&v->output_mutex);
+}
+
+static void output_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    VideoView *v = data;
+    GError *error = NULL;
+    if (!video_view_set_external(v, !v->external, &error)) {
+        gtk_label_set_text(GTK_LABEL(v->notice), error->message);
+        g_clear_error(&error);
+    }
+}
 
 /* Forward the original TS, including all services and aspect metadata. The
  * relay owns no GTK objects and all waits are interruptible during Stop. */
@@ -16,16 +52,39 @@ static gpointer relay_ts(gpointer data) {
     VideoView *v = data;
     unsigned char input[65536], packet[1316];
     size_t pending = 0;
+    /* A bounded queue absorbs FFplay startup and ordinary read bursts. Unlike
+     * waiting for pipe space, it never holds up SDR/UDP input. The relay alone
+     * owns these bytes; switching outputs invalidates them by generation. */
+    const size_t capacity = 4 * 1024 * 1024;
+    unsigned char *queued = NULL;
+    size_t head = 0, used = 0;
+    guint queue_generation = 0;
+    gboolean eof = FALSE;
     while (!g_atomic_int_get(&v->stopping)) {
-        struct pollfd source = {.fd = v->source_fd, .events = POLLIN};
-        int rc = poll(&source, 1, 100);
+        struct pollfd io[2] = {{.fd = eof ? -1 : v->source_fd, .events = POLLIN},
+                              {.fd = -1, .events = POLLOUT}};
+        g_mutex_lock(&v->output_mutex);
+        if (queue_generation != v->output_generation) {
+            used = head = 0; queue_generation = v->output_generation;
+        }
+        while (used && v->external && v->video_fd >= 0) {
+            ssize_t n = write(v->video_fd, queued + head, MIN(used, capacity - head));
+            if (n > 0) { head = (head + n) % capacity; used -= n; continue; }
+            if (n < 0 && errno == EINTR) continue;
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) io[1].fd = v->video_fd;
+            else used = 0; /* Child watch handles player failure. */
+            break;
+        }
+        g_mutex_unlock(&v->output_mutex);
+        if (eof && !used) break;
+        int rc = poll(io, 2, 100);
         if (rc < 0 && errno == EINTR) continue;
         if (rc < 0) goto failed;
-        if (!rc) continue;
+        if (!rc || !io[0].revents) continue;
         ssize_t n = read(v->source_fd, input, sizeof(input));
         if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (n < 0) goto failed;
-        if (!n) break;
+        if (!n) { eof = TRUE; g_atomic_int_set(&v->input_ended, TRUE); continue; }
         if (v->udp_fd >= 0) {
             size_t at = 0;
             while (at < (size_t)n) {
@@ -43,15 +102,45 @@ static gpointer relay_ts(gpointer data) {
             }
         }
         size_t at = 0;
-        while (v->video_fd >= 0 && at < (size_t)n) {
+        g_mutex_lock(&v->output_mutex);
+        guint generation = v->output_generation;
+        g_mutex_unlock(&v->output_mutex);
+        while (at < (size_t)n) {
             if (g_atomic_int_get(&v->stopping)) goto done;
-            struct pollfd sink = {.fd = v->video_fd, .events = POLLOUT};
-            rc = poll(&sink, 1, 100);
-            if (rc < 0 && errno == EINTR) continue;
-            if (rc < 0) goto failed;
-            if (!rc) continue;
+            /* The nonblocking write holds the lock, so a switch can never
+             * close/reuse its descriptor underneath the relay. */
+            g_mutex_lock(&v->output_mutex);
+            if (v->video_fd < 0 || generation != v->output_generation) {
+                g_mutex_unlock(&v->output_mutex); break;
+            }
+            if (v->external) {
+                if (!queued) queued = g_malloc(capacity);
+                size_t count = (size_t)n - at;
+                if (queue_generation != generation || used + count > capacity) {
+                    /* A stalled player loses only its backlog. New TS headers
+                     * and a keyframe restore playback when it resumes. */
+                    used = head = 0; queue_generation = generation;
+                }
+                size_t tail = (head + used) % capacity;
+                size_t first = MIN(count, capacity - tail);
+                memcpy(queued + tail, input + at, first);
+                memcpy(queued, input + at + first, count - first);
+                used += count;
+                g_mutex_unlock(&v->output_mutex); break;
+            }
+            int output_fd = v->video_fd;
             ssize_t written = write(v->video_fd, input + at, (size_t)n - at);
-            if (written < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+            int saved_errno = errno;
+            g_mutex_unlock(&v->output_mutex);
+            if (written < 0 && saved_errno == EINTR) continue;
+            /* Keep all data, including sparse frames, for embedded playback. */
+            if (written < 0 && (saved_errno == EAGAIN || saved_errno == EWOULDBLOCK)) {
+                struct pollfd output = {.fd = output_fd, .events = POLLOUT};
+                poll(&output, 1, 100);
+                /* A switch may have replaced the fd during poll. Recheck
+                 * the generation under the lock before the next write. */
+                continue;
+            }
             if (written <= 0) goto failed;
             at += written;
         }
@@ -60,7 +149,12 @@ static gpointer relay_ts(gpointer data) {
 failed:
     g_atomic_int_set(&v->relay_failed, TRUE);
 done:
+    g_free(queued);
+    g_atomic_int_set(&v->input_ended, TRUE);
+    g_mutex_lock(&v->output_mutex);
     if (v->video_fd >= 0) { close(v->video_fd); v->video_fd = -1; }
+    ++v->output_generation;
+    g_mutex_unlock(&v->output_mutex);
     return NULL;
 }
 
@@ -129,7 +223,8 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_surface_destroy(surface);
     } else {
         PangoLayout *text = gtk_widget_create_pango_layout(widget,
-            v->active ? (v->local_display ? "Waiting for video…" : "Streaming via UDP") : "Received video");
+            v->active ? (v->external ? "Video in externe speler" :
+                v->local_display ? "Waiting for video…" : "Streaming via UDP") : "Received video");
         int tw, th; pango_layout_get_pixel_size(text, &tw, &th);
         cairo_set_source_rgb(cr, .65, .65, .65);
         cairo_move_to(cr, (w - tw) / 2, (h - th) / 2);
@@ -168,45 +263,93 @@ static gboolean tick(gpointer data) {
     gboolean dirty = v->dirty; v->dirty = FALSE;
     g_mutex_unlock(&v->mutex);
     if (dirty) gtk_widget_queue_draw(v->area);
+    output_controls(v);
     return G_SOURCE_CONTINUE;
 }
 
 GtkWidget *video_view_create(VideoView *v) {
-    g_mutex_init(&v->mutex); v->fd = v->source_fd = v->video_fd = v->udp_fd = -1;
+    g_mutex_init(&v->mutex); g_mutex_init(&v->output_mutex);
+    v->fd = v->source_fd = v->video_fd = v->udp_fd = -1;
+    v->gpu_program = g_strdup("/usr/bin/ffplay"); v->gpu_device = g_strdup("NVIDIA");
     v->area = gtk_drawing_area_new();
     gtk_widget_set_size_request(v->area, 320, 180);
     gtk_widget_set_hexpand(v->area, TRUE); gtk_widget_set_vexpand(v->area, TRUE);
     g_signal_connect(v->area, "draw", G_CALLBACK(draw), v);
     v->timer = g_timeout_add(33, tick, v);
     v->container = gtk_frame_new("Received video");
-    gtk_container_add(GTK_CONTAINER(v->container), v->area);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_container_add(GTK_CONTAINER(v->container), box);
+    gtk_box_pack_start(GTK_BOX(box), v->area, TRUE, TRUE, 0);
+    v->output_button = gtk_button_new_with_label("Extern op GPU");
+    gtk_widget_set_tooltip_text(v->output_button,
+        "Wissel tussen dit venster en FFplay op de NVIDIA-GPU. De ontvangst blijft lopen.");
+    gtk_box_pack_start(GTK_BOX(box), v->output_button, FALSE, FALSE, 0);
+    v->notice = gtk_label_new("");
+    gtk_label_set_line_wrap(GTK_LABEL(v->notice), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(v->notice), 35);
+    gtk_box_pack_start(GTK_BOX(box), v->notice, FALSE, FALSE, 0);
+    g_signal_connect(v->output_button, "clicked", G_CALLBACK(output_clicked), v);
+    output_controls(v);
     return v->container;
 }
 
 void video_view_set_muted(VideoView *v, gboolean muted) {
+    gboolean changed = v->muted != muted;
     v->muted = muted;
     if (v->player) libvlc_audio_set_mute(v->player, muted);
+    if (changed && v->external) {
+        GError *error = NULL;
+        /* FFplay has no control API for volume. Reopen only the player; the
+         * stream, radio and service selection remain live. */
+        if (!video_view_set_external(v, TRUE, &error)) {
+            gtk_label_set_text(GTK_LABEL(v->notice), error->message);
+            g_clear_error(&error);
+        }
+    }
     if (v->container) gtk_frame_set_label(GTK_FRAME(v->container),
         muted ? "Received video · Muted (M)" : "Received video");
+}
+
+static gboolean kill_external(gpointer data) {
+    VideoExternalChild *child = data;
+    child->kill_timer = 0;
+    kill(-child->pid, SIGKILL);
+    return G_SOURCE_REMOVE;
+}
+
+static void stop_external(VideoView *v) {
+    VideoExternalChild *child = v->external_child;
+    if (!child) return;
+    v->external_child = NULL;
+    child->view = NULL; /* Reaper must never access a stopped/destroyed view. */
+    kill(-child->pid, SIGTERM);
+    child->kill_timer = g_timeout_add(1000, kill_external, child);
+}
+
+static void stop_player(VideoView *v) {
+    if (v->player) {
+        libvlc_media_player_stop(v->player);
+        libvlc_media_player_release(v->player); v->player = NULL;
+    }
+    if (v->fd >= 0) { close(v->fd); v->fd = -1; }
+    g_mutex_lock(&v->mutex);
+    free(v->pixels); free(v->frame); v->pixels = v->frame = NULL;
+    v->ready = FALSE; v->dirty = TRUE; v->aspect = 0;
+    g_mutex_unlock(&v->mutex);
 }
 
 void video_view_stop(VideoView *v) {
     g_atomic_int_set(&v->stopping, TRUE);
     if (v->relay) { g_thread_join(v->relay); v->relay = NULL; }
-    if (v->video_fd >= 0) { close(v->video_fd); v->video_fd = -1; }
-    if (v->player) {
-        libvlc_media_player_stop(v->player);
-        libvlc_media_player_release(v->player); v->player = NULL;
-    }
+    replace_output(v, -1, FALSE);
+    stop_external(v);
+    stop_player(v);
     if (v->vlc) { libvlc_release(v->vlc); v->vlc = NULL; }
-    if (v->fd >= 0) { close(v->fd); v->fd = -1; }
     if (v->source_fd >= 0) { close(v->source_fd); v->source_fd = -1; }
     if (v->udp_fd >= 0) { close(v->udp_fd); v->udp_fd = -1; }
     v->active = FALSE; v->program = 0;
-    g_mutex_lock(&v->mutex);
-    free(v->pixels); free(v->frame); v->pixels = v->frame = NULL;
-    v->ready = FALSE; v->dirty = TRUE; v->aspect = 0;
-    g_mutex_unlock(&v->mutex);
+    if (v->output_button) output_controls(v);
+    if (v->notice) gtk_label_set_text(GTK_LABEL(v->notice), "");
 }
 
 static gboolean start_player(VideoView *v, guint16 program) {
@@ -229,12 +372,121 @@ static gboolean start_player(VideoView *v, guint16 program) {
     return TRUE;
 }
 
+void video_view_set_gpu_player(VideoView *v, const char *program, const char *device) {
+    g_free(v->gpu_program); g_free(v->gpu_device);
+    v->gpu_program = g_strdup(program && *program ? program : "/usr/bin/ffplay");
+    v->gpu_device = g_strdup(device && *device ? device : "NVIDIA");
+}
+
+static void external_exited(GPid pid, gint result, gpointer data) {
+    VideoExternalChild *child = data;
+    if (child->kill_timer) g_source_remove(child->kill_timer);
+    if (child->owner)
+        child->owner->external_children = g_list_remove(child->owner->external_children, child);
+    VideoView *v = child->view;
+    if (v && v->external_child == child) {
+        v->external_child = NULL;
+        if (v->active && !g_atomic_int_get(&v->stopping) && !g_atomic_int_get(&v->input_ended)) {
+            GError *error = NULL;
+            if (video_view_set_external(v, FALSE, &error)) {
+                gtk_label_set_text(GTK_LABEL(v->notice),
+                    WIFEXITED(result) && WEXITSTATUS(result) == 0 ?
+                    "Externe speler gesloten; terug in venster." :
+                    "Externe speler gestopt; terug in venster.");
+            } else {
+                gtk_label_set_text(GTK_LABEL(v->notice), error->message);
+                g_clear_error(&error);
+            }
+        }
+    }
+    g_spawn_close_pid(pid); g_free(child);
+}
+
+static void external_setup(gpointer unused) {
+    (void)unused;
+    if (setsid() < 0) _exit(126);
+    signal(SIGPIPE, SIG_DFL); signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL);
+}
+
+gboolean video_view_set_external(VideoView *v, gboolean external, GError **error) {
+    if (!v->active || !v->local_display || g_atomic_int_get(&v->stopping) ||
+        g_atomic_int_get(&v->input_ended)) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
+            "Schakelen kan tijdens ontvangst met de ingebouwde speler.");
+        return FALSE;
+    }
+    int pipefd[2];
+    if (!g_unix_open_pipe(pipefd, FD_CLOEXEC, error)) return FALSE;
+    if (!g_unix_set_fd_nonblocking(pipefd[1], TRUE, error)) {
+        close(pipefd[0]); close(pipefd[1]); return FALSE;
+    }
+    VideoExternalChild *child = NULL;
+    if (external) {
+        char *device = g_strdup_printf("device=%s", v->gpu_device);
+        char *video = g_strdup_printf("p:%u:v:0", v->program);
+        char *audio = g_strdup_printf("p:%u:a:0", v->program);
+        const char *argv[40]; unsigned count = 0;
+        argv[count++] = v->gpu_program;
+        argv[count++] = "-hide_banner"; argv[count++] = "-loglevel"; argv[count++] = "warning";
+        argv[count++] = "-autoexit";
+        argv[count++] = "-threads"; argv[count++] = "1";
+        argv[count++] = "-filter_threads"; argv[count++] = "1";
+        argv[count++] = "-hwaccel"; argv[count++] = "cuda";
+        argv[count++] = "-vulkan_params"; argv[count++] = device;
+        argv[count++] = "-window_title"; argv[count++] = "Received video · GPU";
+        argv[count++] = "-volume"; argv[count++] = v->muted ? "0" : "100";
+        if (v->program) {
+            argv[count++] = "-vst"; argv[count++] = video;
+            argv[count++] = "-ast"; argv[count++] = audio;
+        }
+        argv[count++] = "-f"; argv[count++] = "mpegts";
+        argv[count++] = "-i"; argv[count++] = "pipe:0"; argv[count] = NULL;
+        child = g_new0(VideoExternalChild, 1);
+        int nullfd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+        gboolean spawned = nullfd >= 0 && g_spawn_async_with_fds(NULL, (char **)argv, NULL,
+            G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD, external_setup, NULL,
+            &child->pid, pipefd[0], nullfd, STDERR_FILENO, error);
+        if (nullfd >= 0) close(nullfd);
+        else g_set_error(error, G_IO_ERROR, g_io_error_from_errno(errno), "Cannot open /dev/null: %s", g_strerror(errno));
+        g_free(device); g_free(video); g_free(audio);
+        if (!spawned) { g_free(child); close(pipefd[0]); close(pipefd[1]); return FALSE; }
+    }
+    /* Commit only after a new external process has successfully exec'd. Stop
+     * VLC before supplying FFplay any TS; no simultaneous video decoders. */
+    replace_output(v, -1, external);
+    stop_player(v);
+    stop_external(v);
+    v->fd = pipefd[0];
+    if (external) {
+        child->view = child->owner = v;
+        v->external_child = child;
+        v->external_children = g_list_prepend(v->external_children, child);
+        g_child_watch_add(child->pid, external_exited, child);
+    } else if (!start_player(v, v->program)) {
+        close(pipefd[1]); stop_player(v);
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Ingebouwde speler kon niet starten.");
+        output_controls(v); return FALSE;
+    }
+    replace_output(v, pipefd[1], external);
+    gtk_label_set_text(GTK_LABEL(v->notice), external ?
+        "Ontvangst loopt door. Sluit FFplay om terug te keren." : "");
+    output_controls(v);
+    gtk_widget_queue_draw(v->area);
+    return TRUE;
+}
+
 gboolean video_view_select_program(VideoView *v, guint16 program, GError **error) {
-    if (!v->active || !v->local_display || !v->player || !program) {
+    if (!v->active || !v->local_display || (!v->player && !v->external) || !program) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Program selection requires the embedded player.");
         return FALSE;
     }
     if (program == v->program) return TRUE;
+    if (v->external) {
+        guint16 old_program = v->program;
+        v->program = program;
+        if (video_view_set_external(v, TRUE, error)) return TRUE;
+        v->program = old_program; return FALSE;
+    }
     /* LibVLC 3 has no public program-switch API. Reopen only its demux/player
      * with :program; retain the live input, relay and unmodified UDP output.
      * The original read fd stays open while VLC closes its own duplicate. */
@@ -256,6 +508,7 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
     v->local_display = display;
     v->caching = url ? 1500 : 300;
     g_atomic_int_set(&v->stopping, FALSE); g_atomic_int_set(&v->relay_failed, FALSE);
+    g_atomic_int_set(&v->input_ended, FALSE);
     if (url) {
         char host[16]; unsigned port;
         struct sockaddr_in addr = {.sin_family = AF_INET};
@@ -291,6 +544,7 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
 start_relay:
     v->relay = g_thread_new("video-ts-relay", relay_ts, v);
     v->active = TRUE;
+    output_controls(v);
     gtk_widget_queue_draw(v->area);
     return TRUE;
 fail:
@@ -307,5 +561,15 @@ gboolean video_view_failed(VideoView *v) {
 
 void video_view_destroy(VideoView *v) {
     if (v->timer) { g_source_remove(v->timer); v->timer = 0; }
-    video_view_stop(v); g_mutex_clear(&v->mutex);
+    video_view_stop(v);
+    /* Destruction must not depend on running the GTK loop for another second. */
+    for (GList *p = v->external_children; p; p = p->next) {
+        VideoExternalChild *child = p->data;
+        child->owner = child->view = NULL;
+        if (child->kill_timer) { g_source_remove(child->kill_timer); child->kill_timer = 0; }
+        kill(-child->pid, SIGKILL);
+    }
+    g_list_free(v->external_children); v->external_children = NULL;
+    g_free(v->gpu_program); g_free(v->gpu_device);
+    g_mutex_clear(&v->mutex); g_mutex_clear(&v->output_mutex);
 }
