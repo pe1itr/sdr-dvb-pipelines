@@ -331,7 +331,12 @@ static void exercise_menu_shortcuts(App *a) {
 
 static gboolean usb_preview(gpointer data) {
     App *a=data;
-    /* Let GTK complete layout and the toggle highlight before capturing. */
+    /* Stop or panel changes can queue a resize in the same timer iteration. */
+    GtkRequisition minimum, natural;
+    GtkAllocation allocation;
+    gtk_widget_get_preferred_size(a->window, &minimum, &natural);
+    gtk_widget_get_allocation(a->window, &allocation);
+    gtk_widget_size_allocate(a->window, &allocation);
     int width=gtk_widget_get_allocated_width(a->window), height=gtk_widget_get_allocated_height(a->window);
     cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,width,height);
     cairo_t *cr=cairo_create(surface);
@@ -629,6 +634,7 @@ static void exercise_screenshot(App *a, guint key, const char *suffix) {
 static void exercise_scatter_view(App *a) {
     g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), TRUE);
+    g_assert_false(gtk_widget_get_visible(a->programs.frame));
     g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
     g_assert_true(gtk_widget_get_parent(a->scatter_view.frame) ==
                   gtk_widget_get_parent(gtk_widget_get_parent(a->video_view.area)));
@@ -661,6 +667,52 @@ static void exercise_scatter_view(App *a) {
     g_assert_null(a->scatter_view.image);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), FALSE);
     g_assert_false(gtk_widget_get_visible(a->scatter_view.frame));
+    g_assert_true(gtk_widget_get_visible(a->programs.frame));
+}
+
+static void record_program(guint16 service, gpointer data) {
+    guint16 *chosen = data; *chosen = service;
+}
+
+static void exercise_programs(App *a, const TsInfoSnapshot *snapshot) {
+    ProgramView *v = &a->programs;
+    guint16 chosen = 0;
+    v->select = record_program; v->data = &chosen;
+    program_view_update(v, snapshot, 1, TRUE);
+    g_assert_cmpuint(v->count, ==, 2);
+    g_assert_cmpuint(chosen, ==, 0); /* Discovery must not simulate a click. */
+    GtkListBoxRow *row = gtk_list_box_get_row_at_index(GTK_LIST_BOX(v->list), 1);
+    gtk_list_box_select_row(GTK_LIST_BOX(v->list), row);
+    g_assert_cmpuint(chosen, ==, 2);
+    TsInfoSnapshot renamed = *snapshot;
+    g_strlcpy(renamed.services[1].name, "Second program", sizeof(renamed.services[1].name));
+    chosen = 0;
+    program_view_update(v, &renamed, 2, TRUE);
+    g_assert_cmpuint(chosen, ==, 0);
+    row = gtk_list_box_get_selected_row(GTK_LIST_BOX(v->list));
+    g_assert_cmpint(gtk_list_box_row_get_index(row), ==, 1);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(gtk_bin_get_child(GTK_BIN(row)))), ==, "Second program");
+    /* Information popups may select a different service without relabelling playback. */
+    renamed.selected = 1;
+    program_view_update(v, &renamed, 2, FALSE);
+    g_assert_false(gtk_widget_is_sensitive(v->list));
+    gtk_list_box_select_row(GTK_LIST_BOX(v->list), gtk_list_box_get_row_at_index(GTK_LIST_BOX(v->list), 0));
+    g_assert_cmpuint(chosen, ==, 0);
+    program_view_update(v, &renamed, 2, TRUE);
+    const char *screenshot = g_getenv("LINRAD_GUI_SCREENSHOT");
+    if (screenshot) {
+        GtkAllocation allocation = {0, 0, 1600, 900}; gtk_widget_size_allocate(a->window, &allocation);
+        cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 1600, 900);
+        cairo_t *cr = cairo_create(surface); gtk_widget_draw(a->window, cr);
+        char *dir = g_path_get_dirname(screenshot), *path = g_build_filename(dir, "programs-smoke.png", NULL);
+        g_assert_cmpint(cairo_surface_write_to_png(surface, path), ==, CAIRO_STATUS_SUCCESS);
+        g_free(path); g_free(dir); cairo_destroy(cr); cairo_surface_destroy(surface);
+    }
+    program_view_update(v, &(TsInfoSnapshot){0}, 0, FALSE);
+    g_assert_cmpuint(v->count, ==, 0);
+    g_assert_null(gtk_list_box_get_selected_row(GTK_LIST_BOX(v->list)));
+    g_assert_cmpuint(chosen, ==, 0);
+    v->select = select_program; v->data = a;
 }
 
 static void exercise_information(App *a) {
@@ -688,6 +740,7 @@ static void exercise_information(App *a) {
         g_usleep(1000);
     } while (g_get_monotonic_time()<deadline);
     g_assert_nonnull(v->snapshot.page);
+    exercise_programs(a, &v->snapshot);
     g_assert_cmpstr(v->snapshot.video_codec,==,"H.264/AVC");
     g_assert_true(v->snapshot.events[0].valid);
     for (unsigned i=0;i<2;i++)

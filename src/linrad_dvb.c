@@ -23,6 +23,7 @@
 #include "leansdr_backend.h"
 #include "scatter_view.h"
 #include "ts_info_view.h"
+#include "program_view.h"
 #include "usb_receiver.h"
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
@@ -60,6 +61,7 @@ typedef struct {
     VideoView video_view;
     ScatterView scatter_view;
     TsInfoView information;
+    ProgramView programs;
     ScatterBackend *scatter_backend;
     UsbReceiver *usb_receiver;
     GtkWidget *usb_toggle, *fm_toggle, *fm_data_toggle, *usb_port, *usb_status, *tci_dialog;
@@ -457,6 +459,7 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 
 static void scatter_refresh(App *a) {
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
+    if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, !use_scatter(a));
     if (!a->scatter_box) return;
     gtk_widget_set_sensitive(a->scatter_box, !a->stopping);
     gtk_widget_set_tooltip_text(a->scatter_box, a->stopping ? "Waiting for reception to stop." :
@@ -524,6 +527,7 @@ static void stop_pipeline(App *a) {
     a->stopping = TRUE;
     usb_receiver_source(a->usb_receiver,a->iq_view.center,a->iq_view.rate,FALSE);
     ts_info_view_reset(&a->information);
+    program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     scatter_backend_stop(a->scatter_backend);
     scatter_view_reset(&a->scatter_view);
     decoder_view_stop(&a->decoder_view);
@@ -817,6 +821,7 @@ static void tune_step(App *a, int direction) {
     }
     if (a->scatter_backend) ts_info_backend_reset(a->scatter_backend->information);
     ts_info_view_reset(&a->information);
+    program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     g_key_file_set_double(a->config, section, "frequency", next);
     g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), next/1000.0);
@@ -1284,6 +1289,26 @@ static gboolean exit_signal(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static void select_program(guint16 service, gpointer data) {
+    App *a = data;
+    if (!a->running || a->stopping || a->renderer != RENDER_EMBEDDED || !a->scatter_backend) return;
+    TsInfoSnapshot snapshot = {0};
+    ts_info_backend_snapshot(a->scatter_backend->information, &snapshot);
+    gboolean found = FALSE;
+    for (unsigned i = 0; i < snapshot.count; ++i) if (snapshot.services[i].id == service) found = TRUE;
+    ts_info_snapshot_clear(&snapshot);
+    if (!found) return;
+    GError *error = NULL;
+    if (!video_view_select_program(&a->video_view, service, &error)) {
+        status(a, error->message); g_clear_error(&error);
+        stop_pipeline(a);
+        return;
+    }
+    ts_info_backend_select(a->scatter_backend->information, service);
+    a->information.next_tick = 0;
+    ts_info_view_tick(&a->information, a->scatter_backend->information);
+}
+
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
     ts_info_view_tick(&a->information, a->running && !a->stopping && a->scatter_backend ?
@@ -1301,6 +1326,18 @@ static gboolean decoder_tick(gpointer data) {
         if (a->running && !a->stopping && a->scatter_backend) {
             TsInfoSnapshot snapshot={0};
             ts_info_backend_snapshot(a->scatter_backend->information,&snapshot);
+            gboolean can_select = a->renderer == RENDER_EMBEDDED && a->video_view.active;
+            if (can_select && !a->scatter && snapshot.count) {
+                gboolean found = FALSE;
+                for (unsigned i = 0; i < snapshot.count; ++i)
+                    if (snapshot.services[i].id == a->video_view.program) found = TRUE;
+                if (!found) {
+                    select_program(snapshot.services[0].id, a);
+                    ts_info_snapshot_clear(&snapshot);
+                    ts_info_backend_snapshot(a->scatter_backend ? a->scatter_backend->information : NULL, &snapshot);
+                }
+            }
+            program_view_update(&a->programs, &snapshot, a->video_view.program, can_select && !a->stopping);
             g_strlcpy(a->decoder_view.selected_video_codec,snapshot.video_codec,sizeof(a->decoder_view.selected_video_codec));
             g_strlcpy(a->decoder_view.selected_audio_codec,snapshot.audio_codec,sizeof(a->decoder_view.selected_audio_codec));
             for (unsigned i=0;i<snapshot.count;++i) if (snapshot.services[i].id==snapshot.selected) {
@@ -2227,6 +2264,7 @@ static void gui(App *a) {
     g_object_unref(panel_width);
     gtk_box_pack_start(GTK_BOX(receiver_row), video_frame, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(receiver_row), scatter_view_create(&a->scatter_view), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(receiver_row), program_view_create(&a->programs, select_program, a), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
     create_mode_renderer(a);
     create_tci(a,usb_error ? usb_error->message : NULL);

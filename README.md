@@ -312,6 +312,24 @@ bij `make clean`. SHA-256 van de gebruikte IQ-opname:
 SHA-256 van de ontvangen TS:
 `ffa449bb971f51b4813596264c45c46df99a14b6986e5329343de7709c9cc5bd`.
 
+### Programma kiezen
+
+Met **TSscatterFix uit** staat op dezelfde plek het paneel **Programs**. De
+ontvangen programma's staan onder elkaar, met hun uitgezonden namen. Klik op een
+programma om beeld en geluid in de **ingebouwde player** om te schakelen.
+De gekozen rij blijft gemarkeerd; EIT en Teletext volgen deze keuze. Zolang de
+naam nog niet ontvangen is, staat er `Program` met het service-ID. De tooltip
+vermeldt het service-ID en, indien ontvangen, de provider. Een lange lijst is
+verticaal scrollbaar.
+
+Dit werkt ook bij hoge symbolrates, zonder TSscatterFix-verwerking. De ontvangst
+blijft doorlopen tijdens het omschakelen; de player wacht kort op de tabellen en
+een bruikbaar videoframe van het gekozen programma. De eerste service wordt
+automatisch gekozen als er nog geen keuze is of de gekozen service verdwijnt.
+UDP-uitvoer en TS-opnames behouden alle programma's. Bij een externe renderer
+schakel je in die player; de lijst in de app is dan niet aanklikbaar.
+Met **TSscatterFix aan** komt het reconstructiepaneel op deze plek terug.
+
 ### EIT en klassieke teletekst
 
 Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.

@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <signal.h>
+#include <errno.h>
 #include <unistd.h>
 
 static void iterate(void) {
@@ -91,7 +92,89 @@ static void check_sparse(const char *path) {
     video_view_destroy(&v); gtk_widget_destroy(window);
 }
 
+typedef struct { int fd; const char *bytes; gsize size; gint stop; } LiveStream;
+
+static gpointer feed_live(gpointer data) {
+    LiveStream *s = data;
+    for (gsize at = 0; at < s->size && !g_atomic_int_get(&s->stop);) {
+        ssize_t n = write(s->fd, s->bytes + at, MIN((gsize)1316, s->size - at));
+        if (n > 0) at += n;
+        else if (errno != EAGAIN && errno != EINTR) break;
+        g_usleep(10000);
+    }
+    return NULL;
+}
+
+static void check_programs(const char *path) {
+    VideoView v = {0};
+    GtkWidget *window = gtk_offscreen_window_new();
+    gtk_container_add(GTK_CONTAINER(window), video_view_create(&v)); gtk_widget_show_all(window);
+    char *bytes; gsize size;
+    g_assert_true(g_file_get_contents(path, &bytes, &size, NULL));
+    int input[2]; g_assert_cmpint(pipe(input), ==, 0);
+    g_assert_cmpint(fcntl(input[1], F_SETFL, O_NONBLOCK), ==, 0);
+    int sock = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    g_assert_cmpint(sock, >=, 0);
+    int buffer = 4 * 1024 * 1024;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer));
+    struct sockaddr_in addr = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+    g_assert_cmpint(bind(sock, (struct sockaddr *)&addr, sizeof(addr)), ==, 0);
+    socklen_t length = sizeof(addr);
+    g_assert_cmpint(getsockname(sock, (struct sockaddr *)&addr, &length), ==, 0);
+    char *destination = g_strdup_printf("127.0.0.1:%u", ntohs(addr.sin_port));
+    GError *error = NULL;
+    video_view_set_muted(&v, TRUE);
+    g_assert_true(video_view_start(&v, input[0], NULL, destination, TRUE, &error));
+    close(input[0]);
+    /* Switching must also return promptly while reception is silent. */
+    for (unsigned i = 0; i < 10; ++i) iterate();
+    g_assert_true(video_view_select_program(&v, 101, &error));
+    g_assert_no_error(error);
+    LiveStream stream = {.fd = input[1], .bytes = bytes, .size = size};
+    GThread *feeder = g_thread_new("test-live-ts", feed_live, &stream);
+    GThread *relay = v.relay; int source_fd = v.source_fd;
+    gsize forwarded = 0;
+    for (unsigned selection = 0; selection < 3; ++selection) {
+        gboolean red = selection == 1, ready = FALSE;
+        guint16 program = red ? 202 : 101;
+        g_assert_true(video_view_select_program(&v, program, &error));
+        g_assert_no_error(error);
+        gint64 deadline = g_get_monotonic_time() + 6 * G_USEC_PER_SEC;
+        while (!ready && g_get_monotonic_time() < deadline) {
+            iterate();
+            unsigned char packet[65536]; ssize_t n;
+            while ((n = recv(sock, packet, sizeof(packet), 0)) > 0) {
+                g_assert_cmpuint(forwarded + n, <=, size);
+                g_assert_cmpmem(packet, n, bytes + forwarded, n); forwarded += n;
+            }
+            g_mutex_lock(&v.mutex);
+            if (v.ready) {
+                const unsigned char *pixel = v.frame + v.height / 2 * v.pitch + v.width / 2 * 4;
+                ready = red ? pixel[2] > 180 && pixel[1] < 30 : pixel[1] > 80 && pixel[2] < 30;
+            }
+            g_mutex_unlock(&v.mutex);
+            ready = ready && libvlc_audio_get_track(v.player) == (red ? 0x103 : 0x101);
+            g_assert_false(video_view_failed(&v));
+        }
+        g_assert_true(ready);
+        g_assert_cmpuint(v.program, ==, program);
+        g_assert_cmpint(libvlc_video_get_track(v.player), ==, red ? 0x102 : 0x100);
+        g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 1);
+        g_assert_true(v.relay == relay); g_assert_cmpint(v.source_fd, ==, source_fd);
+    }
+    g_assert_cmpuint(forwarded, >, 100 * 188);
+    g_atomic_int_set(&stream.stop, TRUE); g_thread_join(feeder);
+    video_view_stop(&v); close(input[1]);
+    g_assert_cmpuint(v.program, ==, 0);
+    video_view_destroy(&v); gtk_widget_destroy(window);
+    close(sock); g_free(destination); g_free(bytes);
+}
+
 int main(int argc, char **argv) {
+    if (argc == 3 && !strcmp(argv[1], "--programs")) {
+        signal(SIGPIPE, SIG_IGN); gtk_init(NULL, NULL);
+        check_programs(argv[2]); return 0;
+    }
     if (argc == 3 && !strcmp(argv[1], "--sparse")) {
         signal(SIGPIPE, SIG_IGN); gtk_init(NULL, NULL);
         check_sparse(argv[2]); return 0;

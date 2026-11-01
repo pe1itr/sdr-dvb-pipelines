@@ -202,17 +202,59 @@ void video_view_stop(VideoView *v) {
     if (v->fd >= 0) { close(v->fd); v->fd = -1; }
     if (v->source_fd >= 0) { close(v->source_fd); v->source_fd = -1; }
     if (v->udp_fd >= 0) { close(v->udp_fd); v->udp_fd = -1; }
-    v->active = FALSE;
+    v->active = FALSE; v->program = 0;
     g_mutex_lock(&v->mutex);
     free(v->pixels); free(v->frame); v->pixels = v->frame = NULL;
     v->ready = FALSE; v->dirty = TRUE; v->aspect = 0;
     g_mutex_unlock(&v->mutex);
 }
 
+static gboolean start_player(VideoView *v, guint16 program) {
+    libvlc_media_t *media = libvlc_media_new_fd(v->vlc, v->fd);
+    if (!media) return FALSE;
+    char option[64];
+    libvlc_media_add_option(media, ":demux=ts");
+    g_snprintf(option, sizeof(option), ":file-caching=%u", v->caching);
+    libvlc_media_add_option(media, option);
+    g_snprintf(option, sizeof(option), ":program=%u", program);
+    libvlc_media_add_option(media, option);
+    v->player = libvlc_media_player_new_from_media(media);
+    libvlc_media_release(media);
+    if (!v->player) return FALSE;
+    libvlc_audio_set_mute(v->player, v->muted);
+    libvlc_video_set_callbacks(v->player, lock_frame, unlock_frame, display_frame, v);
+    libvlc_video_set_format_callbacks(v->player, setup, NULL);
+    if (libvlc_media_player_play(v->player) < 0) return FALSE;
+    v->program = program;
+    return TRUE;
+}
+
+gboolean video_view_select_program(VideoView *v, guint16 program, GError **error) {
+    if (!v->active || !v->local_display || !v->player || !program) {
+        g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Program selection requires the embedded player.");
+        return FALSE;
+    }
+    if (program == v->program) return TRUE;
+    /* LibVLC 3 has no public program-switch API. Reopen only its demux/player
+     * with :program; retain the live input, relay and unmodified UDP output.
+     * The original read fd stays open while VLC closes its own duplicate. */
+    libvlc_media_player_stop(v->player);
+    libvlc_media_player_release(v->player); v->player = NULL;
+    g_mutex_lock(&v->mutex);
+    v->ready = FALSE; v->dirty = TRUE; v->aspect = 0;
+    g_mutex_unlock(&v->mutex);
+    gtk_widget_queue_draw(v->area);
+    if (start_player(v, program)) return TRUE;
+    g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot play program %u: %s",
+        program, libvlc_errmsg() ? libvlc_errmsg() : "VLC playback failed");
+    return FALSE;
+}
+
 gboolean video_view_start(VideoView *v, int fd, const char *url,
                           const char *udp_destination, gboolean display, GError **error) {
     video_view_stop(v);
     v->local_display = display;
+    v->caching = url ? 1500 : 300;
     g_atomic_int_set(&v->stopping, FALSE); g_atomic_int_set(&v->relay_failed, FALSE);
     if (url) {
         char host[16]; unsigned port;
@@ -245,17 +287,7 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
                           "--no-drop-late-frames", "--no-skip-frames"};
     v->vlc = libvlc_new(G_N_ELEMENTS(args), args);
     if (!v->vlc) goto fail;
-    libvlc_media_t *media = libvlc_media_new_fd(v->vlc, v->fd);
-    if (!media) goto fail;
-    libvlc_media_add_option(media, ":demux=ts");
-    libvlc_media_add_option(media, url ? ":file-caching=1500" : ":file-caching=300");
-    v->player = libvlc_media_player_new_from_media(media);
-    libvlc_media_release(media);
-    if (!v->player) goto fail;
-    libvlc_audio_set_mute(v->player, v->muted);
-    libvlc_video_set_callbacks(v->player, lock_frame, unlock_frame, display_frame, v);
-    libvlc_video_set_format_callbacks(v->player, setup, NULL);
-    if (libvlc_media_player_play(v->player) < 0) goto fail;
+    if (!start_player(v, 0)) goto fail;
 start_relay:
     v->relay = g_thread_new("video-ts-relay", relay_ts, v);
     v->active = TRUE;

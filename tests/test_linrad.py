@@ -702,6 +702,34 @@ class LifecycleTests(PipelineTests):
 @unittest.skipUnless(shutil.which("broadwayd") and shutil.which("ffmpeg") and shutil.which("ffprobe"),
                      "Video smoke test needs Broadway and FFmpeg")
 class VideoTests(unittest.TestCase):
+    def test_live_program_switch_keeps_audio_video_and_udp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "programs.ts")
+            subprocess.run(["ffmpeg", "-v", "error",
+                            "-f", "lavfi", "-i", "color=c=green:s=320x240:r=25",
+                            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+                            "-f", "lavfi", "-i", "color=c=red:s=320x240:r=25",
+                            "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
+                            "-map", "0:v", "-map", "1:a", "-map", "2:v", "-map", "3:a",
+                            "-program", "program_num=101:st=0:st=1:title=Green",
+                            "-program", "program_num=202:st=2:st=3:title=Red",
+                            "-t", "24", "-c:v", "mpeg2video", "-g", "12",
+                            "-c:a", "mp2", "-b:a", "64k", "-muxrate", "1000000",
+                            "-f", "mpegts", str(path)], check=True, capture_output=True, timeout=20)
+            display = free_port()
+            env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",
+                       XDG_RUNTIME_DIR=tmp, NO_AT_BRIDGE="1")
+            daemon = subprocess.Popen(["broadwayd", "--address", "127.0.0.1", "--port", str(free_port()),
+                                       f":{display}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                time.sleep(0.2)
+                result = subprocess.run([ROOT / "build/video_smoke", "--programs", path],
+                                        env=env, capture_output=True, timeout=25)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertNotIn(b"CRITICAL", result.stderr)
+            finally:
+                daemon.terminate(); daemon.communicate(timeout=3)
+
     def test_embedded_video_fixed_frame_and_udp(self):
         with tempfile.TemporaryDirectory() as tmp:
             inputs = []
