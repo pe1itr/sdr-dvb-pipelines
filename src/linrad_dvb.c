@@ -57,6 +57,7 @@ typedef struct {
     GtkWidget *record_button;
     gboolean recording, record_pending;
     char record_log_line[1024];
+    char receiver_offset_error[512];
     size_t record_log_used;
     GMainLoop *loop;
     IQView iq_view;
@@ -141,11 +142,23 @@ static const char *receiver_offset_problem(App *a) {
     if (!hardware_source(a)) return NULL;
     double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
     double offset=receiver_offset(a);
-    if (!iq_shift_fits(rate,offset,channel_bandwidth(a)))
-        return "Receiver offset + DVB bandwidth does not fit the source sample rate (2.5% edge margin). Reduce offset/bandwidth or increase sample rate.";
+    double width=channel_bandwidth(a);
+    if (!iq_shift_fits(rate,offset,width)) {
+        g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
+            "Receiver offset + DVB bandwidth does not fit the source sample rate (2.5%% edge margin). "
+            "Receiver offset: %+.9g Hz; DVB bandwidth: %.9g Hz; source sample rate: %.9g samples/s. "
+            "Reduce offset/bandwidth or increase sample rate.",offset,width,rate);
+        return a->receiver_offset_error;
+    }
+    width=g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL);
     if (g_key_file_get_boolean(a->config,sources[a->source],"filter_enabled",NULL) &&
-        !iq_shift_fits(rate,offset,g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL)))
-        return "Receiver offset + IQ filter does not fit the source band. Reduce the offset or filter width.";
+        !iq_shift_fits(rate,offset,width)) {
+        g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
+            "Receiver offset + IQ filter does not fit the source band. "
+            "Receiver offset: %+.9g Hz; filter bandwidth: %.9g Hz; source sample rate: %.9g samples/s. "
+            "Reduce the offset or filter width.",offset,width,rate);
+        return a->receiver_offset_error;
+    }
     return NULL;
 }
 
@@ -591,12 +604,14 @@ static void child_exit(GPid pid, gint result, gpointer data) {
             /* Let the decoder drain its input before terminating a player that
              * keeps its window open at EOF. Source/decoder callbacks can arrive
              * in either order. A nonzero exit is still an error. */
-            if (i<2) a->replay_eof=TRUE;
+            if (i<2 && !a->replay_eof) {
+                a->replay_eof=TRUE;
+                status(a,"End of IQ file; finishing decoder and player…");
+            }
             if (a->tune_fd>=0 && !a->stages[0].pid) { close(a->tune_fd); a->tune_fd=-1; }
             if (a->replay_eof) {
                 if (a->drain_timer) g_source_remove(a->drain_timer);
                 a->drain_timer=g_timeout_add(a->stages[1].pid ? 10000 : 1500,replay_drained,a);
-                status(a,"End of IQ file; finishing decoder and player…");
                 gboolean alive=FALSE;
                 for (int j=0; j<a->stage_count; ++j) if (a->stages[j].pid) alive=TRUE;
                 if (!alive && !internal_player(a)) stop_pipeline(a);

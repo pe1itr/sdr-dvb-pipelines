@@ -421,6 +421,7 @@ gboolean video_view_set_external(VideoView *v, gboolean external, GError **error
         close(pipefd[0]); close(pipefd[1]); return FALSE;
     }
     VideoExternalChild *child = NULL;
+    g_printerr("[player] Switching to %s player\n", external ? "GPU" : "embedded VLC");
     if (external) {
         char *device = g_strdup_printf("device=%s", v->gpu_device);
         char *video = g_strdup_printf("p:%u:v:0", v->program);
