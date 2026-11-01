@@ -36,6 +36,18 @@ The helpers mainly solve practical integration issues such as:
 - measuring IQ levels or SNR
 - inspecting MPEG transport streams
 
+## Toekomstige ontwikkeling
+
+- [ ] **DVB-T2-ondersteuning implementeren op termijn** (nog niet ingepland).
+  Eerst doet de gebruiker vergelijkende ontvangsttests met de verbeterde DVB-S2
+  LDPC-implementatie, met bijzondere aandacht voor korte signaaloplevingen op
+  moeilijke propagatiepaden. Eerdere ervaringen bepalen nog niet hoe de huidige
+  implementatie presteert. De resultaten dienen als input voor de T2-aanpak.
+  Voor T2 zijn betrouwbare referentiesignalen nodig: eerst een bestaande
+  softwarematige signaalgenerator onderzoeken, eventueel daarna een eigen
+  zenderkant. Begin met één beperkt T2-profiel en IQ-bestanden; hergebruik waar
+  mogelijk de aanwezige LDPC/BCH-code en bouw de ontbrekende T2-ontvangstketen.
+
 ## Main entry point
 
 ### `rx_dvb_linrad_leandvb.sh`
@@ -1070,9 +1082,6 @@ Reads complex `s16` IQ from stdin and estimates signal and noise power in the fr
 ### `tsp_monitor.py`
 Consumes output from `tsp -P analyze`, stores the latest block, and logs newly observed service/provider combinations with one-hour suppression of duplicates. fileciteturn1file5
 
-### `dvbs2_modcod.py`
-Helper tool to look up DVB-S2 MODCOD values and combined `--modcods` masks for LeanDVB based on constellation and FEC or FEC ranges. fileciteturn1file2
-
 ## General receive architecture
 
 The common downstream idea is always the same:
@@ -1392,10 +1401,6 @@ python3 afedri-udp.py \
 ### `tsp_monitor.py`
 
 Use this together with `tsp -P analyze` when you want service/provider visibility from the resulting MPEG transport stream. The script writes the latest analysis block to `tsp_latest.txt` and logs newly seen service/provider combinations to `service_provider.log`. fileciteturn1file5
-
-### `dvbs2_modcod.py`
-
-Use this helper when you want to determine LeanDVB `--modcods` masks from human-readable DVB-S2 parameters. It is especially useful for QPSK/8PSK/16APSK/32APSK experiments and for building combined masks for FEC ranges. fileciteturn1file2
 
 ## Current profile map
 
