@@ -20,6 +20,7 @@
 #include "decoder_view.h"
 #include "video_view.h"
 #include "dvbt_backend.h"
+#include "leansdr_backend.h"
 #include "scatter_view.h"
 #include "ts_info_view.h"
 #include "usb_receiver.h"
@@ -36,6 +37,7 @@ typedef struct {
     GtkWidget *hardware_entries[5][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
+    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
@@ -241,11 +243,32 @@ static void build_pipeline(App *a) {
         add_number(s, "--sample-rate", sample_rate); add_number(s, "--sr", a->sr);
         add(s, "--gi"); add(s, guards[a->gi]); add(s, "--fec"); add(s, fecs[a->fec]); add(s, "--stdout-ts");
     } else {
-        s = new_stage(a, "leandvb");
+        char *backend=setting(a,"leandvb","backend");
+        gboolean embedded=!strcmp(backend,"embedded");
+        if (!embedded && strcmp(backend,"external")) fatal("Invalid LeanDVB backend: %s",backend);
+        g_free(backend);
+        if (embedded) {
+            s=&a->stages[a->stage_count++]; s->args=g_ptr_array_new_with_free_func(g_free);
+            char *self=g_file_read_link("/proc/self/exe",NULL);
+            if (!self) fatal("Cannot locate the built-in LeanDVB decoder");
+            add(s,self); g_free(self); add(s,"--decoder-worker=leansdr");
+        } else s = new_stage(a, "leandvb");
         options(a, s, "leandvb", a->standard ? "dvbs2_args" : "dvbs_args",
-                "--s16 --u8 --f32 -f --standard --sr --cr --modcods");
+                embedded ? "--s16 --u8 --f32 -f --standard --sr --cr --modcods --ldpc-helper --nhelpers --ldpc-batch" :
+                           "--s16 --u8 --f32 -f --standard --sr --cr --modcods");
         add(s, !strcmp(format, "u8") ? "--u8" : "--s16"); add_number(s, "-f", sample_rate);
         add(s, "--standard"); add(s, standards[a->standard]); add_number(s, "--sr", a->sr);
+        if (embedded && a->standard==1) {
+            char *mode=setting(a,"leandvb","ldpc_mode");
+            if (!strcmp(mode,"soft")) {
+                add(s,"--ldpc-helper"); add(s,"builtin");
+                add_number(s,"--nhelpers",integer_setting(a,"leandvb","helpers",1,8));
+                char *latency=setting(a,"leandvb","latency");
+                if (strcmp(latency,"low") && strcmp(latency,"throughput")) fatal("Invalid LDPC latency: %s",latency);
+                add_number(s,"--ldpc-batch",!strcmp(latency,"low") ? 1 : 32); g_free(latency);
+            } else if (strcmp(mode,"bitflip")) fatal("Invalid LDPC mode: %s",mode);
+            g_free(mode);
+        }
         if (a->standard == 0) { add(s, "--cr"); add(s, fecs[a->fec]); }
         else {
             char *mask = g_strdup_printf("0x%x", 1u << modcods[a->constellation][a->fec]);
@@ -624,7 +647,7 @@ static void start_pipeline(App *a) {
             a->exit_code = 1; goto pipe_error;
         }
     }
-    if (a->window && a->standard == 2 && !decoder_view_start(&a->decoder_view))
+    if (a->window && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decoder telemetry unavailable; reception continues.\n");
     a->running = TRUE;
     if (a->controls) {
@@ -646,7 +669,7 @@ static void start_pipeline(App *a) {
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
         if (i == 0 && a->usb_receiver)
             env = g_environ_setenv(env,"LINRAD_USB_TAP",usb_receiver_tap_path(a->usb_receiver),TRUE);
-        if (i == 1 && a->standard == 2 && a->decoder_view.port) {
+        if (i == 1 && a->decoder_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->decoder_view.port);
             env = g_environ_setenv(env, "LINRAD_DECODER_MONITOR_PORT", port, TRUE);
         }
@@ -1205,6 +1228,12 @@ static void populate_fecs(App *a) {
         g_free(id);
     }
     gtk_widget_set_sensitive(a->constellation_box, a->standard == 1);
+    if (a->ldpc_mode_box) {
+        gboolean soft=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box))==0;
+        gtk_widget_set_sensitive(a->ldpc_mode_box,a->standard==1);
+        gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && soft);
+        gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && soft);
+    }
     g_signal_handlers_unblock_by_func(a->fec_box, selection_changed, a);
 }
 
@@ -1248,7 +1277,19 @@ static gboolean decoder_tick(gpointer data) {
         a->exit_code = 1; status(a, "Video / UDP output failed; check the VLC plugins and received stream.");
         stop_pipeline(a);
     }
-    decoder_view_tick(&a->decoder_view, a->running && !a->stopping && a->standard == 2, standards[a->standard]);
+    if (a->standard!=2) {
+        a->decoder_view.selected_service[0]=0; a->decoder_view.service_valid=FALSE;
+        if (a->running && !a->stopping && a->scatter_backend) {
+            TsInfoSnapshot snapshot={0};
+            ts_info_backend_snapshot(a->scatter_backend->information,&snapshot);
+            for (unsigned i=0;i<snapshot.count;++i) if (snapshot.services[i].id==snapshot.selected) {
+                g_strlcpy(a->decoder_view.selected_service,snapshot.services[i].name,sizeof(a->decoder_view.selected_service));
+                a->decoder_view.service_valid=snapshot.pmt_seen;
+            }
+            ts_info_snapshot_clear(&snapshot);
+        }
+    }
+    decoder_view_tick(&a->decoder_view, a->running && !a->stopping, standards[a->standard]);
     return G_SOURCE_CONTINUE;
 }
 
@@ -1309,6 +1350,11 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    const char *lean_keys[]={"backend","ldpc_mode","helpers","latency"};
+    const char *lean_values[]={"embedded","soft","1","low"};
+    for (unsigned i=0;i<G_N_ELEMENTS(lean_keys);++i)
+        if (!g_key_file_has_key(a->config,"leandvb",lean_keys[i],NULL))
+            g_key_file_set_string(a->config,"leandvb",lean_keys[i],lean_values[i]);
     const char *usb_keys[]={"tci_bind","tci_port","audio_device","pcm_udp_enabled","pcm_udp_host","pcm_udp_port"};
     const char *usb_values[]={"127.0.0.1","40031","default","false","127.0.0.1","7355"};
     for (unsigned i=0;i<G_N_ELEMENTS(usb_keys);++i)
@@ -1581,16 +1627,31 @@ static GtkWidget *about_label(GtkWidget *box, const char *text, const char *styl
     return label;
 }
 
+static void about_link(GtkWidget *box, const char *title, const char *uri) {
+    GtkWidget *link=gtk_link_button_new_with_label(uri,title);
+    gtk_widget_set_halign(link,GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(box),link,FALSE,FALSE,0);
+}
+
 static void show_about(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
     GtkWidget *dialog=gtk_dialog_new_with_buttons("About · Linrad DVB",GTK_WINDOW(a->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);
-    /* Let GTK fit the height to the wrapped content at this width, rather
-     * than using the labels' unconstrained natural height. */
-    gtk_window_set_default_size(GTK_WINDOW(dialog),640,1);
+    /* Keep the longer command/credits reference usable on small screens. */
+    GdkMonitor *monitor=gdk_display_get_monitor_at_window(gtk_widget_get_display(a->window),gtk_widget_get_window(a->window));
+    GdkRectangle work={0,0,1024,768};
+    if (monitor) gdk_monitor_get_workarea(monitor,&work);
+    /* Headless Broadway displays can report an empty work area. */
+    if (work.width<=0) work.width=1024;
+    if (work.height<=0) work.height=768;
+    /* Leave room for the title bar, borders and client-side shadows. */
+    gtk_window_set_default_size(GTK_WINDOW(dialog),MIN(760,work.width*4/5),MIN(720,work.height*4/5));
+    GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_AUTOMATIC,GTK_POLICY_AUTOMATIC);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),scroll,TRUE,TRUE,0);
     GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
     gtk_container_set_border_width(GTK_CONTAINER(box),12);
-    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),box,TRUE,TRUE,0);
+    gtk_container_add(GTK_CONTAINER(scroll),box);
     about_label(box,"linrad_dvb","about-title");
     about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
         "amateur television under weak signal conditions.",NULL);
@@ -1600,6 +1661,14 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Created by Rob Hardenberg, PE1ITR.",NULL);
     /* Compiler timestamps identify this executable, not the date it is opened. */
     about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
+    about_label(box,"Receiver controls","about-heading");
+    about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
+        "Mode: DVB-S/S2/T, symbol rate or bandwidth, FEC, constellation and guard interval. "
+        "For DVB-S2, choose Soft-decision LDPC or Bit-flipping, 1–8 LDPC workers, "
+        "and Low latency or Throughput. W saves these settings.",NULL);
+    about_label(box,"Renderer: embedded video, UDP, external player or MPEG-TS file. "
+        "Spectrum controls: IQ filter, IQ recording, TSscatterFix, USB / FM / FM-DATA, "
+        "Service info / EPG / Teletext. TCI: monitor audio and control connection.",NULL);
     about_label(box,"Keyboard shortcuts","about-heading");
     GtkWidget *grid=gtk_grid_new();
     gtk_widget_set_name(grid,"about-shortcuts");
@@ -1642,6 +1711,32 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "linrad-dvb-[UTC timestamp]-[mode]-[SR or BW]-[frequency in whole kHz].png. "
         "SR is in symbols/s; BW is in Hz. "
         "For Linrad input, the frequency is the value entered in Input.","about-meta");
+    about_label(box,"Command-line reference","about-heading");
+    about_label(box,"./build/linrad_dvb --help\n"
+        "./build/linrad_dvb --source linrad --standard DVB-S2 --sr 125000 --fec 1/2 --print-pipeline\n"
+        "./build/linrad_dvb --config linrad-dvb.ini --run\n"
+        "./build/linrad_dvb --decoder-worker=leansdr --help\n"
+        "./build/linrad_dvb --decoder-worker=dvbt --help\n"
+        "./build/ldpc_tool --help\n"
+        "./build/ldpc_tool --version",NULL);
+    about_label(box,"Use --print-pipeline to inspect the configured commands without starting reception. "
+        "--run starts reception without the GUI; Ctrl+C stops it. LDPC preferences live in "
+        "Mode / [leandvb] in the INI file. Decoder-worker options are for direct IQ-to-TS use.","about-meta");
+    about_label(box,"Acknowledgements","about-heading");
+    about_label(box,"LeanSDR / LeanDVB: pabr@pabr.org, DVB-S/S2 demodulation (GPL-3.0-or-later). "
+        "LDPC: Ahmet Inan (xdsopl), with the external decoder adaptation by pabr@pabr.org (0BSD). "
+        "DVB-S2 acquisition corrections: Ondřej OK1CDJ, LeanDVB issue #41. "
+        "rbdvbt and TSscatterFix: Rob Hardenberg, PE1ITR.",NULL);
+    about_link(box,"LeanSDR / LeanDVB · pabr","https://github.com/pabr/leansdr");
+    about_link(box,"LDPC · Ahmet Inan (xdsopl)","https://github.com/xdsopl/LDPC");
+    about_link(box,"LDPC helper adaptation · pabr","https://github.com/pabr/xdsopl-LDPC-pabr");
+    about_link(box,"Acquisition patch · Ondřej OK1CDJ (issue #41)","https://github.com/pabr/leansdr/issues/41");
+    about_label(box,"Also built on Linrad, GTK / GLib, libVLC, FFmpeg, FFTW, libzvbi, "
+        "ALSA, libsamplerate, SoapySDR and UHD. Thanks to their authors and contributors.",NULL);
+    about_label(box,"Source revisions, local changes and license texts are included under third_party/. "
+        "make package copies the bundled decoder/recovery licenses into build/.","about-meta");
+    /* Focusing a credit link would scroll past the introduction on opening. */
+    gtk_widget_grab_focus(gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE));
     gtk_widget_show_all(dialog);
     gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
 }
@@ -1894,6 +1989,17 @@ static gboolean renderer_close(GtkWidget *widget, GdkEvent *event, gpointer data
     (void)event; renderer_response(GTK_DIALOG(widget), GTK_RESPONSE_CLOSE, data); return TRUE;
 }
 
+static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    int mode=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box));
+    g_key_file_set_string(a->config,"leandvb","ldpc_mode",mode ? "bitflip" : "soft");
+    g_key_file_set_integer(a->config,"leandvb","helpers",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->ldpc_workers_box)));
+    g_key_file_set_string(a->config,"leandvb","latency",gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box)) ? "throughput" : "low");
+    gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && !mode);
+    gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && !mode);
+    if (!a->running) refresh_preview(a);
+}
+
 static void create_mode_renderer(App *a) {
     a->mode_dialog = settings_dialog(a, "Mode · DVB settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, 3, a->standard);
@@ -1902,6 +2008,15 @@ static void create_mode_renderer(App *a) {
     a->fec_box = combo(a->controls, "FEC", 2, NULL, 0, -1);
     a->gi_box = combo(a->controls, "Guard interval", 3, guards, 4, a->gi);
     a->constellation_box = combo(a->controls, "Constellation", 4, constellations, 2, a->constellation);
+    char *ldpc_mode=setting(a,"leandvb","ldpc_mode"), *latency=setting(a,"leandvb","latency");
+    a->ldpc_mode_box=combo(a->controls,"DVB-S2 error correction",5,(const char *[]){"Soft-decision LDPC","Bit-flipping"},2,!strcmp(ldpc_mode,"bitflip"));
+    a->ldpc_workers_box=spin(a->controls,"LDPC workers",6,1,8,1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->ldpc_workers_box),integer_setting(a,"leandvb","helpers",1,8));
+    a->ldpc_latency_box=combo(a->controls,"LDPC processing",7,(const char *[]){"Low latency","Throughput"},2,!strcmp(latency,"throughput"));
+    g_free(ldpc_mode); g_free(latency);
+    g_signal_connect(a->ldpc_mode_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
+    g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
+    g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS output", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Output", 0,
         (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)"},
@@ -2164,6 +2279,8 @@ static void load_session(App *a) {
 }
 
 int main(int argc, char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr"))
+        return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
@@ -2186,7 +2303,13 @@ int main(int argc, char **argv) {
         {"print-pipeline", 0, 0, G_OPTION_ARG_NONE, &print, "Show the pipeline without starting processes", NULL},
         {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Run without a GUI; stop with Ctrl+C", NULL}, {NULL}
     };
-    GOptionContext *context = g_option_context_new("- Linrad DVB receiver in C");
+    GOptionContext *context = g_option_context_new("- Linrad DVB receiver with embedded DVB-S/S2/T decoders");
+    g_option_context_set_description(context,
+        "DVB-S2 LDPC method, worker count and latency are configured in Mode or [leandvb] in the INI file.\n"
+        "Direct decoder help (IQ on stdin, TS on stdout):\n"
+        "  linrad_dvb --decoder-worker=leansdr --help\n"
+        "  linrad_dvb --decoder-worker=dvbt --help\n"
+        "Bundled LDPC helper: ldpc_tool --help / --version");
     g_option_context_add_main_entries(context, entries, NULL);
     GError *error = NULL;
     if (!g_option_context_parse(context, &argc, &argv, &error)) fatal("%s", error->message);

@@ -22,9 +22,11 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
     /* Place ideal QPSK symbols (+/-1/sqrt(2)) at the quadrant centres. */
     double scale=size/(4*.70710678);
     cairo_set_source_rgb(cr,.65,.65,.65);
-    for (int re=-1;re<=1;re+=2) for (int im=-1;im<=1;im+=2) {
-        double x=floor(left+size/2+re*.70710678*scale)+.5;
-        double y=floor(top+size/2-im*.70710678*scale)+.5;
+    unsigned order=v->active && v->status.constellation_order==8 ? 8 : 4;
+    for (unsigned i=0;i<order;++i) {
+        double angle=2*G_PI*i/order+(order==4 ? G_PI/4 : 0);
+        double x=floor(left+size/2+cos(angle)*scale)+.5;
+        double y=floor(top+size/2-sin(angle)*scale)+.5;
         cairo_move_to(cr,x-4,y); cairo_line_to(cr,x+4,y);
         cairo_move_to(cr,x,y-4); cairo_line_to(cr,x,y+4);
     }
@@ -91,6 +93,8 @@ static GtkWidget *field(GtkWidget *grid, int column, int row, const char *name,
     gtk_style_context_add_class(gtk_widget_get_style_context(units),"decoder-unit");
     gtk_label_set_xalign(GTK_LABEL(units),0);
     gtk_grid_attach(GTK_GRID(grid),units,column+2,row,1,1);
+    g_object_set_data(G_OBJECT(value),"caption",caption);
+    g_object_set_data(G_OBJECT(value),"units",units);
     return value;
 }
 
@@ -165,6 +169,7 @@ GtkWidget *decoder_view_create(DecoderView *v) {
 void decoder_view_stop(DecoderView *v) {
     if (v->fd>=0 && v->port) close(v->fd);
     v->fd=-1; v->port=0; v->active=FALSE;
+    v->service_valid=FALSE; v->selected_service[0]=0;
     v->status_time=v->points_time=v->buffer_time=0;
     memset(v->history_time,0,sizeof(v->history_time));
     v->history_next=0;
@@ -233,19 +238,33 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     if (!v->area) return;
     gboolean fresh=active && v->status_time && g_get_monotonic_time()-v->status_time<STATUS_AGE;
     DecoderStatus *s=&v->status;
-    gboolean supported=!strcmp(mode,"DVB-T");
+    gboolean satellite=strcmp(mode,"DVB-T")!=0;
+    gboolean s2=!strcmp(mode,"DVB-S2");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption")),satellite ? "MER" : "SNR");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),satellite ? "Pilots" : "Pilot");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"units")),satellite ? "" : "%");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->guard),"caption")),satellite ? "Frame" : "GI");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),s2 ? "BCH OK" : "RS OK");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),s2 ? "BCH errors" : "RS errors");
+    gtk_widget_set_tooltip_text(v->buffer,satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
+    if (satellite) {
+        s->lock_valid |= DECODER_SERVICE;
+        if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
+        g_strlcpy(s->service,v->selected_service,sizeof(s->service));
+    }
     char text[512];
-    g_snprintf(text,sizeof(text),"%s · %s",mode,!supported ? "built-in display coming soon" :
-        !active ? "stopped" : fresh ? "live" : "waiting for decoder status");
+    g_snprintf(text,sizeof(text),"%s · %s",mode,!active ? "stopped" : fresh ? "live" : "waiting for decoder status");
     gtk_label_set_text(GTK_LABEL(v->state),text);
-    const char *names[]={"OFDM", "FEC", "TS", "Service"};
+    const char *names[]={satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", "FEC", "TS", "Service"};
     for (int i=0;i<4;++i) {
-        const char *color=!fresh ? "#888888" : (s->locks & (1u<<i)) ? "#36d866" : "#e05a55";
+        const char *color=(!fresh || (satellite && !(s->lock_valid & (1u<<i)))) ? "#888888" : (s->locks & (1u<<i)) ? "#36d866" : "#e05a55";
         g_snprintf(text,sizeof(text),"<span foreground=\"%s\">●</span> %s",color,names[i]);
         gtk_label_set_markup(GTK_LABEL(v->lamps[i]),text);
     }
     if (fresh) {
-        measurement(v->snr,"%.1f",s->snr_db); measurement(v->pilot,"%.0f",100*s->pilot_lock);
+        measurement(v->snr,"%.1f",satellite ? s->mer_db : s->snr_db);
+        if (satellite) set_value(v->pilot,s2 && s->modcod>0 ? (s->pilots ? "on" : "off") : "");
+        else measurement(v->pilot,"%.0f",100*s->pilot_lock);
         measurement(v->cfo,"%+.1f",s->cfo_hz);
         measurement(v->rms,"%.1f",s->rms_dbfs); measurement(v->peak,"%.1f",s->peak_dbfs);
         set_value(v->service,s->service); set_value(v->provider,s->provider);
@@ -253,10 +272,15 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
             g_snprintf(text,sizeof(text),"%.0f",CLAMP(s->buffer_percent,0,100));
         else g_snprintf(text,sizeof(text),"—");
         gtk_label_set_text(GTK_LABEL(v->buffer),text);
-        set_value(v->modulation,s->modulation); set_value(v->fec,s->fec); set_value(v->guard,s->guard);
+        set_value(v->modulation,s->modulation); set_value(v->fec,s->fec);
+        set_value(v->guard,satellite ? (s2 && s->modcod>0 ? (s->short_frame ? "short" : "normal") : "") : s->guard);
         measurement(v->packets,"%.0f",s->packets); measurement(v->written,"%.0f",s->written_packets);
         measurement(v->rs_ok,"%.0f",s->rs_ok); measurement(v->rs_errors,"%.0f",s->rs_uncorrectable);
         measurement(v->cc_errors,"%.0f",s->cc_errors);
+        if (satellite) {
+            measurement(v->rs_ok,"%.0f",s->fec_good); measurement(v->rs_errors,"%.0f",s->fec_bad);
+            set_value(v->cc_errors,""); set_value(v->written,"");
+        }
     } else {
         GtkWidget *fields[]={v->snr,v->pilot,v->cfo,v->rms,v->peak,v->service,v->provider,
             v->modulation,v->fec,v->guard,v->packets,v->written,v->rs_ok,v->rs_errors,v->cc_errors};

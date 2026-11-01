@@ -1,4 +1,5 @@
 CC ?= cc
+CXXFLAGS ?= -O3 -Wall -Wextra -std=gnu++17
 CFLAGS ?= -O2 -Wall -Wextra -std=c11
 CPPFLAGS ?=
 LDFLAGS ?=
@@ -22,6 +23,32 @@ GLIB_LIBS := $(shell pkg-config --libs glib-2.0)
 JSON_CFLAGS := $(shell pkg-config --cflags json-c)
 JSON_LIBS := $(shell pkg-config --libs json-c)
 
+
+# Pinned LeanDVB C++ backend; all GUI code remains compiled as C.
+LEAN_DIR := third_party/leansdr
+LEAN_FLAGS := -I$(LEAN_DIR)/src -Isrc -DLEANSDR_EXTENSIONS -DVERSION=\"linrad-leansdr-84c59e1\" -Wno-sign-compare -Wno-unused-variable -Wno-unused-parameter -Wno-missing-field-initializers
+LEAN_OBJECTS := $(BUILD_DIR)/leansdr/leandvb.o $(BUILD_DIR)/leansdr/backend.o $(BUILD_DIR)/leansdr/ldpc_pool.o
+$(BUILD_DIR)/leansdr/leandvb.o: $(LEAN_DIR)/src/apps/leandvb.cc $(wildcard $(LEAN_DIR)/src/leansdr/*.h) src/leansdr_monitor.hh src/decoder_monitor.h src/ldpc_pool.h src/leansdr_backend.h
+	mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LEAN_FLAGS) -pthread -c $< -o $@
+$(BUILD_DIR)/leansdr/backend.o: src/leansdr_backend.cc src/leansdr_backend.h
+	mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+$(BUILD_DIR)/leansdr/ldpc_pool.o: src/ldpc_pool.cc src/ldpc_pool.h
+	mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -pthread -c $< -o $@
+LDPC_DIR := third_party/ldpc
+$(BUILD_DIR)/ldpc_tables.o: $(LDPC_DIR)/tables_handler.cc $(wildcard $(LDPC_DIR)/*.hh) | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -Wno-unused-parameter -c $< -o $@
+$(BUILD_DIR)/ldpc_tool: $(LDPC_DIR)/ldpc_tool.cc $(wildcard $(LDPC_DIR)/*.hh) $(BUILD_DIR)/ldpc_tables.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -Wno-unused-variable -Wno-unused-parameter $< $(BUILD_DIR)/ldpc_tables.o -o $@ $(LDFLAGS)
+ifeq ($(shell $(CXX) -dumpmachine | cut -d- -f1),x86_64)
+LDPC_FAST := $(BUILD_DIR)/ldpc_tool_avx2
+$(BUILD_DIR)/ldpc_tool_avx2: $(LDPC_DIR)/ldpc_tool.cc $(wildcard $(LDPC_DIR)/*.hh) $(BUILD_DIR)/ldpc_tables.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -mavx2 -Wno-unused-variable -Wno-unused-parameter $< $(BUILD_DIR)/ldpc_tables.o -o $@ $(LDFLAGS)
+endif
+all: $(BUILD_DIR)/ldpc_tool $(LDPC_FAST)
+
 # The DVB-T receiver is compiled from the pinned source snapshot into linrad_dvb.
 # No installed rbdvbt_rx executable or neighbouring checkout is needed.
 DVBT_DIR := third_party/rbdvbt
@@ -44,7 +71,7 @@ $(BUILD_DIR)/scatter/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SCATTER_DIR)/src/*
 
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
-GUI_HEADERS += src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
+GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
 	mkdir -p $(@D)
@@ -61,8 +88,8 @@ all: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout $(BUILD_DIR)/sdr_
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -lstdc++ $(LDLIBS)
 
 $(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(JSON_CFLAGS) $(FILTER_CFLAGS) $< src/iq_file.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
@@ -71,12 +98,14 @@ $(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c src/iq_monitor.c s
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c src/iq_record.c src/iq_output.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
 package: all
+	cp $(LEAN_DIR)/LICENSE.txt $(BUILD_DIR)/leansdr-LICENSE.txt
+	cp $(LDPC_DIR)/LICENSE $(BUILD_DIR)/ldpc-LICENSE.txt
 	cp third_party/rbdvbt/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
 	cp $(SCATTER_DIR)/LICENSE $(BUILD_DIR)/tsscatterfix-LICENSE.txt
 	@echo "Start: ./build/linrad_dvb (config: linrad-dvb.ini)"
 
-$(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -lstdc++ $(LDLIBS)
 
 $(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GTK_CFLAGS) $(SCATTER_CFLAGS) tests/video_smoke.c src/video_view.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
@@ -202,3 +231,13 @@ test: test-afedri
 
 $(BUILD_DIR)/afedri_audio_probe: tests/afedri_audio_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(USB_CFLAGS) tests/afedri_audio_probe.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(USB_LIBS) -pthread -lm $(LDLIBS)
+
+# Deterministic baseband fixtures; these tools never access SDR hardware.
+$(BUILD_DIR)/leandvbtx: $(LEAN_DIR)/src/apps/leandvbtx.cc $(wildcard $(LEAN_DIR)/src/leansdr/*.h) tests/leansdr_test_hooks.cc | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LEAN_FLAGS) $< tests/leansdr_test_hooks.cc -o $@ $(LDFLAGS)
+
+.PHONY: test-leansdr
+test-leansdr: all $(BUILD_DIR)/leandvbtx
+	python3 tests/test_leansdr.py
+
+test: test-leansdr

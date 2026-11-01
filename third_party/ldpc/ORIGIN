@@ -1,0 +1,20 @@
+LDPC by Ahmet Inan (xdsopl), helper adaptation by pabr@pabr.org
+Upstream: https://github.com/pabr/xdsopl-LDPC-pabr
+Snapshot: 6ada4aac6d853835eeaefb7e12a0136481647b01
+Copied from /home/rhardenb/repos/xdsopl-LDPC-pabr; original checkout unchanged.
+License: 0BSD, see LICENSE and source headers.
+Local checkout also contained psk.hh C++11 constexpr definitions, preserved.
+
+Local integration changes:
+- Default portable build and optional x86_64 AVX2 companion. Runtime CPU check
+  selects AVX2; LINRAD_LDPC_PORTABLE=1 forces the portable implementation.
+- --framed local protocol: native uint32 batch length (1..32), followed by that
+  many complete int8 LLR frames. Output has the same length and frame order.
+  Both ends are built together. Legacy raw input remains batches of 32.
+- One-frame batches use a narrow SIMD<int8_t,1> specialization; larger batches
+  retain the wide SIMD decoder. Same min-sum-C arithmetic and 25-iteration cap.
+- Exact reads/writes with EINTR handling; reject truncated records at EOF.
+- Initialize unused SIMD lanes; aligned workspaces also support narrow decoding.
+- Skip resetting message workspace when the initial parity check already passes.
+- --version reports selected SIMD width; no per-failure log flooding.
+- Add --help alias and document framing, batch limits and portable/AVX2 selection.

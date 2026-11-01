@@ -154,6 +154,7 @@ class FilePipelineTests(unittest.TestCase):
             decoder = Path(tmp, 'decoder')
             decoder.write_text('#!/usr/bin/env python3\nimport sys,time\ndata=sys.stdin.buffer.read()\ntime.sleep(.15)\nsys.stdout.buffer.write(data+b"TAIL")\n')
             decoder.chmod(0o755)
+            cfg['leandvb']['backend'] = 'external'
             cfg['paths']['leandvb'] = str(decoder)
             cfg['paths']['rbdvbt_rx'] = str(decoder)
             cfg['session'] = {'renderer': 'mpegts'}

@@ -168,9 +168,24 @@ static void exercise_decoder_view(App *a) {
     for (unsigned i=0;i<DECODER_HISTORY_FRAMES;++i) g_assert_cmpint(v->history_time[i],==,0);
     g_assert_false(constellation_green_at(v,.4,.4));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"—");
+    dest.sin_port=htons(v->port);
+    status.satellite=2; status.constellation_order=8; status.mer_db=12.5;
+    status.modcod=14; status.short_frame=1; status.pilots=1;
+    status.lock_valid=DECODER_OFDM|DECODER_FEC|DECODER_TS;
+    status.fec_good=42; status.fec_bad=2;
+    g_strlcpy(status.modulation,"DVB-S2 8PSK",sizeof(status.modulation));
+    sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest));
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->snr)),==,"12.5");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->guard)),==,"short");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->pilot)),==,"on");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->rs_ok)),==,"42");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->rs_errors)),==,"2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption"))),==,"MER");
+    g_assert_cmpuint(v->status.constellation_order,==,8);
     decoder_view_stop(v); close(sender);
     decoder_view_tick(v,FALSE,"DVB-S2");
-    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"display coming soon"));
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"stopped"));
     g_assert_cmpint(abs(gtk_widget_get_allocated_width(v->area)-gtk_widget_get_allocated_height(v->area)),<=,1);
 }
 
@@ -227,10 +242,12 @@ static gboolean close_about(gpointer data) {
             *seen=TRUE;
             GtkAllocation allocation;
             gtk_widget_get_allocation(p->data,&allocation);
-            int content_height;
-            gtk_widget_get_preferred_height_for_width(p->data,allocation.width,NULL,&content_height);
-            /* Check the actual window, without shrinking it for the screenshot. */
-            g_assert_cmpint(allocation.height,<=,content_height+24);
+            GdkMonitor *monitor=gdk_display_get_monitor_at_window(gtk_widget_get_display(p->data),gtk_widget_get_window(p->data));
+            GdkRectangle work;
+            g_assert_nonnull(monitor);
+            gdk_monitor_get_workarea(monitor,&work);
+            if (work.width<=0) work.width=1024;
+            if (work.height<=0) work.height=768;
             const char *screenshot=g_getenv("LINRAD_GUI_SCREENSHOT");
             if (screenshot) {
                 cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,allocation.width,allocation.height);
@@ -240,6 +257,9 @@ static gboolean close_about(gpointer data) {
                 g_assert_cmpint(cairo_surface_write_to_png(surface,path),==,CAIRO_STATUS_SUCCESS);
                 g_free(dir); g_free(path); cairo_destroy(cr); cairo_surface_destroy(surface);
             }
+            /* The command/credits reference scrolls inside the screen bounds. */
+            g_assert_cmpint(allocation.height,<=,work.height);
+            g_assert_cmpint(allocation.width,<=,work.width);
             gtk_dialog_response(GTK_DIALOG(p->data),GTK_RESPONSE_CLOSE);
         }
     }
@@ -1138,6 +1158,7 @@ static gboolean exercise(gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     g_assert_cmpint(argc, ==, 2);

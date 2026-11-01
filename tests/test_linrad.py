@@ -388,6 +388,7 @@ class PipelineTests(unittest.TestCase):
     def test_config_quoting_and_format(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.config(tmp)
+            cfg["leandvb"]["backend"] = "external"
             cfg["paths"]["leandvb"] = "programs/a decoder's name"
             cfg["linrad"]["format"] = "u8"
             cfg["linrad"]["sample_rate"] = "2000000"
@@ -470,6 +471,7 @@ class LifecycleTests(PipelineTests):
             target = Path(tmp, role)
             shutil.copyfile(ROOT / "tests/fake_stage.py", target)
             target.chmod(0o755)
+        cfg["leandvb"]["backend"] = "external"
         cfg["paths"]["leandvb"] = "./decoder"
         cfg["paths"]["rbdvbt_rx"] = "./decoder"
         cfg["paths"]["cvlc"] = "./player"

@@ -15,6 +15,10 @@ typedef struct {
     float snr_db, pilot_lock, cfo_hz, rms_dbfs, peak_dbfs, buffer_percent;
     uint32_t packets, written_packets, rs_ok, rs_uncorrectable, cc_errors;
     char service[128], provider[128], modulation[24], fec[16], guard[16];
+    /* Satellite-only values. Legacy DVB-T fields retain their meanings. */
+    uint32_t satellite, constellation_order, lock_valid, fec_good, fec_bad;
+    float mer_db;
+    int32_t modcod, short_frame, pilots;
 } DecoderStatus;
 typedef struct {
     uint32_t magic, type, count;

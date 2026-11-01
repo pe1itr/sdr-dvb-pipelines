@@ -74,7 +74,7 @@ Linrad UDP-ontvanger zijn in C geschreven. `rx_dvb_linrad_leandvb.sh` wordt niet
 gelezen, gestart of gewijzigd door de toepassing. De overige scripts hieronder
 blijven beschikbaar voor de oudere experimenten.
 
-Bouwen en starten (Linux, C-compiler, `pkg-config` en development packages voor
+Bouwen en starten (Linux, C- en C++17-compiler, `pkg-config` en development packages voor
 GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD, FFmpeg
 (`libavcodec`, `libavformat`, `libavutil`, `libswscale`), libzvbi (`zvbi-0.2`), ALSA,
 libsamplerate en libVLC 3
@@ -92,8 +92,10 @@ Voor USB-audio zijn `alsa-lib-devel libsamplerate-devel` (Fedora) of
 
 De GUI gebruikt één venster zonder tabs, standaard ongeveer 80% van de
 schermbreedte en 90% van de beschikbare hoogte. Bovenaan staan de menu's
-**Input**, **Mode**, **Renderer** en **About**. About toont een korte uitleg,
-Rob Hardenberg / PE1ITR als maker, de builddatum en de sneltoetsen in een raster.
+**Input**, **Mode**, **Renderer**, **TCI** en **About**. About toont uitleg over de
+bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
+projectlinks voor LeanDVB, LDPC en de acquisitiepatch van Ondřej OK1CDJ. Het
+venster is scrollbaar zodat ook op kleinere schermen alle informatie bereikbaar is.
 De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staan
 links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
 en hoogte als Service info. Rechts daarvan verschijnt het TSscatterFix-paneel
@@ -138,15 +140,19 @@ melding; de ontvangst blijft doorlopen.
   Bij **Afedri Net** stel je het SDR-IP, de TCP/UDP-poort en het UDP-bindadres in;
   zie [Native Afedri Net input](#native-afedri-net-input).
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
-- **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie.
+- **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie;
+  voor DVB-S2 ook LDPC-methode, 1–8 workers en Low latency / Throughput.
 - **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
-- **Alt+I / Alt+M / Alt+R / Alt+A**: open respectievelijk Input, Mode, Renderer en About.
+- **Alt+I / Alt+M / Alt+R / Alt+T / Alt+A**: open Input, Mode, Renderer, TCI en About.
   Kleine letters werken ook; houd Alt ingedrukt om een menu te openen.
 - **R**: reset de actieve TSscatterFix-reconstructie. Herstelbuffer, beeld en
   status worden gewist; reconstructie begint opnieuw met nieuwe TS-data.
   De ontvangst en gewone videospeler blijven doorlopen.
-- **U**: geluid van de ingebouwde player dempen; nogmaals **U** schakelt het weer in.
+- **M**: demp/herstel de luidsprekers voor DVB en USB/FM/FM-DATA; TCI-audio loopt door.
+- **U / F / D**: schakel respectievelijk USB (3 kHz), FM (12,5 kHz) of FM-DATA (20 kHz) in/uit.
+- **Page Up / Page Down**: stem de actieve monitor lager/hoger, in stappen van
+  100 Hz voor USB of 2,5 kHz voor FM/FM-DATA. Klikken in het spectrum stemt die monitor direct af.
 - **←/→**: frequentie lager/hoger; **↑/↓**: gain hoger/lager.
   **[ / ]**: bandfilter smaller/breder; **W**: instellingen opslaan.
   **P**: het volledige hoofdvenster als PNG opslaan naast het INI-bestand,
@@ -165,8 +171,9 @@ De GUI bevat onder andere:
   guard interval 1/32, 1/16, 1/8 of auto.
 - Scatterfix aan/uit, één Start/Stop-knop, een pipelineweergave en een logvenster.
 
-DVB-S/S2 gebruiken `leandvb`. De DVB-T-broncode wordt rechtstreeks meegecompileerd
-en gelinkt in `linrad_dvb`; een losse `rbdvbt_rx`-executable is niet nodig.
+DVB-S/S2 gebruiken de meegecompileerde LeanDVB-backend. Ook de DVB-T-broncode
+wordt rechtstreeks gelinkt in `linrad_dvb`. Voor DVB-S2 bouwt `make` de
+LDPC-helper mee; een andere checkout of losse installatie is niet nodig.
 De GUI toont het beeld standaard in het rechterpaneel. DVB-S2 ondersteunt QPSK en 8PSK; bij QPSK: FEC 1/2 selecteert MODCOD-masker
 `0x10`, FEC 2/3 selecteert `0x40`. De standaard samplerate is **1010526**
 samples/s. Frequentie en de SDR zelf stel je in Linrad in.
@@ -285,6 +292,84 @@ koponderdrukking en rij 24. De GTK-smoketest controleert de afzonderlijke venste
 de 4:3-pagina zonder extra widgets in het beeld, servicekeuze en reset tijdens
 achtergrondverwerking.
 
+
+### Ingebouwde DVB-S/S2-decoder en LDPC
+
+De GUI start `linrad_dvb --decoder-worker=leansdr`, zonder de oude X11-vensters.
+De vastgelegde bronversies en wijzigingen staan in
+[third_party/leansdr/ORIGIN](third_party/leansdr/ORIGIN) en
+[third_party/ldpc/ORIGIN](third_party/ldpc/ORIGIN). `make package` levert ook de
+bijbehorende licenties mee. De oorspronkelijke checkouts worden niet aangepast.
+
+In **Mode** staan drie DVB-S2-instellingen:
+
+- **Error correction**: soft-decision LDPC (standaard) of de bestaande bit-flipping.
+- **LDPC workers**: 1–8 workers in totaal. Begin met één; meer workers kosten extra
+  geheugen en helpen alleen wanneer FEC de doorvoer beperkt.
+- **LDPC processing**: *Low latency* verwerkt één frame met een smalle decoder;
+  *Throughput* verzamelt maximaal 32 frames, met hoogstens 2 ms wachttijd voor
+  batchvorming. Dit is niet de totale ontvangstvertraging.
+
+De instellingen worden met de bestaande configuratie-opslag bewaard:
+
+```ini
+[leandvb]
+backend=embedded
+ldpc_mode=soft
+helpers=1
+latency=low
+```
+
+De worker beheert begrensde wachtrijen, bewaart framevolgorde en werkt resterende
+frames bij bestandseinde af. De helper gebruikt een privéprotocol met expliciete
+batchlengtes; grote kernel-pipebuffers of wijzigingen aan `/proc/sys` zijn niet
+nodig. Stop beëindigt de volledige procesgroep. Op x86_64 bouwt `make` ook
+`ldpc_tool_avx2`; `ldpc_tool` controleert de CPU en kiest die variant automatisch.
+`LINRAD_LDPC_PORTABLE=1` forceert de draagbare variant voor vergelijking.
+
+Het decoderpaneel toont QPSK/8PSK, MER (geen SNR), frequentieafwijking,
+synchronisatie, RS/BCH-resultaten en TS-tellers. Voor S2 worden de daadwerkelijk
+herkende modulatie/FEC, framegrootte en pilots getoond. Onbekende metingen krijgen
+`—`; onbekende lockstatus blijft grijs. De geselecteerde servicenaam komt uit de
+bestaande TS-parser. Constellatiepunten zijn genormaliseerd op de LeanDVB-schaal.
+Telemetrie gebruikt niet-blokkerende lokale UDP met maximaal 20 updates/s.
+
+De acquisitiecorrectie uit [LeanDVB issue #41](https://github.com/pabr/leansdr/issues/41)
+van Ondřej OK1CDJ is opgenomen: een volledig zoekvenster voor normale frames,
+betere eerste PLSCODE-selectie en afwijzing van onwaarschijnlijke eerste locks.
+Daarnaast zijn transcriptiefouten in LDPC-tabellen B.2, C.3 en C.7 gecorrigeerd.
+Alle 21 LDPC-tabellen worden vergeleken met de onafhankelijke xdsopl-tabellen.
+De in issue #41 genoemde resterende carrierambiguïteit bij QPSK 4/5 short frames
+is hiermee niet als opgelost aangemerkt.
+
+`make test-leansdr` gebruikt gegenereerde TS en RRC-gevormde IQ, zonder hardware:
+DVB-S 1/2 en 2/3, S2 QPSK/8PSK, normal/short frames, pilots aan/uit,
+frequentieafwijking, ruis, parallelle verwerking, EOF, ongeldige opties en
+telemetrie. De QPSK 3/5- en 5/6-regressies uit issue #41 worden afzonderlijk getest.
+De tests controleren de terugontvangen pakketten tegen de oorspronkelijke TS.
+De bestaande GUI-test controleert ook de satellietvelden en resetgedrag.
+Deze tests bewijzen geen realtime doorvoer op 5 Msym/s of ontvangstgevoeligheid
+op echte hardware; die blijven afzonderlijke meetpunten.
+
+Help voor de applicatie en de meegebouwde decoders/helpers:
+
+```bash
+./build/linrad_dvb --help
+./build/linrad_dvb --decoder-worker=leansdr --help
+./build/linrad_dvb --decoder-worker=dvbt --help
+./build/ldpc_tool --help
+./build/ldpc_tool --version
+```
+
+De decoder-workeropties zijn bedoeld voor directe IQ-invoer en TS-uitvoer.
+De LDPC-helper verwerkt soft-bitframes; hij ontvangt geen IQ of MPEG-TS.
+Dezelfde commando’s staan onder **About → Command-line reference**.
+
+Voor vergelijking met een externe decoder kan expliciet `backend=external`
+worden ingesteld; alleen dan wordt `[paths] leandvb` gebruikt. De GUI-telemetrie
+is beschikbaar voor de ingebouwde backend. Bestaande `--gui`-argumenten worden
+bij de ingebouwde backend geaccepteerd en genegeerd.
+
 ### Ingebouwde DVB-T-decoder en verdeling van het werk
 
 `make` bouwt de vastgelegde broncode in `third_party/rbdvbt` mee in
@@ -337,8 +422,7 @@ doorgegeven, ook als nog geen TS-lock bestaat. Onbekende gegevens tonen `—`.
 Bij Stop/herstart worden alle gegevens gewist; na tien seconden zonder actuele
 telemetrie worden lampjes grijs en oude meetwaarden verborgen. Er zijn geen
 extra DVB-T-spectrum- of buffervensters. De monitorinterface en GTK-panelen zijn
-afzonderlijke modules voor later gebruik door andere modes; DVB-S/S2 gebruiken
-voorlopig nog hun bestaande decoderweergave.
+gedeeld met DVB-S/S2; de velden passen zich aan de gekozen standaard aan.
 
 Alle vijf DVB-T-FEC-verhoudingen (**1/2, 2/3, 3/4, 5/6 en 7/8**) gebruiken de
 doorlopende Viterbi-route. De oude code beperkte die route tot 1/2 en 2/3 en

@@ -12,6 +12,8 @@ typedef struct {
     gint64 status_time, points_time, buffer_time;
     gboolean active;
     DecoderStatus status;
+    char selected_service[128];
+    gboolean service_valid;
     DecoderConstellation points;
     DecoderConstellation history[DECODER_HISTORY_FRAMES];
     gint64 history_time[DECODER_HISTORY_FRAMES];
