@@ -265,3 +265,9 @@ test-bch: $(BUILD_DIR)/test_bch
 	./$(BUILD_DIR)/test_bch
 
 test: test-bch
+
+.PHONY: test-build-helper
+test-build-helper:
+	python3 tests/test_build_helper.py
+
+test: test-build-helper

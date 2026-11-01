@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+ and IQ files), run `make` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+ and IQ files), run `python3 tools/build.py` followed by
 `./build/linrad_dvb`. Set parameters directly in the GUI and edit
 `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -93,9 +93,35 @@ libsamplerate en libVLC 3
 (inclusief de VLC-codecplugins)):
 
 ```bash
-make
+python3 tools/build.py
 ./build/linrad_dvb
 ```
+
+De [buildhelper](tools/build.py) vereist Python 3.8+ en controleert eerst de
+buildtools, de C/C++-compiler en alle hierboven genoemde bibliotheken met
+`pkg-config` en kleine compileer-/linkproeven. Alleen runtimebibliotheken
+installeren is onvoldoende: ook de headers en development packages zijn nodig.
+Een ontbrekende essentiële afhankelijkheid geeft **ERROR**, exitcode 1 en
+blokkeert de build. Alle direct gekoppelde bibliotheken zijn essentieel voor
+de huidige volledige build, ook SoapySDR en UHD als je alleen Linrad gebruikt.
+
+Ontbrekende optionele Soapy-drivermodules voor HackRF, SDR-IQ en RTL-SDR en
+externe programma's VLC/CVLC, FFplay en Dire Wolf geven **WARNING**; de build
+gaat door. De drivercontrole gebruikt `SoapySDRUtil --info`, zonder radio's
+te openen. Zonder deze utility volgt een waarschuwing dat de drivers niet
+gecontroleerd konden worden. De controle garandeert geen aangesloten hardware,
+UHD-firmware, toegangsrechten of beschikbare VLC-codecplugins.
+
+```bash
+python3 tools/build.py --check     # alleen afhankelijkheden controleren
+python3 tools/build.py -j 4        # controleren en met vier jobs bouwen
+```
+
+De helper werkt ook vanuit een andere werkmap. Hij gebruikt `make all` en
+respecteert `CC`, `CXX`, `CPPFLAGS`, `CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS`
+en `PKG_CONFIG_PATH` uit de omgeving. Waarschuwingen veranderen de exitcode
+niet; een mislukte build geeft de exitcode van `make` terug. Rechtstreeks
+`make` gebruiken blijft mogelijk.
 
 Voor libzvbi zijn ook de ontwikkelbestanden nodig: `sudo dnf install zvbi-devel`
 op Fedora, of `sudo apt install libzvbi-dev` op Debian/Ubuntu.
