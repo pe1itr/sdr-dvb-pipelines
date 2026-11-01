@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net and IQ files), run `make` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR and IQ files), run `make` followed by
 `./build/linrad_dvb`. Set parameters directly in the GUI and edit
 `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -1281,7 +1281,7 @@ The launcher contains AFEDRI-related measurement and decoding profiles, includin
 
 ## 3. RTL-SDR
 
-RTL-SDR is supported directly from the command line via the standard `rtl_sdr` utility.
+RTL-SDR is supported in the C GUI via SoapyRTLSDR (see below), and in the older command-line launcher via the standard `rtl_sdr` utility.
 
 ### Driver / helper used
 
@@ -1506,6 +1506,35 @@ External / upstream software used by this project, including LeanDVB / LeanSDR, 
 
 Many thanks to the authors and maintainers of these excellent tools, and especially to the LeanDVB / LeanSDR and Linrad authors, for making this kind of experimentation possible.
 
+
+### RTL-SDR in de C GUI
+
+Kies **SDR → Input / SDR → RTL-SDR** en druk op **Start SDR**. De standaard
+is 437 MHz, 2.400.000 samples/s, gain 30 dB en `u8` IQ. De SoapyRTLSDR-driver
+moet geïnstalleerd zijn; er is geen apart `rtl_sdr`-proces nodig. De aangesloten
+RTL2838 met R820T-tuner wordt via `driver=rtlsdr` geopend. Bij meerdere dongles
+kun je in **Device arguments** bijvoorbeeld `driver=rtlsdr,serial=1007` invullen.
+
+Deze invoer gebruikt de normale tunermodus voor R820T/R820T2/R828D:
+24–1764 MHz en handmatige gain 0–49,6 dB. Pijltjes links/rechts stemmen af;
+pijltjes omhoog/omlaag wijzigen de gevraagde gain. De driver past de gain aan
+de hardware aan. **W** bewaart de instellingen in `[rtlsdr]`.
+De sample-ratekeuzelijst biedt onder andere 250.000, 1.024.000, 2.048.000 en
+2.400.000 samples/s. Via het configuratiebestand zijn ook andere gehele rates
+binnen 225.001–300.000 en 900.001–3.200.000 mogelijk. De ongeldige tussenruimte
+wordt geweigerd. Controleer bij hogere rates de overflow- en dropmeldingen.
+
+Spectrum, DVB-S/S2/T, bandfilter, audiomonitor en **Record IQ** gebruiken dezelfde
+invoerroute als de andere ontvangers. `u8` en `s16` worden beide ondersteund.
+SoapyRTLSDR levert signed CS8 voor `u8`; de helper zet dit om naar unsigned IQ.
+Zie de [SoapyRTLSDR-streamimplementatie](https://github.com/pothosware/SoapyRTLSDR/blob/master/Streaming.cpp)
+en [rate-instellingen](https://github.com/pothosware/SoapyRTLSDR/blob/master/Settings.cpp).
+
+```sh
+./build/linrad_dvb --source rtlsdr
+./build/sdr_to_stdout --source rtlsdr --sample-rate 2400000 \
+  --frequency 437000000 --gain 30 --format u8 > rtl.u8
+```
 
 ### Direct HackRF, B210 and SDR-IQ inputs in the C GUI
 

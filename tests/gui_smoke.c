@@ -115,6 +115,38 @@ static void exercise_record_controls(App *a) {
     status(a, "");
 }
 
+static void exercise_rtlsdr(App *a) {
+    int source = a->source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_RTLSDR);
+    g_assert_true(hardware_source(a));
+    g_assert_false(gtk_widget_get_visible(a->rate_box));
+    g_assert_true(gtk_widget_get_visible(a->sdriq_rate_box));
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "2400000");
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[SOURCE_RTLSDR][0])), ==, "driver=rtlsdr");
+    g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->sdriq_rate_box), "250000"));
+    gtk_entry_set_text(GTK_ENTRY(a->hardware_entries[SOURCE_RTLSDR][0]), "driver=rtlsdr,serial=1007");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), 437000);
+    tune_step(a, 1);
+    gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "rtlsdr", "frequency", NULL), ==, 437001000);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "rtlsdr", "gain", NULL), ==, 31);
+    char *preview = describe(a);
+    g_assert_nonnull(strstr(preview, "'--source' 'rtlsdr'"));
+    g_assert_nonnull(strstr(preview, "'--sample-rate' '250000'"));
+    g_assert_nonnull(strstr(preview, "'--args' 'driver=rtlsdr,serial=1007'"));
+    g_free(preview);
+    g_key_file_set_double(a->config, "rtlsdr", "gain", 49);
+    gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "rtlsdr", "gain", NULL), ==, 49.6);
+    gain_step(a, 1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config, "rtlsdr", "gain", NULL), ==, 49.6);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 3);
+    g_assert_true(gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->sdriq_rate_box), "111111"));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_RTLSDR);
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)), ==, "250000");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
+}
+
 static void exercise_afedri(App *a) {
     int source = a->source;
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_AFEDRI);
@@ -897,6 +929,7 @@ static gboolean exercise(gpointer data) {
         exercise_file_selection(a);
         exercise_record_controls(a);
         exercise_afedri(a);
+        exercise_rtlsdr(a);
         exercise_live_gain_locale(a);
         assert_no_tabs(a->window);
         g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
@@ -1180,6 +1213,9 @@ static gboolean exercise(gpointer data) {
         load_session(&restored);
         g_assert_cmpint(g_key_file_get_integer(restored.config, "afedri", "port", NULL), ==, 50006);
         g_assert_cmpint(g_key_file_get_integer(restored.config, "afedri", "sample_rate", NULL), ==, 200000);
+        g_assert_cmpint(g_key_file_get_integer(restored.config, "rtlsdr", "sample_rate", NULL), ==, 250000);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "rtlsdr", "gain", NULL), ==, 49.6);
+        g_assert_cmpfloat(g_key_file_get_double(restored.config, "rtlsdr", "frequency", NULL), ==, 437001000);
         g_assert_cmpint(restored.source, ==, 3);
         g_assert_cmpint(restored.standard, ==, 2);
         g_assert_cmpint(restored.sr, ==, 40000);

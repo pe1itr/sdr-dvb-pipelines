@@ -2,6 +2,7 @@
 #include <gtk/gtk.h>
 #include "gui_theme.h"
 #include "sdriq.h"
+#include "rtlsdr.h"
 #include "iq_file.h"
 #include <glib-unix.h>
 #include <arpa/inet.h>
@@ -35,7 +36,7 @@ typedef struct {
     GtkWidget *frequency_display, *frequency_calculation, *gain_display, *offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
-    GtkWidget *hardware_entries[5][3], *ip_box, *port_box, *header_box, *center_box;
+    GtkWidget *hardware_entries[6][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
@@ -86,9 +87,9 @@ static gboolean valid_fec(App *a, int fec) {
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-enum { SOURCE_AFEDRI = 4, SOURCE_FILE = 5 };
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "file"};
-static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "File (IQ)"};
+enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FILE = 6 };
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "file"};
+static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "RTL-SDR", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
@@ -218,8 +219,9 @@ static void build_pipeline(App *a) {
     if (a->window) add(s, "--control-stdin");
     } else {
         const char *section = sources[a->source];
-        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
-                                      a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
+                                      a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        if (a->source == SOURCE_RTLSDR && !rtlsdr_rate_valid(sample_rate)) fatal("Invalid RTL-SDR sample rate: %d", sample_rate);
         if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
         if (strcmp(format, "s16") && strcmp(format, "u8")) fatal("Invalid SDR format");
@@ -752,7 +754,7 @@ static void tuning_refresh(App *a) {
     if (!a->frequency_display) return;
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
-        char *gain=g_strdup_printf("Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
+        char *gain=g_strdup_printf(a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, hardware_source(a));
@@ -809,8 +811,8 @@ static void tune_step(App *a, int direction) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
-    double low = a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
-    double high = a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
+    double low = a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
+    double high = a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY : a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
     if (next < low || next > high) { status(a, "SDR tuning limit reached"); return; }
     if (a->running) {
         char command[64];
@@ -838,8 +840,9 @@ static void gain_step(App *a, int direction) {
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
     double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
     double low = a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
-    double high = a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
-    if (next < low || next > high) { status(a, "SDR gain limit reached"); return; }
+    double high = a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    if (a->source == SOURCE_RTLSDR) next = CLAMP(next, low, high);
+    if (next == gain || next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
         /* The helper expects a decimal point, regardless of GTK's locale. */
         char command[64], value[G_ASCII_DTOSTR_BUF_SIZE];
@@ -1145,15 +1148,29 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->format_box, source_changed, a);
         g_signal_handlers_block_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
-                                  a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
+                                  a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
-                                  a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
+                                  a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),
             integer_setting(a, section, "sample_rate", 1, 100000000));
-        if (a->source == 3) {
+        if (a->source == 3 || a->source == SOURCE_RTLSDR) {
             g_signal_handlers_block_by_func(a->sdriq_rate_box, source_changed, a);
+            gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->sdriq_rate_box));
+            const int *rates = a->source == SOURCE_RTLSDR ? rtlsdr_rates : sdriq_rates;
+            size_t count = a->source == SOURCE_RTLSDR ? G_N_ELEMENTS(rtlsdr_rates) : G_N_ELEMENTS(sdriq_rates);
+            int configured = g_key_file_get_integer(a->config, section, "sample_rate", NULL);
+            gboolean found = FALSE;
+            for (size_t i = 0; i < count; ++i) {
+                char *id = g_strdup_printf("%d", rates[i]);
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->sdriq_rate_box), id, id);
+                g_free(id); found |= rates[i] == configured;
+            }
+            if (!found) {
+                char *id = g_strdup_printf("%d", configured);
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->sdriq_rate_box), id, id); g_free(id);
+            }
             char *rate_id = setting(a, section, "sample_rate");
             gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->sdriq_rate_box), rate_id); g_free(rate_id);
             g_signal_handlers_unblock_by_func(a->sdriq_rate_box, source_changed, a);
@@ -1165,15 +1182,15 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->frequency_box, source_changed, a);
     } else {
         g_key_file_set_string(a->config, section, "format", gtk_combo_box_get_active(GTK_COMBO_BOX(a->format_box)) ? "u8" : "s16");
-        g_key_file_set_integer(a->config, section, "sample_rate", a->source == 3 ?
+        g_key_file_set_integer(a->config, section, "sample_rate", (a->source == 3 || a->source == SOURCE_RTLSDR) ?
             atoi(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box))) :
             gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)));
         if (hardware_source(a)) {
             g_key_file_set_double(a->config, section, "frequency", gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
-    gtk_widget_set_visible(a->rate_box, a->source != 3);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3);
+    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR);
+    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR);
     gtk_widget_set_sensitive(a->frequency_box, hardware_source(a));
     gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE);
     if (a->hardware_stack) gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), section);
@@ -1442,6 +1459,7 @@ static void source_defaults(App *a) {
     const char *keys[] = {"sample_rate", "frequency", "gain", "args", "images", "antenna", "format"};
     const char *values[] = {"10000000", "437000000", "30", "", "/home/rhardenb/repos/ettus/uhd-images", "TX/RX", "s16"};
     const char *sdriq_values[] = {"111111", "28000000", "10", "driver=rfspace,sdr-iq=/dev/ttyUSB0", "", "", "s16"};
+    const char *rtlsdr_values[] = {"2400000", "437000000", "30", "driver=rtlsdr", "", "RX", "u8"};
     const char *afedri_values[] = {"1010526", "28000000", "14", "", "", "", "s16"};
     const char *net_keys[] = {"ip", "port", "bind"};
     const char *net_values[] = {"192.168.0.118", "50005", "0.0.0.0"};
@@ -1451,7 +1469,7 @@ static void source_defaults(App *a) {
     for (int j = 1; j < SOURCE_FILE; ++j)
         for (int i = 0; i < 7; ++i)
             if (!g_key_file_has_key(a->config, sources[j], keys[i], NULL))
-                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
+                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j) {
         if (!g_key_file_has_key(a->config, sources[j], "lo_offset", NULL))
             g_key_file_set_double(a->config, sources[j], "lo_offset", 0);
@@ -1674,8 +1692,8 @@ static gboolean config_close(GtkWidget *widget, GdkEvent *event, gpointer data) 
 static void show_config(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
     gtk_widget_show_all(a->config_dialog);
-    gtk_widget_set_visible(a->rate_box, a->source != 3);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3);
+    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR);
+    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR);
     gtk_window_present(GTK_WINDOW(a->config_dialog));
 }
 
@@ -2373,7 +2391,7 @@ int main(int argc, char **argv) {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},

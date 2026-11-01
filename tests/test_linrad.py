@@ -294,6 +294,58 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(cmds[1][cmds[1].index("-f") + 1], "10000000")
             self.assertIn("0x80", cmds[1])
 
+    def test_rtlsdr_pipeline_defaults_formats_and_saved_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            for legacy in (False, True):
+                if legacy:
+                    del cfg["rtlsdr"]
+                for standard, sr in (("DVB-T", "40000"), ("DVB-S", "125000"), ("DVB-S2", "333000")):
+                    self.write_config(cfg, path)
+                    p = subprocess.run([UI, "--config", str(path), "--source", "rtlsdr",
+                                        "--standard", standard, "--sr", sr, "--print-pipeline"],
+                                       capture_output=True, text=True, timeout=3)
+                    self.assertEqual(p.returncode, 0, p.stderr)
+                    source, decoder, _ = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+                    self.assertEqual(source[source.index("--sample-rate")+1], "2400000")
+                    self.assertEqual(source[source.index("--args")+1], "driver=rtlsdr")
+                    self.assertEqual(source[source.index("--format")+1], "u8")
+                    self.assertIn("2400000", decoder)
+                    self.assertIn("u8" if standard == "DVB-T" else "--u8", decoder)
+            cfg["rtlsdr"] = {"sample_rate": "250000", "format": "s16",
+                             "args": "driver=rtlsdr,serial=1007", "filter_enabled": "true",
+                             "filter_bandwidth": "50000"}
+            cfg["session"] = {"source": "rtlsdr", "standard": "DVB-T", "sr": "40000", "fec": "1/2"}
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, "--config", str(path), "--print-pipeline"],
+                               capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            source, decoder, _ = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+            self.assertIn("rtlsdr", source)
+            self.assertIn("driver=rtlsdr,serial=1007", source)
+            self.assertIn("--filter-bandwidth", source)
+            self.assertEqual(decoder[decoder.index("--sample-rate")+1], "250000")
+            self.assertEqual(decoder[decoder.index("--input-format")+1], "s16")
+
+    def test_rtlsdr_rejects_invalid_settings_before_opening_hardware(self):
+        helper = ROOT / "build/sdr_to_stdout"
+        for option, value in (("--sample-rate", "225000"), ("--sample-rate", "300001"),
+                              ("--sample-rate", "900000"), ("--sample-rate", "3200001"),
+                              ("--sample-rate", "250000.5"), ("--frequency", "23999999"),
+                              ("--frequency", "1764000001"), ("--gain", "-1"), ("--gain", "50")):
+            p = subprocess.run([helper, "--source", "rtlsdr", "--sample-rate", "2400000",
+                                option, value], capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn(b"RTL-SDR:", p.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            cfg["rtlsdr"]["sample_rate"] = "500000"
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, "--config", str(path), "--source", "rtlsdr", "--print-pipeline"],
+                               capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+            self.assertIn(b"RTL-SDR sample rate", p.stderr)
+
     def test_sdriq_pipeline_and_legacy_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.config(tmp)
@@ -365,7 +417,7 @@ class PipelineTests(unittest.TestCase):
     def test_filter_keeps_decoder_rate_and_format(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.config(tmp)
-            for source in ("linrad", "sdriq", "hackrf", "b210"):
+            for source in ("linrad", "sdriq", "hackrf", "b210", "rtlsdr"):
                 cfg[source]["filter_enabled"] = "true"
                 cfg[source]["filter_bandwidth"] = "50000"
                 self.write_config(cfg, path)

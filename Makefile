@@ -90,7 +90,7 @@ all: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout $(BUILD_DIR)/sdr_
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
+$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/rtlsdr.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -lstdc++ $(LDLIBS)
 
 $(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
@@ -106,7 +106,7 @@ package: all
 	cp $(SCATTER_DIR)/LICENSE $(BUILD_DIR)/tsscatterfix-LICENSE.txt
 	@echo "Start: ./build/linrad_dvb (config: linrad-dvb.ini)"
 
-$(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
+$(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) src/iq_file.h src/sdriq.h src/rtlsdr.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -lstdc++ $(LDLIBS)
 
 $(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
@@ -118,7 +118,7 @@ test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/sdr_to_stdout: src/afedri.c src/afedri.h src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/tune_control.h src/iq_record.c src/iq_record.h | $(BUILD_DIR)
+$(BUILD_DIR)/sdr_to_stdout: src/afedri.c src/afedri.h src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/sdriq.h src/rtlsdr.h src/tune_control.h src/iq_record.c src/iq_record.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd) src/sdr_to_stdout.c src/afedri.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
