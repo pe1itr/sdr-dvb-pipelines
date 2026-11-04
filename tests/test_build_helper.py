@@ -68,6 +68,12 @@ class BuildHelperTests(unittest.TestCase):
         self.assertIn("[WARNING] Soapy driver rfspace missing", output)
         make.assert_called_once()
 
+    def test_missing_limesuite_is_optional(self):
+        status, output, make = self.run_helper(missing_library="LimeSuite")
+        self.assertEqual(status, 0)
+        self.assertIn("LimeSDR Mini RX unavailable", output)
+        make.assert_called_once()
+
     def test_check_never_runs_make_even_with_warnings(self):
         status, output, make = self.run_helper(("--check",), missing_programs=("SoapySDRUtil",))
         self.assertEqual(status, 0)

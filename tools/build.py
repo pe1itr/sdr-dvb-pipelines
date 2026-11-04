@@ -67,6 +67,11 @@ class Checker:
                             + link_flags)
 
     def optional(self):
+        if shutil.which("pkg-config"):
+            ok, _ = self.command(["pkg-config", "--print-errors", "--exists", "LimeSuite"])
+            self.report("OK" if ok else "WARNING", "LimeSuite: native LimeSDR Mini RX enabled" if ok else
+                        "LimeSuite development files missing; LimeSDR Mini RX unavailable. "
+                        "Set PKG_CONFIG_PATH for a private installation, then rebuild.")
         for program, purpose in OPTIONAL_PROGRAMS:
             if shutil.which(program):
                 self.report("OK", f"{program}: {purpose}")

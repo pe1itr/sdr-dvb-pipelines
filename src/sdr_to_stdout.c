@@ -9,6 +9,7 @@
 #include "sdriq.h"
 #include "funcube.h"
 #include "rtlsdr.h"
+#include "lime_rx.h"
 #include "afedri.h"
 #include "tune_control.h"
 #include "iq_bandfilter.h"
@@ -50,7 +51,7 @@ static double number(const char *s) {
 #define S(call) do { if ((call) != 0) { fprintf(stderr, "%s: %s\n", #call, SoapySDRDevice_lastError()); goto done; } } while (0)
 
 int main(int argc, char **argv) {
-    const char *source = "", *args = "", *images = "", *antenna = "TX/RX", *format = "s16";
+    const char *source = "", *args = "", *images = "", *antenna = "", *format = "s16";
     double rate = 10000000, freq = 437000000, gain = 30, actual = 0;
     double bandwidth = 0, receiver_offset = 0, channel_bandwidth = 0;
     const char *ip = "192.168.0.118", *bind_ip = "0.0.0.0";
@@ -61,7 +62,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
@@ -81,13 +82,15 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--gain")) gain = number(v);
         else { fprintf(stderr, "Unknown option: %s\n", key); return 2; }
     }
+    int lime = !strcmp(source, "lime");
+    if (!*antenna) antenna = lime ? "AUTO" : "TX/RX";
     int fcdpp = !strcmp(source, "fcdpp");
     int afedri = !strcmp(source, "afedri");
     int rtlsdr = !strcmp(source, "rtlsdr");
     int sdriq = !strcmp(source, "sdriq");
     int hackrf = !strcmp(source, "hackrf"), u8 = !strcmp(format, "u8");
-    if ((!fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
-        (fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
+    if ((!lime && !fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
+        (lime ? !lime_rx_valid(rate, freq, gain) : fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
          rtlsdr ? (!rtlsdr_rate_valid(rate) || freq < RTLSDR_MIN_FREQUENCY ||
                     freq > RTLSDR_MAX_FREQUENCY || gain < 0 || gain > RTLSDR_MAX_GAIN) : afedri ? (rate < 48000 || rate > 2400000 || rate != floor(rate) ||
                    freq < 0 || freq > 35000000 || !afedri_gain_valid(gain) ||
@@ -95,6 +98,7 @@ int main(int argc, char **argv) {
          (rate < 2000000 || rate > (hackrf ? 20000000 : 61440000) ||
           freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < 0 || gain > (hackrf ? 116 : 76)))) {
         fprintf(stderr, "Invalid source, format, rate, frequency or gain\n");
+        if (lime) fprintf(stderr, "LimeSDR Mini: rate 100000..30720000; frequency 10000000..3500000000 Hz; LimeSuite RX gain 0..73 in 1 dB steps\n");
         if (fcdpp) fprintf(stderr, "FUNcube Pro+: fixed rate 192000; frequency 150000..240000000 or 420000000..1900000000 Hz; IF gain 0..59 dB in 1 dB steps\n");
         if (afedri) fprintf(stderr, "AFEDRI: rate 48000..2400000; frequency 0..35000000 Hz; gain -10..35 dB in 3 dB steps; IPv4 and TCP/UDP port required\n");
         if (rtlsdr) fprintf(stderr, "RTL-SDR: rates 225001..300000 or 900001..3200000; frequency 24000000..1764000000 Hz; gain 0..49.6 dB (R820T/R828D tuner mode)\n");
@@ -119,6 +123,7 @@ int main(int argc, char **argv) {
     }
     sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
     uhd_usrp_handle usrp = NULL; uhd_rx_streamer_handle rx = NULL; uhd_rx_metadata_handle md = NULL;
+    LimeRx *mini = NULL;
     Afedri *net = NULL;
     Funcube *cube = NULL;
     SoapySDRDevice *dev = NULL; SoapySDRStream *stream = NULL;
@@ -133,10 +138,13 @@ int main(int argc, char **argv) {
     float float_iq[2048 * 2];
     /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
      * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
-    size_t block_samples = fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : rtlsdr ? 8192 : 65536;
+    size_t block_samples = lime ? (size_t)fmax(256, fmin(65536, ceil(rate/100/256)*256)) : fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : rtlsdr ? 8192 : 65536;
     float *shifted=receiver_offset != 0 ? malloc(block_samples*2*sizeof(float)) : NULL;
     if (receiver_offset != 0 && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
-    if (fcdpp) {
+    if (lime) {
+        mini = lime_rx_open(args, antenna, rate, freq, &gain, &actual);
+        if (!mini) goto done;
+    } else if (fcdpp) {
         cube = funcube_open(args, freq, gain);
         if (!cube) goto done;
         actual = FUNCUBE_RATE;
@@ -212,7 +220,8 @@ int main(int argc, char **argv) {
     if (!output) { perror("IQ output queue"); goto done; }
     fprintf(stderr, "[SDR] Independent IQ writer: %.0f ms buffer, %.1f MiB\n",
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
-    if (afedri) { if (afedri_start(net)) goto done; }
+    if (lime) { if (lime_rx_start(mini)) goto done; }
+    else if (afedri) { if (afedri_start(net)) goto done; }
     else if (hackrf || sdriq || rtlsdr) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
     else if (!fcdpp) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
@@ -223,16 +232,18 @@ int main(int argc, char **argv) {
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
-                fcdpp ? FUNCUBE_MIN_FREQUENCY : rtlsdr ? RTLSDR_MIN_FREQUENCY : afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
-                fcdpp ? FUNCUBE_MAX_FREQUENCY : rtlsdr ? RTLSDR_MAX_FREQUENCY : afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
-                afedri ? -10 : sdriq ? -20 : 0, fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
-                fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+                lime ? LIME_RX_MIN_FREQUENCY : fcdpp ? FUNCUBE_MIN_FREQUENCY : rtlsdr ? RTLSDR_MIN_FREQUENCY : afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
+                lime ? LIME_RX_MAX_FREQUENCY : fcdpp ? FUNCUBE_MAX_FREQUENCY : rtlsdr ? RTLSDR_MAX_FREQUENCY : afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
+                afedri ? -10 : sdriq ? -20 : 0, lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
         if (fcdpp && (changed & 1) && !funcube_frequency_valid(requested)) {
             fprintf(stderr, "FUNcube Pro+: ignoring tune into unsupported 240..420 MHz gap\n");
             changed &= ~1;
         }
         if ((changed & 1) && requested != freq) {
-            if (fcdpp) {
+            if (lime) {
+                if (lime_rx_frequency(mini, requested)) goto done;
+            } else if (fcdpp) {
                 if (funcube_frequency(cube, requested)) goto done;
             } else if (afedri) {
                 if (afedri_frequency(net, requested)) goto done;
@@ -248,7 +259,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[SDR] Tuned to %.0f Hz; decoder may need to reacquire\n", freq);
         }
         if ((changed & 2) && requested_gain != gain) {
-            if (fcdpp) {
+            if (lime) {
+                double actual_gain = requested_gain;
+                if (lime_rx_gain(mini, &actual_gain)) goto done;
+                gain = actual_gain;
+            } else if (fcdpp) {
                 if (funcube_gain(cube, requested_gain)) goto done;
                 gain = requested_gain;
             } else if (afedri) {
@@ -278,7 +293,12 @@ int main(int argc, char **argv) {
         int output_error = iq_output_error(output);
         if (output_error) { fprintf(stderr, "IQ output: %s\n", strerror(output_error)); goto done; }
         size_t got = 0; void *buffers[] = {sdriq ? (void *)float_iq : ((hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq)};
-        if (fcdpp) {
+        if (lime) {
+            int n = lime_rx_read(mini, iq, block_samples);
+            if (n < 0) goto done;
+            if (!n) { if (lime_rx_report(mini)) goto done; continue; }
+            got = (size_t)n;
+        } else if (fcdpp) {
             int n = funcube_read(cube, iq, block_samples);
             if (n < 0) goto done;
             if (!n) continue;
@@ -347,12 +367,14 @@ int main(int argc, char **argv) {
         if (now-last_report >= 1) {
             report_output(output, rate, u8 ? 2 : 4, now-last_report, &previous, "Throughput");
             if (afedri) afedri_report(net);
+            if (lime && lime_rx_report(mini)) goto done;
             last_report = now;
         }
     }
     result = 0;
 done:
     free(shifted);
+    lime_rx_close(mini);
     funcube_close(cube);
     afedri_close(net);
     iq_record_stop(&capture);

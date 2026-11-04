@@ -4,6 +4,7 @@
 #include "sdriq.h"
 #include "funcube.h"
 #include "rtlsdr.h"
+#include "lime_rx.h"
 #include "iq_file.h"
 #include "iq_shift.h"
 #include <glib-unix.h>
@@ -38,7 +39,7 @@ typedef struct {
     GtkWidget *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
-    GtkWidget *hardware_entries[7][3], *ip_box, *port_box, *header_box, *center_box;
+    GtkWidget *hardware_entries[8][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
@@ -90,9 +91,9 @@ static gboolean valid_fec(App *a, int fec) {
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_FILE = 7 };
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "file"};
-static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "File (IQ)"};
+enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7, SOURCE_FILE = 8 };
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "file"};
+static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
@@ -258,8 +259,8 @@ static void build_pipeline(App *a) {
     if (a->window) add(s, "--control-stdin");
     } else {
         const char *section = sources[a->source];
-        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
-                                      a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
+                                      a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
         if (a->source == SOURCE_RTLSDR && !rtlsdr_rate_valid(sample_rate)) fatal("Invalid RTL-SDR sample rate: %d", sample_rate);
         if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
@@ -876,8 +877,8 @@ static void tune_step(App *a, int direction) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
-    double low = a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
-    double high = a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY : a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
+    double low = a->source == SOURCE_LIME ? LIME_RX_MIN_FREQUENCY : a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
+    double high = a->source == SOURCE_LIME ? LIME_RX_MAX_FREQUENCY : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY : a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
     if (next < low || next > high || (a->source == SOURCE_FCDPP && !funcube_frequency_valid(next))) { status(a, "SDR tuning limit reached"); return; }
     if (a->running) {
         char command[64];
@@ -905,7 +906,7 @@ static void gain_step(App *a, int direction) {
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
     double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
     double low = a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
-    double high = a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    double high = a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
     if (a->source == SOURCE_RTLSDR) next = CLAMP(next, low, high);
     if (next == gain || next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
@@ -1218,11 +1219,11 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->format_box, source_changed, a);
         g_signal_handlers_block_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
-                                  a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_LIME ? LIME_RX_MIN_FREQUENCY/1000.0 : a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
+                                  a->source == SOURCE_LIME ? LIME_RX_MAX_FREQUENCY/1000.0 : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
-                                  a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
+                                  a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),
             integer_setting(a, section, "sample_rate", 1, 100000000));
         if (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP) {
@@ -1531,6 +1532,7 @@ static void source_defaults(App *a) {
     const char *values[] = {"10000000", "437000000", "30", "", "", "TX/RX", "s16"};
     const char *sdriq_values[] = {"111111", "28000000", "10", "driver=rfspace,sdr-iq=/dev/ttyUSB0", "", "", "s16"};
     const char *rtlsdr_values[] = {"2400000", "437000000", "30", "driver=rtlsdr", "", "RX", "u8"};
+    const char *lime_values[] = {"10000000", "437000000", "30", "", "", "AUTO", "s16"};
     const char *funcube_values[] = {"192000", "437000000", "20", "lna=1,mixer=1", "", "", "s16"};
     const char *afedri_values[] = {"1010526", "28000000", "14", "", "", "", "s16"};
     const char *net_keys[] = {"ip", "port", "bind"};
@@ -1541,7 +1543,7 @@ static void source_defaults(App *a) {
     for (int j = 1; j < SOURCE_FILE; ++j)
         for (int i = 0; i < 7; ++i)
             if (!g_key_file_has_key(a->config, sources[j], keys[i], NULL))
-                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
+                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_LIME ? lime_values[i] : j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j) {
         if (!g_key_file_has_key(a->config,sources[j],"receiver_offset",NULL))
             g_key_file_set_double(a->config,sources[j],"receiver_offset",0);
@@ -1962,8 +1964,10 @@ static void create_config(App *a) {
             const char *net_keys[] = {"ip", "port", "bind"};
             const char *net_labels[] = {"Afedri IP address", "TCP / UDP port", "UDP bind address"};
             for (int field=0; field<(source == SOURCE_FCDPP ? 1 : 3); ++field) {
+                if (source == SOURCE_LIME && field == 1) continue;
                 GtkWidget *entry = entry_field(grid, source == SOURCE_AFEDRI ? net_labels[field] : labels[field],
                     field, a, sources[source], source == SOURCE_AFEDRI ? net_keys[field] : keys[field]);
+                if (source == SOURCE_LIME) gtk_widget_set_tooltip_text(entry, field == 0 ? "Empty for a single device, or serial=SERIAL to select a Mini. Native LimeSuite RX channel 0." : "AUTO switches LNAW below 2 GHz / LNAH from 2 GHz; or select LNAW or LNAH explicitly.");
                 if (source == SOURCE_FCDPP) gtk_widget_set_tooltip_text(entry, "Optional: hid=/dev/hidrawN,lna=0|1,mixer=0|1. Gain arrows set IF gain (0..59 dB). If the spectrum collapses at high IF gain, reduce IF gain or try lna=1,mixer=0 while stopped. The usable gain depends on the mixer setting and input signal.");
                 a->hardware_entries[source][field] = entry;
                 g_signal_connect(entry, "changed", G_CALLBACK(hardware_entry_changed), a);
@@ -2475,7 +2479,7 @@ int main(int argc, char **argv) {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},

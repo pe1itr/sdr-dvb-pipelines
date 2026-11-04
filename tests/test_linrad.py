@@ -282,7 +282,7 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn('--ldpc-batch', decoder)
 
     def test_direct_sdr_5ms(self):
-        for source, fmt in (("hackrf", "--u8"), ("b210", "--s16")):
+        for source, fmt in (("hackrf", "--u8"), ("b210", "--s16"), ("lime", "--s16")):
             p = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", "--source", source,
                                 "--standard", "DVB-S2", "--sr", "5000000", "--fec", "3/4"],
                                capture_output=True, text=True, timeout=3)
@@ -292,6 +292,47 @@ class PipelineTests(unittest.TestCase):
             self.assertIn(fmt, cmds[1])
             self.assertEqual(cmds[1][cmds[1].index("-f") + 1], "10000000")
             self.assertIn("0x80", cmds[1])
+
+    def test_lime_defaults_and_saved_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            del cfg['lime']  # Existing installations have no Lime section.
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', path, '--source', 'lime', '--print-pipeline'],
+                               capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            source = shlex.split(next(line for line in p.stdout.splitlines() if line.startswith("'")))
+            self.assertEqual(source[source.index('--sample-rate')+1], '10000000')
+            self.assertEqual(source[source.index('--antenna')+1], 'AUTO')
+            self.assertEqual(source[source.index('--format')+1], 's16')
+            cfg['session'] = {'source': 'lime', 'standard': 'DVB-T', 'sr': '40000', 'fec': '1/2'}
+            cfg['lime'] = {'sample_rate': '100000', 'format': 'u8', 'args': 'serial=123',
+                           'antenna': 'LNAW', 'filter_enabled': 'true', 'filter_bandwidth': '50000'}
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', path, '--print-pipeline'],
+                               capture_output=True, text=True, timeout=3)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            source, decoder, _ = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+            self.assertIn('lime', source)
+            self.assertIn('serial=123', source)
+            self.assertIn('LNAW', source)
+            self.assertIn('--filter-bandwidth', source)
+            self.assertEqual(decoder[decoder.index('--sample-rate')+1], '100000')
+            self.assertEqual(decoder[decoder.index('--input-format')+1], 'u8')
+            cfg['lime']['sample_rate'] = '30720001'
+            self.write_config(cfg, path)
+            p = subprocess.run([UI, '--config', path, '--print-pipeline'], capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2)
+
+    def test_lime_rejects_invalid_settings_before_hardware(self):
+        for option, value in (('--sample-rate', '99999'), ('--sample-rate', '30720001'),
+                              ('--sample-rate', '100000.5'), ('--frequency', '9999999'),
+                              ('--frequency', '3500000001'), ('--gain', '-1'),
+                              ('--gain', '74'), ('--gain', '30.5')):
+            p = subprocess.run([ROOT / 'build/sdr_to_stdout', '--source', 'lime', option, value],
+                               capture_output=True, timeout=3)
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn(b'LimeSDR Mini:', p.stderr)
 
     def test_rtlsdr_pipeline_defaults_formats_and_saved_session(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -19,6 +19,19 @@ GLIB_CFLAGS := $(shell pkg-config --cflags glib-2.0)
 FILTER_CFLAGS := $(shell pkg-config --cflags fftw3f)
 FILTER_LIBS := $(shell pkg-config --libs fftw3f)
 
+# Optional native LimeSDR Mini RX. Set PKG_CONFIG_PATH for a private LimeSuite.
+HAVE_LIME := $(shell pkg-config --exists LimeSuite && echo 1)
+ifeq ($(HAVE_LIME),1)
+LIME_CFLAGS := -DHAVE_LIME $(shell pkg-config --cflags LimeSuite)
+LIME_LIBS := $(shell pkg-config --libs LimeSuite) -Wl,-rpath,$(shell pkg-config --variable=libdir LimeSuite)
+endif
+
+# Rebuild the SDR helper when the optional backend or its location changes.
+.PHONY: FORCE_LIME_CONFIG
+$(BUILD_DIR)/lime-config: FORCE_LIME_CONFIG | $(BUILD_DIR)
+	@printf '%s\n' '$(LIME_CFLAGS) $(LIME_LIBS)' > $@.tmp
+	@cmp -s $@.tmp $@ || cp $@.tmp $@
+
 GLIB_LIBS := $(shell pkg-config --libs glib-2.0)
 JSON_CFLAGS := $(shell pkg-config --cflags json-c)
 JSON_LIBS := $(shell pkg-config --libs json-c)
@@ -71,6 +84,7 @@ $(BUILD_DIR)/scatter/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SCATTER_DIR)/src/*
 
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
+GUI_HEADERS += src/lime_rx.h
 GUI_SOURCES += src/program_view.c
 GUI_HEADERS += src/program_view.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
@@ -118,8 +132,9 @@ test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(BUILD_DIR)/sdr_to_stdout: src/funcube.c src/afedri.c src/afedri.h src/sdr_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_output.c src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.c src/iq_record.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) src/sdr_to_stdout.c src/funcube.c src/afedri.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(FILTER_LIBS) -lm $(LDLIBS)
+SDR_SOURCES := src/sdr_to_stdout.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
+$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(LIME_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_iq_output.c src/iq_output.c -o $@ $(LDFLAGS) -pthread $(LDLIBS)
@@ -147,6 +162,18 @@ test-iq-conversion: $(BUILD_DIR)/iq_conversion_probe
 	python3 tests/test_iq_conversion.py
 
 test: test-iq-conversion
+
+.PHONY: test-lime
+ifeq ($(HAVE_LIME),1)
+$(BUILD_DIR)/test_lime_rx: tests/test_lime_rx.c src/lime_rx.c src/lime_rx.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIME_CFLAGS) tests/test_lime_rx.c src/lime_rx.c -o $@ $(LDFLAGS) -lm $(LDLIBS)
+test-lime: $(BUILD_DIR)/test_lime_rx
+	./$(BUILD_DIR)/test_lime_rx
+else
+test-lime:
+	@echo "Skipping native Lime RX tests: LimeSuite development files unavailable"
+endif
+test: test-lime
 
 $(BUILD_DIR)/test_tune_control: tests/test_tune_control.c src/tune_control.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) -lm $(LDLIBS)

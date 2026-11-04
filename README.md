@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+ and IQ files), run `python3 tools/build.py` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+, LimeSDR Mini and IQ files), run `python3 tools/build.py` followed by
 `./build/linrad_dvb`. First copy `linrad-dvb.example.ini` to `linrad-dvb.ini`.
 Set parameters directly in the GUI and edit the local `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -1791,6 +1791,62 @@ without increasing their size. B210 defaults to `s16` to preserve its resolution
 20 MB/s and 40 MB/s respectively. LeanDVB's normal decoder converts both formats
 to float internally, so the smaller pipe traffic is not a guarantee of faster
 DVB-S2/LDPC decoding. B210 USB transport remains `sc16` with either output format.
+
+### LimeSDR Mini v1.2 ontvangst
+
+Kies **SDR → Input / SDR → LimeSDR Mini v1.2**, of start met
+`./build/linrad_dvb --source lime`. De native LimeSuite-aansturing volgt de
+apparaatinitialisatie van `datv-transmitter`, met RX op kanaal 0 en TX uit.
+Deze backend accepteert de originele Mini v1.x, inclusief v1.2.
+
+- Samplerate: **100000–30720000 samples/s**; standaard 10 MS/s.
+- Frequentie: **10 MHz–3,5 GHz**; standaard 437 MHz.
+- Gain: **0–73**, stappen van 1 op de unsigned LimeSuite RX-gainschaal.
+  De hardwarewaarde wordt teruggelezen en gelogd; de instelling is geen
+  gekalibreerde absolute RF-versterking.
+- **Device arguments**: leeg bij één apparaat, of `serial=SERIAL` met het
+  volledige serienummer. Bij meerdere apparaten is selectie verplicht.
+- **Antenna**: `AUTO` kiest LNAW onder 2 GHz en LNAH vanaf 2 GHz op dezelfde
+  RX-SMA-aansluiting; `LNAW` en `LNAH` kunnen ook expliciet worden gekozen.
+- IQ is standaard `s16`, met behoud van de 12-bit ADC-resolutie; `u8` is
+  beschikbaar met verlies van precisie. Spectrum, audio-monitor, opname,
+  digitale filtering en DVB receiver offset gebruiken de bestaande IQ-keten.
+
+Frequentie en gain werken ook tijdens ontvangst. Bij afstemmen pauzeert de
+RX-stream voor kalibratie en start daarna opnieuw; de decoder moet opnieuw
+locken. Voor smalle DATV-instellingen kalibreert de driver op een hogere
+samplerate en zet vervolgens de gekozen samplerate terug. Het analoge RX-filter
+is minimaal 1,5 MHz; gebruik voor een smal kanaal het digitale IQ-filter.
+Een afwijkende hardware-samplerate wordt geweigerd. **W** bewaart de
+instellingen onder `[lime]`; bestaande configuraties krijgen automatisch defaults.
+
+Installeer de klassieke **LimeSuite** ontwikkelbestanden (`LimeSuite.pc`,
+`lime/LimeSuite.h`, `libLimeSuite`) en bouw opnieuw. SoapyLMS7 is niet nodig.
+Zonder LimeSuite blijft de rest van het programma bouwen, maar geeft de
+LimeSDR-ingang bij starten een duidelijke foutmelding. Voor de lokale
+installatie die ook `datv-transmitter` gebruikt:
+
+```bash
+export PKG_CONFIG_PATH="$HOME/repos/datv-transmitter/build/limesuite/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+python3 tools/build.py -j4
+./build/linrad_dvb --source lime
+```
+
+De build neemt het librarypad op in de RX-helper. Het project vereist geen
+naastgelegen checkout als LimeSuite via de normale pkg-config-paden beschikbaar
+is. Bij wisselen van LimeSuite-installatie of bouwen zonder LimeSuite wordt de
+helper automatisch opnieuw gebouwd. De bestaande shellscriptprofielen blijven
+een afzonderlijke workflow; `lime` is een bron in de C-ontvanger.
+
+`make test-lime` test de native API met een gesimuleerd apparaat tegen de echte
+LimeSuite-headers, zonder USB te openen. De algemene tests controleren ook
+GUI-bediening, pipelineopbouw, configuratie en invoergrenzen. RF-ontvangst en
+duurzame doorvoer op 30,72 MS/s moeten op echte hardware worden geverifieerd.
+Hardwarelimieten: [Mini v1.2 specificaties](https://myriadrf.org/projects/limesdr-mini/)
+en [RF-paden](https://myriadrf.org/projects/limesdr-mini/reference/v1.2/rfcontrol.html);
+API: [LimeSuite](https://github.com/myriadrf/LimeSuite).
+
+### B210 input and shared IQ buffering
 
 The B210 input follows `atv-receiver-analog`: UHD, channel 0, internal clock, and
 Kintex-7 images from `[b210] images` (default

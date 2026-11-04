@@ -24,7 +24,7 @@ static void exercise_live_gain_locale(App *a) {
     const struct { int source; double initial, low, high, step; } cases[] = {
         {1, 40, 0, 116, 1}, {2, 30.5, 0, 76, 1},
         {3, -10, -20, 10, 10}, {SOURCE_AFEDRI, 14, -10, 35, 3},
-        {SOURCE_FCDPP, 20, 0, 59, 1}
+        {SOURCE_FCDPP, 20, 0, 59, 1}, {SOURCE_LIME, 30, 0, 73, 1}
     };
     for (unsigned i = 0; i < G_N_ELEMENTS(cases); ++i) {
         a->source = cases[i].source;
@@ -114,6 +114,36 @@ static void exercise_record_controls(App *a) {
     a->source = source; a->running = FALSE; a->tune_fd = -1;
     close(fds[0]); close(fds[1]); record_refresh(a);
     status(a, "");
+}
+
+static void exercise_lime(App *a) {
+    int source=a->source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_LIME);
+    g_assert_true(hardware_source(a));
+    g_assert_null(a->hardware_entries[SOURCE_LIME][1]);
+    double low, high;
+    gtk_spin_button_get_range(GTK_SPIN_BUTTON(a->rate_box), &low, &high);
+    g_assert_cmpfloat(low, ==, 100000); g_assert_cmpfloat(high, ==, 30720000);
+    gtk_spin_button_get_range(GTK_SPIN_BUTTON(a->frequency_box), &low, &high);
+    g_assert_cmpfloat(low, ==, 10000); g_assert_cmpfloat(high, ==, 3500000);
+    gtk_entry_set_text(GTK_ENTRY(a->hardware_entries[SOURCE_LIME][0]), "serial=123");
+    gtk_entry_set_text(GTK_ENTRY(a->hardware_entries[SOURCE_LIME][2]), "AUTO");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box), 30720000);
+    tune_step(a,1); gain_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"lime","frequency",NULL), ==, 437001000);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"lime","gain",NULL), ==, 31);
+    char *preview=describe(a);
+    g_assert_nonnull(strstr(preview,"'--source' 'lime'"));
+    g_assert_nonnull(strstr(preview,"'--sample-rate' '30720000'"));
+    g_assert_nonnull(strstr(preview,"'--args' 'serial=123'"));
+    g_free(preview);
+    g_key_file_set_double(a->config,"lime","gain",73);
+    gain_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"lime","gain",NULL), ==, 73);
+    g_key_file_set_double(a->config,"lime","frequency",3.5e9);
+    tune_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"lime","frequency",NULL), ==, 3.5e9);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
 }
 
 static void exercise_rtlsdr(App *a) {
@@ -1034,6 +1064,7 @@ static gboolean exercise(gpointer data) {
         exercise_record_controls(a);
         exercise_afedri(a);
         exercise_rtlsdr(a);
+        exercise_lime(a);
         exercise_funcube(a);
         exercise_receiver_offset(a);
         exercise_live_gain_locale(a);
