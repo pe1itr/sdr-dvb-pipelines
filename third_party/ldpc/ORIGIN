@@ -11,8 +11,11 @@ Local integration changes:
 - --framed local protocol: native uint32 batch length (1..32), followed by that
   many complete int8 LLR frames. Output has the same length and frame order.
   Both ends are built together. Legacy raw input remains batches of 32.
-- One-frame batches use a narrow SIMD<int8_t,1> specialization; larger batches
-  retain the wide SIMD decoder. Same min-sum-C arithmetic and 25-iteration cap.
+- AVX2 builds use the SSE4.1 SIMD<int8_t,16> specialization for batches of 1..16
+  frames, including single-frame low-latency operation without extra waiting.
+  Batches of 17..32 retain the AVX2 decoder and are not split, preserving the
+  batch convergence criterion. Other builds retain scalar single frames and
+  their existing wide decoder. Same min-sum-C arithmetic and 25-iteration cap.
 - Exact reads/writes with EINTR handling; reject truncated records at EOF.
 - Initialize unused SIMD lanes; aligned workspaces also support narrow decoding.
 - Skip resetting message workspace when the initial parity check already passes.

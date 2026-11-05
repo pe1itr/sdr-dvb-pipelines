@@ -1,0 +1,1260 @@
+{
+  "date": "2026-11-05",
+  "status": "Integrated into the normal AVX2 helper after passing regression tests",
+  "baseline_commit": "eb2e09dcac63d8dcf9fce4ace0fec19e894c3616",
+  "host": {
+    "cpu": "AMD Ryzen 7 5800H",
+    "architecture": "x86_64",
+    "compiler": "g++ (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)"
+  },
+  "production_change": "SSE4.1 SIMD16 for actual batches 1..16 in the AVX2 helper; unsplit AVX2 SIMD32 for 17..32. Other builds retain their prior policy.",
+  "preserved": [
+    "Single actual frame per weak-signal batch; no added waiting",
+    "25 LDPC iterations",
+    "Same min-sum-C arithmetic",
+    "Existing worker count and throughput batching",
+    "Frame order and EOF tail handling"
+  ],
+  "prototype_against_preserved_original": {
+    "candidate": "/tmp/linrad-ldpc-investigation/single16-plain",
+    "version": "linrad LDPC 6ada4aa SIMD=32 low-latency=1",
+    "portable": false,
+    "reference": "/tmp/linrad-ldpc-integration/baseline",
+    "tables": [
+      {
+        "table": "B1",
+        "modcod": 1,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "a5e9e31cc28c87d178a533646655363ff0e73980dee09b3a1d791b7cea69f390"
+      },
+      {
+        "table": "B2",
+        "modcod": 2,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "33a1ba68eea8345c68f0a178c3215f9870c8587444c068ee26a810f0292ebd52"
+      },
+      {
+        "table": "B3",
+        "modcod": 3,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "9c75e13f2e9d6b031dda76694407e5200ce75e16da8412c54a36a262f7fb6af1"
+      },
+      {
+        "table": "B4",
+        "modcod": 4,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "0db0f81856c3cbc8f09230bd07108e9030d3e00e9621e085acaca9331ba81dc8"
+      },
+      {
+        "table": "B5",
+        "modcod": 5,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "6f6fa35422fa9cf256d42d12aa27be3f3256853574f28ebc52cd12ea5d4f27fe"
+      },
+      {
+        "table": "B6",
+        "modcod": 6,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "d6e3b092c5c58446d4cb5875f0c02ce39696a8e125332357f991ee7e90bf51a7"
+      },
+      {
+        "table": "B7",
+        "modcod": 7,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "5b9b12d9fcd4b2e9553b3f6d23c4bad9999d40938e929af8331d492ab8eff9e3"
+      },
+      {
+        "table": "B8",
+        "modcod": 8,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "c709c9155350f7d30517743c911748a1825fa801fbd50e58dcabfc0d09a64aba"
+      },
+      {
+        "table": "B9",
+        "modcod": 9,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "2c08fd2658d3b7ec77dfb8b2d07c07b357430a3632ff64433cdcedef9cf102c2"
+      },
+      {
+        "table": "B10",
+        "modcod": 10,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "838f58ae69744230e897f741794279b885aece19fc7722b07c3c2c950c32ebab"
+      },
+      {
+        "table": "B11",
+        "modcod": 11,
+        "short": false,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "ca3387f0a9bba4cc536cb40e5b89734e3648bac0d291fdbe10071565e5693753"
+      },
+      {
+        "table": "C1",
+        "modcod": 1,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "8b196359e526d8a823e788a1bad08f395d92c363b3257f46f8fd7737a7199be6"
+      },
+      {
+        "table": "C2",
+        "modcod": 2,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "00c2fa2f97b9af5c5067656837778b4aeccb021f5bb0c4f6b89cbcb51241c5e8"
+      },
+      {
+        "table": "C3",
+        "modcod": 3,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "347958453218ccc6e90006f36da3afde1907c05668a6e8322e3b89a250dfa5e6"
+      },
+      {
+        "table": "C4",
+        "modcod": 4,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "64a574c9f96f29a77f436227fa5699490631ad2bb9962b9fb5ecb1e8d620cfbc"
+      },
+      {
+        "table": "C5",
+        "modcod": 5,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "b313c09a0f97dacf81e68226c43871628ad26a5ca45c2b31ac7bc8ac04f465f9"
+      },
+      {
+        "table": "C6",
+        "modcod": 6,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "1029a2f2dbfac6e1615ca20bbdf8fbe91e21f39773ec4f07500e5ba6922993d3"
+      },
+      {
+        "table": "C7",
+        "modcod": 7,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "395a6b51fbe3f9141d5db11a724b908fdc2fb5fd0c8455bec11a2cc262b5421f"
+      },
+      {
+        "table": "C8",
+        "modcod": 8,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "d225a32a83366afc77c71518d49a701a56eeff37457499a6a1723ea629cbe3ed"
+      },
+      {
+        "table": "C9",
+        "modcod": 9,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "7feb286c51aaaf7fab754ac08193822347fd1e4a01a563b1a5eb12888c6a0d95"
+      },
+      {
+        "table": "C10",
+        "modcod": 10,
+        "short": true,
+        "batches": [
+          1,
+          1,
+          1,
+          32,
+          1,
+          16,
+          2,
+          17,
+          15,
+          31,
+          1,
+          1
+        ],
+        "frames": 119,
+        "valid": 89,
+        "failed": 30,
+        "decoded_sha256": "38c69204163874e1b88a5f9eb6698117db0e8ab48e52aa36fbe8ce3e7bfef282"
+      }
+    ],
+    "modcod_mappings": [
+      {
+        "modcod": 1,
+        "short": false,
+        "table": "B1"
+      },
+      {
+        "modcod": 2,
+        "short": false,
+        "table": "B2"
+      },
+      {
+        "modcod": 3,
+        "short": false,
+        "table": "B3"
+      },
+      {
+        "modcod": 4,
+        "short": false,
+        "table": "B4"
+      },
+      {
+        "modcod": 5,
+        "short": false,
+        "table": "B5"
+      },
+      {
+        "modcod": 6,
+        "short": false,
+        "table": "B6"
+      },
+      {
+        "modcod": 7,
+        "short": false,
+        "table": "B7"
+      },
+      {
+        "modcod": 8,
+        "short": false,
+        "table": "B8"
+      },
+      {
+        "modcod": 9,
+        "short": false,
+        "table": "B9"
+      },
+      {
+        "modcod": 10,
+        "short": false,
+        "table": "B10"
+      },
+      {
+        "modcod": 11,
+        "short": false,
+        "table": "B11"
+      },
+      {
+        "modcod": 12,
+        "short": false,
+        "table": "B5"
+      },
+      {
+        "modcod": 13,
+        "short": false,
+        "table": "B6"
+      },
+      {
+        "modcod": 14,
+        "short": false,
+        "table": "B7"
+      },
+      {
+        "modcod": 15,
+        "short": false,
+        "table": "B9"
+      },
+      {
+        "modcod": 16,
+        "short": false,
+        "table": "B10"
+      },
+      {
+        "modcod": 17,
+        "short": false,
+        "table": "B11"
+      },
+      {
+        "modcod": 18,
+        "short": false,
+        "table": "B6"
+      },
+      {
+        "modcod": 19,
+        "short": false,
+        "table": "B7"
+      },
+      {
+        "modcod": 20,
+        "short": false,
+        "table": "B8"
+      },
+      {
+        "modcod": 21,
+        "short": false,
+        "table": "B9"
+      },
+      {
+        "modcod": 22,
+        "short": false,
+        "table": "B10"
+      },
+      {
+        "modcod": 23,
+        "short": false,
+        "table": "B11"
+      },
+      {
+        "modcod": 24,
+        "short": false,
+        "table": "B7"
+      },
+      {
+        "modcod": 25,
+        "short": false,
+        "table": "B8"
+      },
+      {
+        "modcod": 26,
+        "short": false,
+        "table": "B8"
+      },
+      {
+        "modcod": 27,
+        "short": false,
+        "table": "B10"
+      },
+      {
+        "modcod": 28,
+        "short": false,
+        "table": "B11"
+      },
+      {
+        "modcod": 1,
+        "short": true,
+        "table": "C1"
+      },
+      {
+        "modcod": 2,
+        "short": true,
+        "table": "C2"
+      },
+      {
+        "modcod": 3,
+        "short": true,
+        "table": "C3"
+      },
+      {
+        "modcod": 4,
+        "short": true,
+        "table": "C4"
+      },
+      {
+        "modcod": 5,
+        "short": true,
+        "table": "C5"
+      },
+      {
+        "modcod": 6,
+        "short": true,
+        "table": "C6"
+      },
+      {
+        "modcod": 7,
+        "short": true,
+        "table": "C7"
+      },
+      {
+        "modcod": 8,
+        "short": true,
+        "table": "C8"
+      },
+      {
+        "modcod": 9,
+        "short": true,
+        "table": "C9"
+      },
+      {
+        "modcod": 10,
+        "short": true,
+        "table": "C10"
+      },
+      {
+        "modcod": 12,
+        "short": true,
+        "table": "C5"
+      },
+      {
+        "modcod": 13,
+        "short": true,
+        "table": "C6"
+      },
+      {
+        "modcod": 14,
+        "short": true,
+        "table": "C7"
+      },
+      {
+        "modcod": 15,
+        "short": true,
+        "table": "C9"
+      },
+      {
+        "modcod": 16,
+        "short": true,
+        "table": "C10"
+      },
+      {
+        "modcod": 18,
+        "short": true,
+        "table": "C6"
+      },
+      {
+        "modcod": 19,
+        "short": true,
+        "table": "C7"
+      },
+      {
+        "modcod": 20,
+        "short": true,
+        "table": "C8"
+      },
+      {
+        "modcod": 21,
+        "short": true,
+        "table": "C9"
+      },
+      {
+        "modcod": 22,
+        "short": true,
+        "table": "C10"
+      },
+      {
+        "modcod": 24,
+        "short": true,
+        "table": "C7"
+      },
+      {
+        "modcod": 25,
+        "short": true,
+        "table": "C8"
+      },
+      {
+        "modcod": 26,
+        "short": true,
+        "table": "C8"
+      },
+      {
+        "modcod": 27,
+        "short": true,
+        "table": "C10"
+      }
+    ],
+    "reserved_mappings": 12,
+    "invalid_records": 10,
+    "elapsed_s": 28.8360696689997
+  },
+  "integrated_checks": [
+    {
+      "command": "make all test-ldpc test-leansdr",
+      "build_passed": true,
+      "ldpc_matrix_passed": true,
+      "note": "Initial integration-suite invocation passed nine tests; two local UDP tests were blocked by the sandbox."
+    },
+    {
+      "command": "make test-leansdr",
+      "passed": true,
+      "tests": 11,
+      "note": "Rerun with local socket access; all tests passed, including fragmented protocol/portable equivalence, parallel batches/order/tail, weak reception/fading, and telemetry."
+    },
+    {
+      "check": "Research source generation",
+      "passed": true,
+      "note": "All historical variants and current-source profiling anchors validated after integration."
+    }
+  ],
+  "build": {
+    "source_and_binary_sha256": {
+      "third_party/ldpc/ldpc_tool.cc": "58a12b55e1366ac39d7612c7b4413e1cdfc2c384562d1f06148d81a173ae10dd",
+      "tests/ldpc_fixture.cc": "d728b66c59c7548a2ce4fa0dec159b3226e95ac2652c6492b978464e02fe0ecb",
+      "tests/test_ldpc_batches.py": "30c1d0eed7484fb1dddcf275fadbed439c073b02fe12a30dc161090348f27c3c",
+      "tools/ldpc_experiment.py": "26a987e1e0acb77c109e0d39aeda54cc42fb9064c2aa9be488bb5b1fada06247",
+      "build/ldpc_tool": "8461700302168a51731b11ee3b3c36d86e504ad6733fc760dbd232b80a84b00f",
+      "build/ldpc_tool_avx2": "823d7786c6559565d457182deef2873639db2663c6ecbba9033b72f2bd9e4508"
+    },
+    "baseline_binary_sha256": {
+      "baseline": "da96ff5600788543164772f6b8d90690ca58499186aa94ade7ec1332854b2dec",
+      "baseline_avx2": "bf9d8ac944bac268f3b500e639770a7ffe972e60f7e8871cf6ebf86c53c2db1b"
+    },
+    "integrated_version": "linrad LDPC 6ada4aa SIMD=32 low-latency=1 small-batch-simd=16"
+  },
+  "live_comparisons": [
+    {
+      "case": {
+        "name": "dl4fbn",
+        "path": "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+        "rate": 1010526,
+        "header_bytes": 41,
+        "sr": 125000,
+        "modcods": 16,
+        "batch": 1,
+        "workers": 1,
+        "fastlock": true,
+        "samples": 217956352,
+        "duration_s": 215.68604073522107
+      },
+      "baseline_runs": [
+        {
+          "case": "dl4fbn",
+          "label": "baseline",
+          "command": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+            "--decoder-worker=leansdr",
+            "--s16",
+            "-f",
+            "1010526",
+            "--sr",
+            "125000",
+            "--standard",
+            "DVB-S2",
+            "--sampler",
+            "rrc",
+            "--rrc-steps",
+            "8",
+            "--rrc-rej",
+            "10",
+            "--framesizes",
+            "3",
+            "--modcods",
+            "16",
+            "--ldpc-helper",
+            "builtin",
+            "--ldpc-batch",
+            "1",
+            "--nhelpers",
+            "1",
+            "-v",
+            "--fastlock",
+            "--fd-bbf",
+            "5",
+            "--fd-info",
+            "6"
+          ],
+          "feeder": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+            "--in",
+            "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+            "--sample-rate",
+            "1010526",
+            "--input-format",
+            "s16",
+            "--header-bytes",
+            "41"
+          ],
+          "helper": "builtin",
+          "capture_every": 0,
+          "elapsed_s": 217.43317674699938,
+          "first_ts_s": 0.9113458919964614,
+          "input_samples": 217956352,
+          "source_elapsed_s": 217.404,
+          "expected_duration_s": 215.68604073522107,
+          "decoder_and_helpers": {
+            "cpu_s": 47.13,
+            "user_s": 45.49,
+            "system_s": 1.64,
+            "elapsed_s": 217.43,
+            "rss_kib": 108924
+          },
+          "source": {
+            "cpu_s": 3.55,
+            "user_s": 1.72,
+            "system_s": 1.83,
+            "elapsed_s": 217.41,
+            "rss_kib": 4000
+          },
+          "ts_bytes": 181420,
+          "ts_sha256": "06eff9fd7121afae416a4fa76ed0f6a974a65bd2e4181a37e88fbca70ca70940",
+          "bb_bytes": 206565,
+          "bb_sha256": "48f4109a1052308aa26fc469dd13b0239f74c11b9486245e6b551864a925d008",
+          "ldpc": {
+            "batches": 0,
+            "frames": 0,
+            "batch_frames_simd_width": {},
+            "iterations": {},
+            "exhausted_batches": 0,
+            "pack_cpu_s": 0,
+            "decode_cpu_s": 0,
+            "unpack_cpu_s": 0,
+            "init_cpu_s": 0
+          }
+        }
+      ],
+      "integrated_run": {
+        "case": "dl4fbn",
+        "label": "integrated",
+        "command": [
+          "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+          "--decoder-worker=leansdr",
+          "--s16",
+          "-f",
+          "1010526",
+          "--sr",
+          "125000",
+          "--standard",
+          "DVB-S2",
+          "--sampler",
+          "rrc",
+          "--rrc-steps",
+          "8",
+          "--rrc-rej",
+          "10",
+          "--framesizes",
+          "3",
+          "--modcods",
+          "16",
+          "--ldpc-helper",
+          "builtin",
+          "--ldpc-batch",
+          "1",
+          "--nhelpers",
+          "1",
+          "-v",
+          "--fastlock",
+          "--fd-bbf",
+          "5",
+          "--fd-info",
+          "6"
+        ],
+        "feeder": [
+          "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+          "--in",
+          "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+          "--sample-rate",
+          "1010526",
+          "--input-format",
+          "s16",
+          "--header-bytes",
+          "41"
+        ],
+        "helper": "builtin",
+        "capture_every": 0,
+        "elapsed_s": 217.42912390900165,
+        "first_ts_s": 0.9061536329973023,
+        "last_ts_s": 192.36231043099542,
+        "input_samples": 217956352,
+        "source_elapsed_s": 217.395,
+        "expected_duration_s": 215.68604073522107,
+        "decoder_and_helpers": {
+          "cpu_s": 38.300000000000004,
+          "user_s": 36.49,
+          "system_s": 1.81,
+          "elapsed_s": 217.41,
+          "rss_kib": 108236
+        },
+        "source": {
+          "cpu_s": 3.27,
+          "user_s": 1.68,
+          "system_s": 1.59,
+          "elapsed_s": 217.39,
+          "rss_kib": 4116
+        },
+        "ts_bytes": 181420,
+        "ts_sha256": "06eff9fd7121afae416a4fa76ed0f6a974a65bd2e4181a37e88fbca70ca70940",
+        "bb_bytes": 206565,
+        "bb_sha256": "48f4109a1052308aa26fc469dd13b0239f74c11b9486245e6b551864a925d008",
+        "ldpc": null
+      },
+      "identical_input_count_ts_and_bb": true,
+      "baseline_median_decoder_and_helpers_cpu_s": 47.13,
+      "integrated_decoder_and_helpers_cpu_s": 38.300000000000004,
+      "cpu_reduction_percent": 18.735412688308926
+    },
+    {
+      "case": {
+        "name": "1291-fast",
+        "path": "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "rate": 6000000,
+        "header_bytes": 0,
+        "sr": 5000000,
+        "modcods": 16384,
+        "batch": 32,
+        "workers": 1,
+        "fastlock": false,
+        "samples": 293994496,
+        "duration_s": 48.999082666666666
+      },
+      "baseline_runs": [
+        {
+          "case": "1291-fast",
+          "label": "baseline",
+          "command": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+            "--decoder-worker=leansdr",
+            "--s16",
+            "-f",
+            "6000000",
+            "--sr",
+            "5000000",
+            "--standard",
+            "DVB-S2",
+            "--sampler",
+            "rrc",
+            "--rrc-steps",
+            "8",
+            "--rrc-rej",
+            "10",
+            "--framesizes",
+            "3",
+            "--modcods",
+            "16384",
+            "--ldpc-helper",
+            "builtin",
+            "--ldpc-batch",
+            "32",
+            "--nhelpers",
+            "1",
+            "-v",
+            "--fd-bbf",
+            "5",
+            "--fd-info",
+            "6"
+          ],
+          "feeder": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+            "--in",
+            "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+            "--sample-rate",
+            "6000000",
+            "--input-format",
+            "s16",
+            "--header-bytes",
+            "0"
+          ],
+          "helper": "builtin",
+          "capture_every": 0,
+          "elapsed_s": 49.14707639400149,
+          "first_ts_s": 0.3085208470001817,
+          "input_samples": 293994496,
+          "source_elapsed_s": 49.113,
+          "expected_duration_s": 48.999082666666666,
+          "decoder_and_helpers": {
+            "cpu_s": 49.48,
+            "user_s": 47.73,
+            "system_s": 1.75,
+            "elapsed_s": 49.13,
+            "rss_kib": 70888
+          },
+          "source": {
+            "cpu_s": 2.0,
+            "user_s": 1.17,
+            "system_s": 0.83,
+            "elapsed_s": 49.11,
+            "rss_kib": 3984
+          },
+          "ts_bytes": 68214860,
+          "ts_sha256": "e01127b97943c1af70968c7b4833da2a34e497d0533b9a4c46e779b4a48956c5",
+          "bb_bytes": 68327892,
+          "bb_sha256": "189ede0202c86436a7ea0f51e71b1cff62d17e4c2ba0c4bd56eb284aab8559cc",
+          "ldpc": {
+            "batches": 0,
+            "frames": 0,
+            "batch_frames_simd_width": {},
+            "iterations": {},
+            "exhausted_batches": 0,
+            "pack_cpu_s": 0,
+            "decode_cpu_s": 0,
+            "unpack_cpu_s": 0,
+            "init_cpu_s": 0
+          }
+        },
+        {
+          "case": "1291-fast",
+          "label": "baseline2",
+          "command": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+            "--decoder-worker=leansdr",
+            "--s16",
+            "-f",
+            "6000000",
+            "--sr",
+            "5000000",
+            "--standard",
+            "DVB-S2",
+            "--sampler",
+            "rrc",
+            "--rrc-steps",
+            "8",
+            "--rrc-rej",
+            "10",
+            "--framesizes",
+            "3",
+            "--modcods",
+            "16384",
+            "--ldpc-helper",
+            "builtin",
+            "--ldpc-batch",
+            "32",
+            "--nhelpers",
+            "1",
+            "-v",
+            "--fd-bbf",
+            "5",
+            "--fd-info",
+            "6"
+          ],
+          "feeder": [
+            "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+            "--in",
+            "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+            "--sample-rate",
+            "6000000",
+            "--input-format",
+            "s16",
+            "--header-bytes",
+            "0"
+          ],
+          "helper": "builtin",
+          "capture_every": 0,
+          "elapsed_s": 49.13526125300268,
+          "first_ts_s": 0.3056943039991893,
+          "last_ts_s": 49.12563866900018,
+          "input_samples": 293994496,
+          "source_elapsed_s": 49.119,
+          "expected_duration_s": 48.999082666666666,
+          "decoder_and_helpers": {
+            "cpu_s": 50.18,
+            "user_s": 48.36,
+            "system_s": 1.82,
+            "elapsed_s": 49.13,
+            "rss_kib": 70304
+          },
+          "source": {
+            "cpu_s": 1.97,
+            "user_s": 1.17,
+            "system_s": 0.8,
+            "elapsed_s": 49.12,
+            "rss_kib": 3640
+          },
+          "ts_bytes": 68214860,
+          "ts_sha256": "e01127b97943c1af70968c7b4833da2a34e497d0533b9a4c46e779b4a48956c5",
+          "bb_bytes": 68327892,
+          "bb_sha256": "189ede0202c86436a7ea0f51e71b1cff62d17e4c2ba0c4bd56eb284aab8559cc",
+          "ldpc": {
+            "batches": 0,
+            "frames": 0,
+            "helper_starts": 0,
+            "batch_frames_simd_width": {},
+            "iterations": {},
+            "exhausted_batches": 0,
+            "pack_cpu_s": 0,
+            "decode_cpu_s": 0,
+            "unpack_cpu_s": 0,
+            "init_cpu_s": 0
+          }
+        }
+      ],
+      "integrated_run": {
+        "case": "1291-fast",
+        "label": "integrated",
+        "command": [
+          "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+          "--decoder-worker=leansdr",
+          "--s16",
+          "-f",
+          "6000000",
+          "--sr",
+          "5000000",
+          "--standard",
+          "DVB-S2",
+          "--sampler",
+          "rrc",
+          "--rrc-steps",
+          "8",
+          "--rrc-rej",
+          "10",
+          "--framesizes",
+          "3",
+          "--modcods",
+          "16384",
+          "--ldpc-helper",
+          "builtin",
+          "--ldpc-batch",
+          "32",
+          "--nhelpers",
+          "1",
+          "-v",
+          "--fd-bbf",
+          "5",
+          "--fd-info",
+          "6"
+        ],
+        "feeder": [
+          "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+          "--in",
+          "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+          "--sample-rate",
+          "6000000",
+          "--input-format",
+          "s16",
+          "--header-bytes",
+          "0"
+        ],
+        "helper": "builtin",
+        "capture_every": 0,
+        "elapsed_s": 49.134376589005115,
+        "first_ts_s": 0.29831900499993935,
+        "last_ts_s": 49.12221288100409,
+        "input_samples": 293994496,
+        "source_elapsed_s": 49.113,
+        "expected_duration_s": 48.999082666666666,
+        "decoder_and_helpers": {
+          "cpu_s": 46.97,
+          "user_s": 45.31,
+          "system_s": 1.66,
+          "elapsed_s": 49.13,
+          "rss_kib": 70936
+        },
+        "source": {
+          "cpu_s": 2.01,
+          "user_s": 1.19,
+          "system_s": 0.82,
+          "elapsed_s": 49.11,
+          "rss_kib": 3736
+        },
+        "ts_bytes": 68214860,
+        "ts_sha256": "e01127b97943c1af70968c7b4833da2a34e497d0533b9a4c46e779b4a48956c5",
+        "bb_bytes": 68327892,
+        "bb_sha256": "189ede0202c86436a7ea0f51e71b1cff62d17e4c2ba0c4bd56eb284aab8559cc",
+        "ldpc": null
+      },
+      "identical_input_count_ts_and_bb": true,
+      "baseline_median_decoder_and_helpers_cpu_s": 49.83,
+      "integrated_decoder_and_helpers_cpu_s": 46.97,
+      "cpu_reduction_percent": 5.739514348785871
+    }
+  ],
+  "limits": [
+    "One full integrated replay per recording; baseline runs retained from preceding research on this host.",
+    "CPU time includes decoder and LDPC children; excludes IQ feeder, GUI and video renderer. Feeder CPU is recorded separately.",
+    "Paced input slows under backpressure without dropping samples; actual elapsed times are recorded.",
+    "The single-frame SIMD16 path uses more workspace than the old scalar path.",
+    "No performance claim for non-AVX2 machines or long-duration RF reception."
+  ]
+}

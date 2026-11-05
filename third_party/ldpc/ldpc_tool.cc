@@ -22,6 +22,11 @@ Copyright 2019 <pabr@pabr.org>
 #include <algorithm>
 #include <functional>
 #include "testbench.hh"
+#ifdef __AVX2__
+// AVX2 CPUs also support SSE4.1. Use its native saturating arithmetic for
+// small batches, including one actual frame, without waiting for more frames.
+#include "sse4_1.hh"
+#endif
 #include "algorithms.hh"
 
 #if 0
@@ -57,6 +62,7 @@ void usage(const char *name, FILE *f, int c, const char *info=NULL) {
         "  --version          Show build revision and selected SIMD width\n"
         "  -h, --help         Show this help\n"
         "AVX2 is selected automatically when supported and the companion binary is present.\n"
+        "The AVX2 build uses 16 SIMD lanes for batches of 1..16, without extra batching.\n"
         "Set LINRAD_LDPC_PORTABLE=1 to force the portable build when invoking ldpc_tool.\n");
 	if ( info ) fprintf(f, "** Error while processing '%s'\n", info);
 	exit(c);
@@ -118,7 +124,13 @@ int main(int argc, char **argv)
 		else if ( ! strcmp(argv[i],"--modcod") && i+1<argc )   modcod = atoi(argv[++i]);
 		else if ( ! strcmp(argv[i],"--framed") ) framed = true;
         else if ( ! strcmp(argv[i],"--version") ) {
-            printf("linrad LDPC 6ada4aa SIMD=%d low-latency=1\n", SIMD_WIDTH); return 0;
+#ifdef __AVX2__
+            const int small_width = 16;
+#else
+            const int small_width = 1;
+#endif
+            printf("linrad LDPC 6ada4aa SIMD=%d low-latency=1 small-batch-simd=%d\n",
+                   SIMD_WIDTH, small_width); return 0;
         }
         else if ( ! strcmp(argv[i],"--shortframes") )          shortframes = true;
 		else if ( ! strcmp(argv[i],"-h") || !strcmp(argv[i],"--help") )                     usage(argv[0], stdout, 0);
@@ -168,7 +180,11 @@ int main(int argc, char **argv)
 
 
     DecoderRunner<simd_type> wide;
+#ifdef __AVX2__
+    DecoderRunner<SIMD<int8_t,16>> small;
+#else
     DecoderRunner<SIMD<int8_t,1>> narrow;
+#endif
     std::vector<int8_t> code(32*CODE_LEN);
     for (;;) {
         uint32_t blocks=32;
@@ -178,7 +194,13 @@ int main(int argc, char **argv)
         }
         size_t bytes=size_t(blocks)*CODE_LEN;
         if (!read_full(code.data(),bytes,!framed)) break;
+#ifdef __AVX2__
+        // Keep the supplied batch intact: the convergence check covers every
+        // active frame. Splitting larger batches would change stopping points.
+        if (blocks<=16) small.run(code.data(),blocks,ldpc);
+#else
         if (blocks==1) narrow.run(code.data(),blocks,ldpc);
+#endif
         else wide.run(code.data(),blocks,ldpc);
         size_t pos=0;
         while (pos<bytes) {

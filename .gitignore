@@ -17,6 +17,7 @@
 !/direwolf-pcm.conf
 !/src/
 !/components/
+!/benchmarks/
 !/third_party/
 !/tests/
 !/tools/

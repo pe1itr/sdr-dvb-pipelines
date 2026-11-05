@@ -302,6 +302,21 @@ test-bch: $(BUILD_DIR)/test_bch
 
 test: test-bch
 
+$(BUILD_DIR)/ldpc_fixture: tests/ldpc_fixture.cc $(LDPC_DIR)/ldpc_tool.cc $(wildcard $(LDPC_DIR)/*.hh) $(BUILD_DIR)/ldpc_tables.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -Wno-unused-variable -Wno-unused-parameter -I$(LDPC_DIR) $< $(BUILD_DIR)/ldpc_tables.o -o $@ $(LDFLAGS)
+
+ifeq ($(shell $(CXX) -dumpmachine | cut -d- -f1),x86_64)
+LDPC_TEST_FAST := $(BUILD_DIR)/ldpc_fixture_avx2
+$(BUILD_DIR)/ldpc_fixture_avx2: tests/ldpc_fixture.cc $(LDPC_DIR)/ldpc_tool.cc $(wildcard $(LDPC_DIR)/*.hh) $(BUILD_DIR)/ldpc_tables.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -mavx2 -Wno-unused-variable -Wno-unused-parameter -I$(LDPC_DIR) $< $(BUILD_DIR)/ldpc_tables.o -o $@ $(LDFLAGS)
+endif
+
+.PHONY: test-ldpc
+test-ldpc: $(BUILD_DIR)/ldpc_tool $(LDPC_FAST) $(BUILD_DIR)/ldpc_fixture $(LDPC_TEST_FAST)
+	python3 tests/test_ldpc_batches.py
+
+test: test-ldpc
+
 .PHONY: test-build-helper
 test-build-helper:
 	python3 tests/test_build_helper.py

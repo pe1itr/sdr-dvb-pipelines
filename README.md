@@ -808,7 +808,7 @@ In **Mode** staan vier DVB-S2-instellingen:
 - **LDPC workers**: 1–8 workers in totaal. Begin met één; meer workers kosten extra
   geheugen en helpen alleen wanneer FEC de doorvoer beperkt.
 - **LDPC processing**: standaard *Automatic (symbol rate)*. Handmatig:
-  *Low latency* verwerkt één frame met een smalle decoder;
+  *Low latency* verwerkt steeds één frame zonder te wachten op extra frames;
   *Throughput* verzamelt maximaal 32 frames, met hoogstens 2 ms wachttijd voor
   batchvorming. Dit is niet de totale ontvangstvertraging.
 - **DVB-S2 acquisition**: standaard *Automatic (symbol rate)*; *Continuous search*
@@ -837,6 +837,10 @@ batchlengtes; grote kernel-pipebuffers of wijzigingen aan `/proc/sys` zijn niet
 nodig. Stop beëindigt de volledige procesgroep. Op x86_64 bouwt `make` ook
 `ldpc_tool_avx2`; `ldpc_tool` controleert de CPU en kiest die variant automatisch.
 `LINRAD_LDPC_PORTABLE=1` forceert de draagbare variant voor vergelijking.
+De AVX2-helper gebruikt voor 1–16 beschikbare frames de bestaande SSE4.1-kern
+met 16 SIMD-lanes. Ook één frame wordt daarmee sneller verwerkt, zonder extra
+batchvorming. Batches van 17–32 blijven ongesplitst in de AVX2-kern. Andere
+builds behouden hun bestaande decoderkeuze; de limiet blijft 25 iteraties.
 
 Voor **5 MSym/s, 8PSK 3/4** kiest Automatic dus **Throughput**, met standaard **1 worker**.
 Meer workers zijn niet automatisch sneller: zij kunnen de beschikbare frames
@@ -880,6 +884,119 @@ De videorenderer zat niet in deze meting.
 Voor smalbandige weak-signalontvangst kiest Automatic **Low latency, 1 worker**
 en continu zoeken. De BCH-optimalisatie verandert geen
 filtering, acquisitie, LDPC-iteratielimiet of codeersterkte.
+
+**LDPC-onderzoek met live bestandsinvoer (2026-11-05).**
+`tools/ldpc_experiment.py` bouwt afzonderlijke onderzoekshelpers in een opgegeven
+werkmap. De normale decoder en LDPC-helper worden daarbij niet vervangen.
+De twee referenties zijn de volledige `recordings/fbn2.raw` (DL4FBN, QPSK
+125 ksym/s, korte frames, 1/2, 215,686 s) en
+`recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq`
+(1291 MHz, 8PSK 5 Msym/s, normale frames, 3/4, 48,999 s).
+De bron biedt de originele samplerates van 1.010.526 en 6.000.000 samples/s aan;
+bij DL4FBN wordt de RAW-header van 41 bytes overgeslagen. Als de decoder de
+invoer tijdelijk tegenhoudt, vertraagt de bron zonder samples over te slaan.
+De werkelijk gemeten afspeelduur hoort daarom bij iedere meting.
+
+DL4FBN behoudt **één frame per keer, één worker en continuous search**. De snelle
+opname gebruikt de bestaande throughput-instelling: maximaal 32 frames, één
+worker en maximaal 2 ms wachten op batchvorming. Alle varianten behouden de
+limiet van 25 LDPC-iteraties en dezelfde foutcorrectieformules.
+
+Profilering van de snelle opname gaf 11.293 frames in 6.440 batches; 91% van de
+batches bevatte slechts één of twee frames. De LDPC-kern gebruikte 32,27 CPU-s,
+tegenover 1,56 CPU-s voor inpakken en uitpakken. Bij DL4FBN waren er 477 losse
+frames: 18,43 CPU-s LDPC-werk en ongeveer 0,006 CPU-s bufferomzetting. Van deze
+pogingen bereikten 247 de iteratielimiet zonder een geslaagde LDPC-pariteitscheck.
+De BCH-stap blijft ook dan ongewijzigd; een mislukte LDPC-check betekent niet
+automatisch dat BCH niets meer kan herstellen.
+
+De kandidaat `single16` gebruikt de bestaande SSE4.1-vectorbewerkingen voor
+1–16 beschikbare frames en behoudt AVX2 voor grotere batches. **Zestien lanes
+betekent bij DL4FBN nog steeds één echt frame**, met de overige lanes ongebruikt:
+er wordt niet op extra frames gewacht. Deze proef is gericht op x86 met AVX2.
+`medium` laat de bestaande scalarberekening voor één frame staan; `packing`
+slaat alleen overbodig nulmaken over. Deze varianten zijn onderzoeksopties,
+geen nieuwe GUI-instellingen.
+
+De tool kan echte LLR-batches met hun decoderuitvoer vastleggen en opnieuw
+aanbieden. De losse LLR-proef is ongepaceerd en meet alleen de helper; dat is
+geen bewijs voor dezelfde winst in de live ontvanger. Voor de uiteindelijke
+vergelijking gebruikt `single16-plain` geen meetinstrumentatie en worden CPU-tijd
+van decoder inclusief helpers, CPU-tijd van de bron, afspeelduur, eerste TS,
+alle TS-bytes en alle BB-framebytes apart vastgelegd. Videoweergave en GUI zitten
+niet in deze meting.
+
+De volledige live vergelijking op Ryzen 7 5800H geeft:
+
+| Opname | Bestaand: CPU-s decoder + helpers | `single16`: CPU-s decoder + helpers | Minder CPU |
+| --- | ---: | ---: | ---: |
+| DL4FBN, één frame per keer | 47,13 | 39,34 | **16,5%** |
+| 1291 MHz, throughput | 49,83 | 46,37 | **6,9%** |
+
+Voor DL4FBN is dit één volledig A/B-paar; voor 1291 MHz de medianen van twee
+volledige runs per variant. Inclusief de bronhelper bedragen de besparingen
+15,3% en 6,9%. Alle negen volledige runs (inclusief afzonderlijke profielruns)
+leverden per opname identieke TS- en BB-bytes: DL4FBN 965 TS-pakketten en
+206.565 BB-bytes; 1291 MHz 362.845 TS-pakketten en 68.327.892 BB-bytes.
+Alle samples zijn door de bron aangeboden. DL4FBN liep in beide varianten door
+backpressure uit tot ongeveer 217,4 s; de snelle opname duurde ongeveer 49,1 s.
+De eerste TS bleef rond 0,9 s respectievelijk 0,3 s. Dit is CPU-winst, geen
+claim dat er meer beeld of meer ontvangstgevoeligheid is gewonnen.
+
+De aanvullende profielrun verklaart een deel van het verschil met de losse
+LDPC-proef: de snellere helper krijgt bij live invoer vaker maar één frame.
+Op 1291 MHz steeg het aantal batches van 6.440 naar 7.879 voor dezelfde 11.293
+frames; daardoor daalde de gemeten LDPC-kern-CPU daar slechts van 32,27 naar
+29,08 s. Winst uit ongepaceerde helpertests mag dus niet rechtstreeks worden
+vertaald naar de live keten. Alleen minder buffergeheugen nulmaken gaf in de
+losse proeven geen overtuigende winst.
+
+De [meetgegevens](benchmarks/ldpc-2026-11-05.json) bevatten de invoer- en
+uitvoerhashes, commando's, individuele runs, batchverdelingen en 15 bitgelijke
+LLR-vergelijkingen. Na aanvullende controles is `single16` ingebouwd in de
+normale AVX2-helper. `make test-ldpc` controleert alle **21 LDPC-tabellen en 52
+ondersteunde MODCOD/frameformaat-combinaties**, met batches van 1, 2, 15, 16, 17,
+31 en 32 frames en herhaalde overgangen tussen grote en kleine batches.
+De proef vergelijkt alle gedecodeerde LLR-bytes met het eerdere decoderbeleid
+en controleert codewoorden/pariteit met een afzonderlijke encoder. Per tabel
+worden 119 frames getest: schoon, herstelbaar, verzadigd of onherstelbaar.
+Gereserveerde MODCOD-combinaties, ongeldige batchlengtes en afgebroken invoer
+worden eveneens gecontroleerd. De integratiecontroles en volledige herhaling
+met beide opnamen staan in het [integratierapport](benchmarks/ldpc-integration-2026-11-05.json).
+De ingebouwde versie leverde bij één aanvullende volledige live run per opname
+opnieuw exact dezelfde TS- en BB-bytes, met alle samples verwerkt. Decoder plus
+helpers gebruikten 38,30 CPU-s voor DL4FBN en 46,97 CPU-s voor 1291 MHz, tegenover
+de eerdere referenties van 47,13 en 49,83 CPU-s. De bronduur was 217,395 en
+49,113 s; de eerste TS kwam na 0,906 en 0,298 s. Dit zijn aanvullende controles
+tegen de bewaarde referenties, geen nieuwe herhaalde A/B-meetreeks.
+Het enkel-framepad gebruikt meer werkgeheugen dan de scalarvariant;
+deze x86-metingen doen geen uitspraak over ARM of langdurige RF-ontvangst.
+
+Reproduceer de volledige live A/B-vergelijking (lokale opnamen vereist):
+
+```sh
+python3 - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path('benchmarks/ldpc-2026-11-05.json').read_text())
+Path('/tmp/ldpc-cases.json').write_text(json.dumps(report['cases']))
+PY
+python3 tools/ldpc_experiment.py build /tmp/ldpc-check --variants baseline-plain,profile,single16-plain
+python3 tools/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label baseline --helper /tmp/ldpc-check/baseline-plain
+python3 tools/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label candidate --helper /tmp/ldpc-check/single16-plain
+```
+
+De onderzoeksbuild gebruikt standaard de helperbron uit Git-revisie `eb2e09d`
+(vóór deze wijziging); de Git-historie moet dus beschikbaar zijn. De variant
+`current` gebruikt de huidige bron. `run` zonder `--helper` test de ingebouwde
+helper uit de normale build.
+
+Voor profilering kan `--helper /tmp/ldpc-check/profile --capture-every N` worden
+gebruikt, met een label dat begint met `profile-` of exact `profile`. De meting
+hierboven gebruikte iedere batch bij DL4FBN en iedere zestiende batch op
+1291 MHz. `merge` combineert vastgelegde batches per opname/MODCOD/frameformaat;
+`replay` vergelijkt onderzoekshelpers met de opgeslagen decoderuitvoer en stopt
+bij een byteverschil. Bestaande outputs met dezelfde labels worden overschreven.
 
 `tests/test_weak_signals.py` vergelijkt een bewaarde decoder van vóór de
 wijziging met de actuele build, steeds op exact dezelfde IQ-samples. Het
