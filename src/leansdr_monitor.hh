@@ -37,7 +37,7 @@ struct linrad_monitor : runnable {
     pipereader<tspacket> packets;
     float rate;
     int fd=-1;
-    double sent=0, measured=0, received=0;
+    double sent=0, measured=0, mer_measured=0, received=0;
     linrad_monitor(runtime_common &r, const config &cfg)
       : runnable(r.sch,"linrad monitor"), freq(*r.p_freq), mer(*r.p_mer),
         lock(*r.p_lock), frame(*r.p_framelock), points(*r.p_cstln), packets(*r.p_tspackets), rate(cfg.Fs) {
@@ -76,7 +76,7 @@ struct linrad_monitor : runnable {
         double now=monitor_seconds();
         float value;
         if (latest(freq,value)) { satellite_status.cfo_hz=value*rate; measured=now; }
-        if (latest(mer,value)) { satellite_status.mer_db=value; measured=now; }
+        if (latest(mer,value)) { satellite_status.mer_db=value; measured=mer_measured=now; }
         int state;
         if (latest(frame,state)) {
             satellite_status.lock_valid |= DECODER_OFDM;
@@ -97,6 +97,8 @@ struct linrad_monitor : runnable {
         if (received && now-received<3) satellite_status.locks |= DECODER_TS;
         else satellite_status.locks &= ~DECODER_TS;
         if (now-satellite_fec_time>10) satellite_status.lock_valid &= ~DECODER_FEC;
+        // Frequency updates must not keep an old MER (and D margin) alive.
+        if (mer_measured && now-mer_measured>10) satellite_status.mer_db=NAN;
         if (measured && now-measured>10) {
             satellite_status.mer_db=satellite_status.cfo_hz=NAN;
             satellite_status.lock_valid &= ~DECODER_OFDM;

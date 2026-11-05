@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "decoder_view.h"
+#include "decoder_margin.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <string.h>
@@ -162,9 +163,7 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     v->rs_ok=field(grid,0,9,"RS OK","",TRUE);
     v->rs_errors=field(grid,3,9,"RS errors","",TRUE);
     v->cc_errors=field(grid,0,10,"CC errors","",TRUE);
-    GtkWidget *empty=gtk_label_new("");
-    gtk_style_context_add_class(gtk_widget_get_style_context(empty),"decoder-caption");
-    gtk_grid_attach(GTK_GRID(grid),empty,3,10,3,1);
+    v->margin=field(grid,3,10,"D margin","dB",TRUE);
     return row;
 }
 
@@ -235,6 +234,36 @@ static void measurement(GtkWidget *widget, const char *format, double value) {
     set_value(widget,text);
 }
 
+static void update_margin(DecoderView *v, gboolean fresh, const char *mode) {
+    const DecoderStatus *s=&v->status;
+    gboolean matches=(s->satellite==1 && !strcmp(mode,"DVB-S")) ||
+                     (s->satellite==2 && !strcmp(mode,"DVB-S2"));
+    double margin=fresh && matches ? decoder_margin_db(s) : NAN;
+    char text[768];
+    if (isfinite(margin)) {
+        /* Round before colouring so a displayed zero never appears negative. */
+        double shown=round(margin*10)/10;
+        if (shown==0) shown=0; /* Avoid -0.0. */
+        const char *color=shown<0 ? "#e05a55" : shown<2 ? "#e8b44c" : "#36d866";
+        g_snprintf(text,sizeof(text),"<span foreground=\"%s\" weight=\"bold\">%+.1f</span>",color,shown);
+        gtk_label_set_markup(GTK_LABEL(v->margin),text);
+        g_snprintf(text,sizeof(text),
+            "Estimated MER reserve: %.1f dB MER minus %.2f dB reference.\n"
+            "%s%s\nRed: below 0 dB; amber: 0 to 2 dB; green: at least 2 dB.\n"
+            "A signal report estimate, not a calibrated decoding limit; fading and interference can still cause errors.",
+            s->mer_db,decoder_margin_reference(s),
+            s->satellite==2 ? "DVB-S2 AWGN reference (ETSI EN 302 307-1, table 13)." :
+                             "DVB-S reference (ETSI EN 300 421, table 3, converted to Es/N0).",
+            s->satellite==2 && s->short_frame ? " Short frame: approximate +0.30 dB allowance." : "");
+    } else {
+        gtk_label_set_text(GTK_LABEL(v->margin),"—");
+        g_snprintf(text,sizeof(text),!strcmp(mode,"DVB-T") ?
+            "D margin is available for DVB-S/S2; no DVB-T reference is used." :
+            "Estimated MER reserve. Requires current MER, sync/PL lock and a supported modulation/FEC and frame size.");
+    }
+    gtk_widget_set_tooltip_text(v->margin,text);
+}
+
 void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     v->active=active;
     receive_frames(v);
@@ -243,6 +272,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     DecoderStatus *s=&v->status;
     gboolean satellite=strcmp(mode,"DVB-T")!=0;
     gboolean s2=!strcmp(mode,"DVB-S2");
+    update_margin(v,fresh,mode);
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption")),satellite ? "MER" : "SNR");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),satellite ? "Pilots" : "Pilot");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"units")),satellite ? "" : "%");

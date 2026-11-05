@@ -961,6 +961,40 @@ herkende modulatie/FEC, framegrootte en pilots getoond. Onbekende metingen krijg
 bestaande TS-parser. Constellatiepunten zijn genormaliseerd op de LeanDVB-schaal.
 Telemetrie gebruikt niet-blokkerende lokale UDP met maximaal 20 updates/s.
 
+**D margin** in Service info geeft voor DVB-S/S2 de geschatte ontvangstreserve:
+gemeten MER minus de referentiedrempel voor de modulatie en FEC. Bijvoorbeeld
+MER 10,0 dB bij DVB-S2 8PSK 3/4 met normale frames geeft `+2,1 dB`.
+Rood betekent minder dan 0 dB reserve, oranje 0 tot 2 dB en groen vanaf 2 dB
+(op de getoonde, afgeronde waarde). De tooltip toont de gebruikte drempel.
+Zonder actuele MER, bekende sync/PL-lock of ondersteunde parameters staat er `—`;
+FEC/TS-lock is niet vereist, zodat ook negatieve reserve zichtbaar kan blijven.
+Bij DVB-T staat er voorlopig `—`, omdat hiervoor geen passende referentie is
+ingevoerd. De berekening draait alleen in de GUI en verandert de decoder niet.
+
+De DVB-S2-drempels komen uit
+[ETSI EN 302 307-1 V1.4.1, tabel 13](https://www.etsi.org/deliver/etsi_en/302300_302399/30230701/01.04.01_60/en_30230701v010401p.pdf).
+De werkelijk herkende MODCOD en framegrootte bepalen de drempel. Voor korte
+frames gebruiken we een benaderde toeslag van 0,30 dB, de bovengrens van de
+0,2–0,3 dB die de norm noemt. DVB-S gebruikt
+[EN 300 421 V1.1.2, tabel 3](https://www.etsi.org/deliver/etsi_en/300400_300499/300421/01.01.02_60/en_300421v010102p.pdf),
+omgerekend van Eb/N0 naar Es/N0 met `10 log10(2 × FEC × 188/204)`.
+MER benadert Es/N0 bij witte ruis. Dit is een signaalrapport volgens hetzelfde
+principe als MiniTioune, geen gekalibreerde ontvangstgrens van onze decoder:
+de S2-norm veronderstelt ideale synchronisatie en 50 LDPC-iteraties, onze helper
+gebruikt 25. Fading, interferentie en de MER-schatter beïnvloeden de praktijk.
+S2 meet MER op bekende PL-header-symbolen; DVB-S gebruikt besliste symbolen,
+waardoor de schatting bij veel ruis te gunstig kan zijn.
+
+Optimalisaties uit de vergelijking met OnAir/DATVision worden eerst afzonderlijk
+beproefd met dezelfde IQ-opnamen en hardware als de huidige versie. Meet zowel
+realtime als maximale doorvoer: totale CPU-tijd inclusief helpers, geheugen,
+wachtrijen/sampleverlies, tijd tot eerste geldige TS en gedecodeerde pakketten.
+De 125 ksym/s-proeven met fading en korte signaaloplevingen, 5 Msym/s 8PSK 3/4
+en DVB-T met meerdere FEC's blijven aparte acceptatiegevallen. Alleen een
+herhaalbare winst zonder slechtere ontvangst rechtvaardigt integratie;
+bitgelijke optimalisaties moeten dezelfde TS-bytes opleveren. Wijzigingen in
+numeriek vereisen ook een vergelijking rond de ontvangstgrens en bij heracquisitie.
+
 De acquisitiecorrectie uit [LeanDVB issue #41](https://github.com/pabr/leansdr/issues/41)
 van Ondřej OK1CDJ is opgenomen: een volledig zoekvenster voor normale frames,
 betere eerste PLSCODE-selectie en afwijzing van onwaarschijnlijke eerste locks.

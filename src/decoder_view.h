@@ -6,7 +6,7 @@
 #define DECODER_HISTORY_AGE (G_USEC_PER_SEC / 2)
 typedef struct {
     GtkWidget *area, *service_frame, *state, *lamps[4], *service, *provider;
-    GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer;
+    GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer, *margin;
     GtkWidget *modulation, *fec, *guard, *packets, *written, *rs_ok, *rs_errors, *cc_errors;
     GtkWidget *video_codec, *audio_codec;
     int fd, port;

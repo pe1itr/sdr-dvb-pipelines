@@ -3,6 +3,36 @@
 #include "../src/linrad_dvb.c"
 #undef main
 #include "../src/tune_control.h"
+#include "../src/decoder_margin.h"
+
+static void exercise_margin_reference(void) {
+    DecoderStatus s={.satellite=2,.constellation_order=4,.modcod=4,.short_frame=0,
+        .mer_db=6,.lock_valid=DECODER_OFDM,.locks=DECODER_OFDM};
+    g_assert_cmpfloat_with_epsilon(decoder_margin_db(&s),5,1e-6); /* QPSK 1/2 */
+    s.short_frame=1;
+    g_assert_cmpfloat_with_epsilon(decoder_margin_db(&s),4.7,1e-6);
+    s.short_frame=0; s.modcod=1; s.mer_db=-1;
+    g_assert_cmpfloat_with_epsilon(decoder_margin_db(&s),1.35,1e-6);
+    s.modcod=14; s.constellation_order=8; s.mer_db=7;
+    g_assert_cmpfloat_with_epsilon(decoder_margin_db(&s),-.91,1e-6);
+    /* No invented reference for unknown or impossible received parameters. */
+    s.short_frame=-1; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.short_frame=1; s.modcod=17; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.short_frame=0; s.modcod=29; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.modcod=0; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.modcod=4; g_assert_true(isnan(decoder_margin_db(&s))); /* wrong constellation */
+    s.constellation_order=4; s.mer_db=INFINITY; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.mer_db=NAN; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.mer_db=6; s.locks=0; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.locks=DECODER_OFDM; s.lock_valid=0; g_assert_true(isnan(decoder_margin_db(&s)));
+    s.lock_valid=DECODER_OFDM; s.satellite=1;
+    strcpy(s.fec,"1/2");
+    g_assert_cmpfloat_with_epsilon(decoder_margin_reference(&s),4.145,0.001);
+    strcpy(s.fec,"7/8");
+    g_assert_cmpfloat_with_epsilon(decoder_margin_reference(&s),8.476,0.001);
+    strcpy(s.fec,"auto"); g_assert_true(isnan(decoder_margin_db(&s)));
+    s.satellite=0; g_assert_true(isnan(decoder_margin_db(&s)));
+}
 
 static void exercise_live_gain_locale(App *a) {
     /* GTK uses the user's numeric locale; the SDR helper parses in C locale. */
@@ -405,6 +435,7 @@ static gboolean constellation_green_at(DecoderView *v, double re, double im) {
 }
 
 static void exercise_decoder_view(App *a) {
+    exercise_margin_reference();
     DecoderView *v=&a->decoder_view;
     g_assert_true(decoder_view_start(v));
     int sender=socket(AF_INET,SOCK_DGRAM,0);
@@ -424,6 +455,7 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpint(sendto(sender,&queue,sizeof(queue),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(queue));
     g_assert_cmpint(sendto(sender,&points,sizeof(points),0,(struct sockaddr *)&dest,sizeof(dest)),==,sizeof(points));
     decoder_view_tick(v,TRUE,"DVB-T");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->service)),==,"Test <service>");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->provider)),==,"PE1ITR");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->video_codec)),==,"H.264/AVC");
@@ -484,9 +516,36 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->rs_errors)),==,"2");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption"))),==,"MER");
     g_assert_cmpuint(v->status.constellation_order,==,8);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"+4.3");
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->margin)),"#36d866"));
+    /* The reference follows received MODCOD/frame, not a selected GUI FEC. */
+    v->status.short_frame=0; v->status.mer_db=8.9;
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"+1.0");
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->margin)),"#e8b44c"));
+    v->status.mer_db=7; v->status.locks=DECODER_OFDM; /* No FEC/TS lock needed. */
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"-0.9");
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->margin)),"#e05a55"));
+    v->status.locks=0;
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
+    v->status.locks=DECODER_OFDM; v->status.mer_db=NAN;
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
+    v->status.mer_db=12.5; v->status.modcod=-1;
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
+    v->status.modcod=14;
+    decoder_view_tick(v,TRUE,"DVB-S"); /* Previous mode's telemetry is not a margin. */
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
+    v->status_time-=11*G_USEC_PER_SEC;
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
     decoder_view_stop(v); close(sender);
     g_assert_cmpstr(v->selected_provider,==,"");
     decoder_view_tick(v,FALSE,"DVB-S2");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"—");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->video_codec)),==,"—");
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->audio_codec)),==,"—");
     g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(v->state)),"stopped"));
