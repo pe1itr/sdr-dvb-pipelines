@@ -16,6 +16,7 @@
 !/linrad-dvb.example.ini
 !/direwolf-pcm.conf
 !/src/
+!/components/
 !/third_party/
 !/tests/
 !/tools/

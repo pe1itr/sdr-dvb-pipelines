@@ -137,8 +137,8 @@ def main(argv=None):
                        + ("" if ready[name] else " — executable missing"))
 
     for source in ("third_party/leansdr/src/apps/leandvb.cc",
-                   "third_party/ldpc/ldpc_tool.cc", "third_party/rbdvbt/src/dvbt_outer.c",
-                   "third_party/tsscatterfix/src/recovery.c"):
+                   "third_party/ldpc/ldpc_tool.cc", "components/dvbt/src/dvbt_outer.c",
+                   "components/tsscatterfix/src/recovery.c"):
         if not (ROOT / source).is_file():
             checker.report("ERROR", f"Bundled source missing: {source}; restore the complete checkout.")
 

@@ -1,6 +1,6 @@
 /* A player joining/reopening live DVB-T output must still receive PAT/PMT.
  * Exercise the actual output gate after the validator identified a service. */
-#include "../third_party/rbdvbt/src/dvbt_outer.c"
+#include "../components/dvbt/src/dvbt_outer.c"
 #include <assert.h>
 
 static void packet(uint8_t *out, unsigned pid, unsigned cc, int start) {

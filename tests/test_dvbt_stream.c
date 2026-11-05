@@ -1,6 +1,6 @@
 /* Exercise the real streaming Viterbi implementation with independently encoded
  * DVB mother-code bits, puncturing, errors, and arbitrary whole-symbol chunks. */
-#include "../third_party/rbdvbt/src/probe_constellation.c"
+#include "../components/dvbt/src/probe_constellation.c"
 #include <assert.h>
 
 static unsigned parity(unsigned v) {

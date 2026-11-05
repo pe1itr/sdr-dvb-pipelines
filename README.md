@@ -1,4 +1,4 @@
-# LeanDVB receive helpers for multiple SDR sources
+# Linrad DVB receiver and SDR receive helpers
 
 For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+, LimeSDR Mini, SDRplay RSP1A/B, Airspy HF+ VHF, Airspy R2 and IQ files), run `python3 tools/build.py` followed by
 `./build/linrad_dvb`. First copy `linrad-dvb.example.ini` to `linrad-dvb.ini`.
@@ -12,9 +12,35 @@ Python-helpers die hij gebruikt, en de broncode, buildhelper en tests voor
 `linrad_dvb`. De externe programma's waarnaar het shellscript verwijst
 (`../leansdr`, `../dvbt-rx`, `../TSscatterfix`, spelers en SDR-tools) worden
 niet meegeleverd. Installeer die afzonderlijk en pas zo nodig de paden in het
-shellscript aan. De vastgelegde broncode onder `third_party/` dient voor de
-ingebouwde decoders en tests van `linrad_dvb`; dit levert niet automatisch de
-losse programma's en modelbestanden voor het shellscript op.
+shellscript aan. De eigen componenten onder `components/` en externe broncode
+onder `third_party/` dienen voor de ingebouwde decoders en tests van
+`linrad_dvb`; dit levert niet automatisch de losse programma's en modelbestanden
+voor het oude shellscript op. De oude TSscatterFix-profielen in dat script
+verwijzen nog naar de vroegere Python-tools en zijn geen onderdeel van de
+ondersteunde `linrad_dvb`-ontvangstketen.
+
+## Ontwikkeling en componenten
+
+Deze repository is de centrale ontwikkelplek voor **linrad_dvb**, de
+**DVB-T-ontvanger (rbdvbt)** en **TSscatterFix**. Ontwikkel wijzigingen aan DVB-T
+en TSscatterFix rechtstreeks hier; de oorspronkelijke repositories `dvbt-rx`
+en `TSscatterfix` zijn alleen nog historische herkomst en kunnen op termijn
+verdwijnen. Bouwen, testen en gebruiken van `linrad_dvb` vereist die
+repositories niet.
+
+| Onderdeel | Broncode | Gerichte tests |
+|---|---|---|
+| DVB-T-ontvanger (rbdvbt) | [components/dvbt](components/dvbt/README.md) | `make test-dvbt` |
+| TSscatterFix | [components/tsscatterfix](components/tsscatterfix/README.md) | `make test-scatter` |
+| GUI, SDR-invoer en integratie | `src/` | `make test` |
+| Externe LeanSDR- en LDPC-code | `third_party/` | `make test-leansdr test-bch` |
+
+De componenten behouden hun eigen bronmappen, API's, documentatie, licenties
+en auteursvermelding. [components/README.md](components/README.md) beschrijft
+de grenzen tussen componenten en de ontwikkelwerkwijze. Het zijn actief
+onderhouden projectonderdelen, geen snapshots die periodiek uit een andere
+repository vervangen moeten worden. Releases en wijzigingen worden voortaan
+in de Git-geschiedenis van dit project bijgehouden.
 
 `linrad-dvb.ini`, opnamen, screenshots, logs, buildresultaten en lokale
 experimenten blijven buiten Git. `.gitignore` laat alleen de genoemde
@@ -22,9 +48,10 @@ projectbestanden en bron-/testmappen toe; voeg nieuwe projectbestanden in de
 hoofdmap bewust aan die lijst toe. De bestaande commitgeschiedenis blijft
 behouden, inclusief oudere bestanden en onderzoeksnotities.
 
-This repository contains a small collection of experimental command-line helpers for receiving narrowband DVB-S and DVB-S2 signals with **LeanDVB**.
+Alongside `linrad_dvb`, this repository retains experimental command-line
+helpers for receiving narrowband DVB-S and DVB-S2 signals with **LeanDVB**.
 
-The setup is built around the main launcher script:
+The older helper workflow is built around this launcher script:
 
 - `rx_dvb_linrad_leandvb.sh`
 
@@ -37,7 +64,11 @@ Useful upstream references:
 
 ## Project goal
 
-The goal of this repository is to make it easy to try DVB-S and DVB-S2 reception with different SDR devices while keeping a largely uniform downstream pipeline:
+The current goal is to develop `linrad_dvb` for DVB-S, DVB-S2 and DVB-T
+reception, including its DVB-T receiver and TSscatterFix reconstruction code,
+in one repository with clearly separated components.
+
+The older command-line helpers provide a largely uniform downstream pipeline:
 
 ```text
 SDR or Linrad output -> helper/converter -> leandvb -> VLC / TS tools
@@ -63,11 +94,13 @@ The helpers mainly solve practical integration issues such as:
   zenderkant. Begin met één beperkt T2-profiel en IQ-bestanden; hergebruik waar
   mogelijk de aanwezige LDPC/BCH-code en bouw de ontbrekende T2-ontvangstketen.
 
-## Main entry point
+## Older shell workflow
 
 ### `rx_dvb_linrad_leandvb.sh`
 
-This is the central launcher for the whole setup. It defines a set of numbered profiles and hides most of the pipe plumbing.
+This is the launcher for the older shell workflow. It defines a set of numbered
+profiles and hides most of the pipe plumbing. The current application entry
+point is `./build/linrad_dvb`.
 
 Current profile groups include:
 
@@ -94,6 +127,37 @@ Run a profile with:
 The launcher currently includes profiles 1 through 18, covering DVB-S, DVB-S2, measurement, and multiple source devices. fileciteturn1file0
 
 ## Linrad DVB ontvanger in C
+
+### Broncode als zipbestand delen
+
+Maak vanuit de projectmap met één commando een broncodepakket:
+
+```bash
+make dist
+```
+
+Dit maakt `dist/linrad_dvb-source.zip` met de huidige bestanden op schijf,
+inclusief eventuele nog niet gecommitte wijzigingen. Een bestaande zip wordt
+vervangen. Het pakket bevat `src/`, de eigen componenten onder `components/`,
+externe decoderbroncode onder `third_party/`, licenties, `Makefile`, buildhelper, tests, deze README en de
+voorbeeldconfiguratie. Persoonlijke instellingen (`linrad-dvb.ini`), opnamen
+en buildresultaten worden niet opgenomen. De map `dist/` blijft buiten Git.
+De oudere experimentele scripts in de hoofdmap worden niet meegeleverd.
+
+Voor het maken van de zip is Python 3 nodig. Zonder `make` kan het ook met
+`python3 tools/dist.py`; daarvoor zijn geen compiler, Git of development
+packages nodig. Op de doelcomputer zijn de hieronder beschreven
+buildafhankelijkheden wel nodig:
+
+```bash
+unzip linrad_dvb-source.zip
+cd linrad_dvb-source
+python3 tools/build.py
+cp -n linrad-dvb.example.ini linrad-dvb.ini
+./build/linrad_dvb
+```
+
+### Bouwen en starten
 
 De toepassing ondersteunt Linrad, directe SDR-hardware en IQ-bestanden. Je stelt de parameters
 rechtstreeks in de GTK-GUI in; er zijn geen profielen nodig. Zowel de GUI als de
@@ -247,8 +311,8 @@ Linrad UDP -> C-ontvanger -> decoder -> oorspronkelijke TS -> player (+ optionee
                                   \-> kopie -> embedded TSscatterFix -> RGB-afbeelding + status
 ```
 
-TSscatterFix wordt meegecompileerd uit de vastgelegde C-broncode in
-[third_party/tsscatterfix](third_party/tsscatterfix/README.md). Er is geen externe
+TSscatterFix wordt meegecompileerd uit de hier onderhouden C-broncode in
+[components/tsscatterfix](components/tsscatterfix/README.md). Er is geen externe
 TSscatterfix-checkout, Python-helper of extra UDP-poort nodig. De oorspronkelijke
 MPEG-TS blijft ongewijzigd naar de gekozen player, UDP-uitvoer of het TS-bestand
 gaan. De parallelle herstelthread levert direct RGB24-afbeeldingen aan GTK.
@@ -935,10 +999,10 @@ bij de ingebouwde backend geaccepteerd en genegeerd.
 
 ### Ingebouwde DVB-T-decoder en verdeling van het werk
 
-`make` bouwt de vastgelegde broncode in `third_party/rbdvbt` mee in
+`make` bouwt de hier onderhouden broncode in `components/dvbt` mee in
 `build/linrad_dvb`. De oorspronkelijke auteur is **Rob Hardenberg / PE1ITR**;
-herkomst, lokale aanpassingen en licentie staan in
-[third_party/rbdvbt/README.md](third_party/rbdvbt/README.md).
+herkomst, ontwikkelinstructies en licentie staan in
+[components/dvbt/README.md](components/dvbt/README.md).
 Er is tijdens bouwen of ontvangen geen andere checkout of decoderbinary nodig.
 `make package` legt ook de decoderlicentie in `build` voor distributie.
 
