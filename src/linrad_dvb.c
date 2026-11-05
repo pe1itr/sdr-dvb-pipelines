@@ -47,7 +47,7 @@ typedef struct {
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
-    GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
+    GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_plp_box;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
@@ -1169,6 +1169,7 @@ static void show_mode(GtkWidget *widget, gpointer data);
 static void show_renderer(GtkWidget *widget, gpointer data);
 static void show_about(GtkWidget *widget, gpointer data);
 static void show_tci(GtkWidget *widget, gpointer data);
+static void show_diagnostics(GtkWidget *widget, gpointer data);
 
 static void usb_source_refresh(App *a) {
     const char *section=sources[a->source];
@@ -1274,6 +1275,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
         case GDK_KEY_m: show_mode(NULL,a); return TRUE;
         case GDK_KEY_r: show_renderer(NULL,a); return TRUE;
         case GDK_KEY_t: show_tci(NULL,a); return TRUE;
+        case GDK_KEY_l: show_diagnostics(NULL,a); return TRUE;
         case GDK_KEY_a: show_about(NULL,a); return TRUE;
         default: return FALSE;
         }
@@ -2005,7 +2007,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
     const char *shortcuts[][2]={
         {"Key","Description"},
-        {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+A","Open Input / Mode / Renderer / TCI / About"},
+        {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A","Open Input / Mode / Renderer / TCI / Log / About"},
         {"R","Reset TSscatterFix reconstruction"},
         {"M","Mute / unmute speakers (DVB and USB / FM / FM-DATA); TCI audio continues"},
         {"U","USB receiver (3 kHz), speaker and TCI on/off"},
@@ -2212,6 +2214,38 @@ static void show_renderer(GtkWidget *widget, gpointer data) {
 static void show_tci(GtkWidget *widget, gpointer data) {
     (void)widget; App *a=data; gtk_widget_show_all(a->tci_dialog);
     gtk_window_present(GTK_WINDOW(a->tci_dialog));
+}
+
+static void show_diagnostics(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data; gtk_widget_show_all(a->diagnostics_dialog);
+    gtk_window_present(GTK_WINDOW(a->diagnostics_dialog));
+}
+
+static void diagnostics_response(GtkDialog *dialog, gint response, gpointer data) {
+    App *a=data;
+    if (response == GTK_RESPONSE_APPLY) {
+        gtk_text_buffer_copy_clipboard(gtk_text_view_get_buffer(GTK_TEXT_VIEW(a->log)),
+            gtk_widget_get_clipboard(a->log, GDK_SELECTION_CLIPBOARD));
+        return;
+    }
+    gtk_widget_hide(GTK_WIDGET(dialog));
+}
+
+static void create_diagnostics(App *a) {
+    a->diagnostics_dialog = gtk_dialog_new_with_buttons("Startup command / Log", GTK_WINDOW(a->window),
+        GTK_DIALOG_DESTROY_WITH_PARENT, "Copy selection", GTK_RESPONSE_APPLY, "Close", GTK_RESPONSE_CLOSE, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(a->diagnostics_dialog), 800, 500);
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(box), 12);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(a->diagnostics_dialog))), box, TRUE, TRUE, 0);
+    a->preview = text_panel(box, "Startup command", 100);
+    a->log = text_panel(box, "Log", 240);
+    gtk_widget_set_tooltip_text(a->log, "Select log text, then click Copy selection or press Ctrl+C.");
+    GtkWidget *copy = gtk_dialog_get_widget_for_response(GTK_DIALOG(a->diagnostics_dialog), GTK_RESPONSE_APPLY);
+    g_object_bind_property(gtk_text_view_get_buffer(GTK_TEXT_VIEW(a->log)), "has-selection",
+        copy, "sensitive", G_BINDING_SYNC_CREATE);
+    g_signal_connect(a->diagnostics_dialog, "response", G_CALLBACK(diagnostics_response), a);
+    g_signal_connect(a->diagnostics_dialog, "delete-event", G_CALLBACK(hide_dialog_close), a);
 }
 
 static void pcm_udp_destination_changed(GtkWidget *widget, gpointer data) {
@@ -2472,6 +2506,10 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(menu),tci_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(tci_item,"Open TCI · Alt+T");
     g_signal_connect(tci_item,"clicked",G_CALLBACK(show_tci),a);
+    GtkWidget *log_item = gtk_button_new_with_label("Log");
+    gtk_box_pack_start(GTK_BOX(menu), log_item, FALSE, FALSE, 0);
+    gtk_widget_set_tooltip_text(log_item, "Open Startup command / Log · Alt+L");
+    g_signal_connect(log_item, "clicked", G_CALLBACK(show_diagnostics), a);
     gtk_box_pack_start(GTK_BOX(menu), about_item, FALSE, FALSE, 0);
     gtk_widget_set_tooltip_text(config_item, "Open Input · Alt+I");
     gtk_widget_set_tooltip_text(mode_item, "Open Mode · Alt+M");
@@ -2593,12 +2631,7 @@ static void gui(App *a) {
     gtk_label_set_xalign(GTK_LABEL(a->status), 0);
     gtk_label_set_ellipsize(GTK_LABEL(a->status), PANGO_ELLIPSIZE_END);
     gtk_box_pack_start(GTK_BOX(a->lower), a->status, FALSE, FALSE, 0);
-    GtkWidget *diagnostics = gtk_expander_new("Startup command / Log");
-    GtkWidget *diagnostic_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
-    gtk_container_add(GTK_CONTAINER(diagnostics), diagnostic_box);
-    gtk_box_pack_start(GTK_BOX(a->lower), diagnostics, FALSE, FALSE, 0);
-    a->preview = text_panel(diagnostic_box, "Startup command", 55);
-    a->log = text_panel(diagnostic_box, "Log", 80);
+    create_diagnostics(a);
     create_config(a);
     source_changed(a->source_box, a);
     g_signal_connect(a->receiver_offset_box,"value-changed",G_CALLBACK(tuning_changed),a);
@@ -2634,6 +2667,7 @@ static void gui(App *a) {
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
     gtk_widget_destroy(a->tci_dialog);
+    gtk_widget_destroy(a->diagnostics_dialog);
     gtk_widget_destroy(a->config_dialog);
     gtk_widget_destroy(a->window);
 }

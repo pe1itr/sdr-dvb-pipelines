@@ -661,7 +661,7 @@ static void exercise_menu_clicks(App *a) {
     GtkWidget *menu = controls->data;
     g_assert_cmpstr(gtk_widget_get_name(menu), ==, "receiver-menu");
     GList *buttons = gtk_container_get_children(GTK_CONTAINER(menu));
-    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog};
+    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog, a->diagnostics_dialog};
     g_assert_cmpuint(g_list_length(buttons), ==, G_N_ELEMENTS(dialogs) + 1);
     for (unsigned i = 0; i < G_N_ELEMENTS(dialogs) + 1; ++i) {
         GtkWidget *button = g_list_nth_data(buttons, i);
@@ -703,8 +703,8 @@ static void exercise_menu_shortcuts(App *a) {
         g_assert_cmpint(a->video_view.muted,==,!upper);
         g_assert_cmpint(usb_receiver_muted(a->usb_receiver),==,!upper);
     }
-    const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r,GDK_KEY_t};
-    GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog,a->tci_dialog};
+    const guint keys[]={GDK_KEY_i,GDK_KEY_m,GDK_KEY_r,GDK_KEY_t,GDK_KEY_l};
+    GtkWidget *dialogs[]={a->config_dialog,a->mode_dialog,a->renderer_dialog,a->tci_dialog,a->diagnostics_dialog};
     gtk_window_set_focus(GTK_WINDOW(a->window),a->power_button);
     for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) for (unsigned upper=0;upper<2;++upper) {
         GdkEventKey event={.keyval=upper ? gdk_keyval_to_upper(keys[i]) : keys[i]};
