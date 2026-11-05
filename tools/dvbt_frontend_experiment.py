@@ -283,11 +283,14 @@ def impair(out, manifest):
     (out/'controlled-generation.json').write_text(json.dumps(meta,indent=2)+'\n')
 
 
-def run_one(out, logs, case, variant, repeat):
+def run_one(out, logs, case, variant, repeat, feeder_override=None):
     iq = prepare(out, case)
     prefix = logs / f"{case['name']}-{repeat}-{variant}"
     feeder = [str(ROOT/'build/iq_file_to_stdout'), '--in', str(iq),
               '--input-format', case['format'], '--sample-rate', str(case['rate'])]
+    if feeder_override is not None:
+        feeder=[*feeder_override,'--in',str(iq),'--input-format',case['format'],
+                '--sample-rate',str(case['rate'])]
     command = [str(out/variant), '--stdin', '--live', '--probe-constellation',
                '--resample-to-dvbt-rate', '--input-format', case['format'],
                '--sample-rate', str(case['rate']), '--sr', str(case['bandwidth']),

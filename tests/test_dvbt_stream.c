@@ -64,10 +64,101 @@ static void check(rbdvbt_fec_t fec, int errors) {
     free(dibits);
 }
 
+/* A separately written scalar reference checks metric bytes and tie decisions,
+ * including arbitrary incoming path metrics, without calling production ACS. */
+static void check_acs(void) {
+#if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+    if (!__builtin_cpu_supports("avx2")) return;
+#endif
+    uint32_t random=78123;
+    for (unsigned trial=0;trial<10000;++trial) {
+        float previous[64],cost[4],expected[64],actual[64];
+        uint8_t history[8]={0},actual_history[8];
+        float best=1.0e30f,actual_best;int state=0,actual_state;
+        for (unsigned i=0;i<68;++i) {
+            random=1664525u*random+1013904223u;
+            float value=(float)(int32_t)random/16777216.0f;
+            if (trial%4==0) value=0.0f;
+            if (trial%4==1) value=(float)(random%4);
+            if (trial%4==2) value*=10000.0f;
+            if (i<64) previous[i]=value;else cost[i-64]=value;
+        }
+        for (unsigned s=0;s<64;++s) {
+            unsigned reg0=s<<1,reg1=reg0|1;
+            unsigned e0=parity(reg0&0171)|(parity(reg0&0133)<<1);
+            unsigned e1=parity(reg1&0171)|(parity(reg1&0133)<<1);
+            float a=previous[reg0&63]+cost[e0];
+            float b=previous[reg1&63]+cost[e1];
+            expected[s]=b<a ? b : a;
+            if (b<a) history[s/8]|=(uint8_t)(1u<<(s%8));
+            if (expected[s]<best) { best=expected[s];state=(int)s; }
+        }
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+        viterbi_acs_avx2(previous,actual,cost,actual_history,&actual_best,&actual_state);
+#else
+        viterbi_acs_neon(previous,actual,cost,actual_history,&actual_best,&actual_state);
+#endif
+        assert(!memcmp(expected,actual,sizeof(expected)));
+        assert(!memcmp(history,actual_history,sizeof(history)));
+        assert(!memcmp(&best,&actual_best,sizeof(best)) && state==actual_state);
+    }
+#endif
+}
+
+#if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
+static void check_soft_stream(rbdvbt_fec_t fec) {
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+    if (!__builtin_cpu_supports("avx2")) return;
+#endif
+    enum { N=1512*12 };
+    qpsk_dibit_t *input=calloc(N,sizeof(*input));assert(input);
+    uint8_t expected[N];size_t expected_size=0;
+    uint32_t rng=91821;
+    int selected=viterbi_use_simd;
+    for (unsigned mode=0;mode<3;++mode) {
+        for (unsigned i=0;i<N;++i) {
+            float *costs[]={input[i].x_cost,input[i].y_cost};
+            for(unsigned xy=0;xy<2;++xy) for(unsigned bit=0;bit<2;++bit) {
+                rng=1664525u*rng+1013904223u;
+                costs[xy][bit]=mode==0 ? 0 : (float)(rng>>8)/16777216.0f*(mode==1 ? 1 : 10000);
+                if (i>=N/3 && i<N/2) costs[xy][bit]=0;
+            }
+        }
+        for (unsigned simd=0;simd<2;++simd) {
+            viterbi_use_simd=simd;live_viterbi_stream_reset();size_t total=0;
+            for (unsigned offset=0;offset<N;offset+=1512) {
+                uint8_t *bytes;size_t count;
+                assert(!live_viterbi_stream_decode_bytes(fec,input+offset,1512,offset!=0,
+                    &bytes,&count,NULL,NULL,NULL));
+                assert(total+count<=sizeof(expected));
+                if (!simd) memcpy(expected+total,bytes,count);
+                else assert(!memcmp(expected+total,bytes,count));
+                total+=count;
+            }
+            if (!simd) expected_size=total;else assert(total==expected_size);
+        }
+    }
+    viterbi_use_simd=selected;free(input);
+}
+#endif
+
 int main(void) {
+    viterbi_init_tables();
+#if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+    assert(viterbi_use_simd==!!(__builtin_cpu_supports("avx2") && !getenv("LINRAD_DVBT_VITERBI_SCALAR")));
+#else
+    assert(viterbi_use_simd==!getenv("LINRAD_DVBT_VITERBI_SCALAR"));
+#endif
+#endif
+    check_acs();
     const rbdvbt_fec_t rates[]={RBDVBT_FEC_1_2,RBDVBT_FEC_2_3,RBDVBT_FEC_3_4,RBDVBT_FEC_5_6,RBDVBT_FEC_7_8};
     for (unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);++i)
         for (int errors=0;errors<2;++errors) check(rates[i],errors);
+#if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
+    for (unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);++i) check_soft_stream(rates[i]);
+#endif
     puts("DVB-T streaming FEC 1/2, 2/3, 3/4, 5/6, 7/8: exact bytes, puncturing, errors, chunk continuity and reset passed");
     return 0;
 }

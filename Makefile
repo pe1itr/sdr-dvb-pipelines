@@ -225,6 +225,15 @@ test: test-file-replay
 $(BUILD_DIR)/test_dvbt_stream: tests/test_dvbt_stream.c $(DVBT_DIR)/src/probe_constellation.c $(DVBT_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/components/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
+$(BUILD_DIR)/test_dvbt_stream_scalar: tests/test_dvbt_stream.c $(DVBT_DIR)/src/probe_constellation.c $(DVBT_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) -DRBDVBT_VITERBI_SCALAR_ONLY $< $(filter-out $(BUILD_DIR)/components/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+
+ifneq ($(filter aarch64%,$(shell $(CC) -dumpmachine)),)
+DVBT_NEON_TEST := $(BUILD_DIR)/test_viterbi_neon
+$(BUILD_DIR)/test_viterbi_neon: tests/test_viterbi_neon.c $(DVBT_DIR)/include/viterbi_neon.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $< -o $@ $(LDFLAGS)
+endif
+
 $(BUILD_DIR)/test_dvbt_frontend: tests/test_dvbt_frontend.c $(DVBT_DIR)/src/probe_constellation.c $(DVBT_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/components/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
@@ -232,10 +241,13 @@ $(BUILD_DIR)/test_dvbt_frontend: tests/test_dvbt_frontend.c $(DVBT_DIR)/src/prob
 $(BUILD_DIR)/test_dvbt_psi: tests/test_dvbt_psi.c $(DVBT_DIR)/src/dvbt_outer.c $(DVBT_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/components/dvbt/dvbt_outer.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
-test-dvbt: $(BUILD_DIR)/test_dvbt_stream $(BUILD_DIR)/test_dvbt_psi $(BUILD_DIR)/test_dvbt_frontend
+test-dvbt: $(BUILD_DIR)/test_dvbt_stream $(BUILD_DIR)/test_dvbt_stream_scalar $(BUILD_DIR)/test_dvbt_psi $(BUILD_DIR)/test_dvbt_frontend $(DVBT_NEON_TEST)
 	./$(BUILD_DIR)/test_dvbt_stream
+	LINRAD_DVBT_VITERBI_SCALAR=1 ./$(BUILD_DIR)/test_dvbt_stream
+	./$(BUILD_DIR)/test_dvbt_stream_scalar
 	./$(BUILD_DIR)/test_dvbt_psi
 	./$(BUILD_DIR)/test_dvbt_frontend
+	$(if $(DVBT_NEON_TEST),./$(DVBT_NEON_TEST))
 
 test: test-dvbt
 

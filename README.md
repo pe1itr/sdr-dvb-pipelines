@@ -1111,6 +1111,29 @@ en DVB-T met meerdere FEC's blijven aparte acceptatiegevallen. Alleen een
 herhaalbare winst zonder slechtere ontvangst rechtvaardigt integratie;
 bitgelijke optimalisaties moeten dezelfde TS-bytes opleveren. Wijzigingen in
 numeriek vereisen ook een vergelijking rond de ontvangstgrens en bij heracquisitie.
+Voor acceptatie van **live SDR-verwerking** moet de bron op een vaste sampleklok
+blijven leveren. Een bestandsbron die bij tegendruk vertraagt kan onvoldoende
+doorvoer verbergen. Gebruik voor die controle een begrensde invoerbuffer met
+expliciete verliescounters, controleer wachtrijgroei en vergelijk de werkelijke
+bronduur met de nominale signaalduur. De onderzoekstool biedt dit met `--sdr-live`.
+
+Het afzonderlijke [DVB-T-Viterbi-onderzoek](components/dvbt/README.md#viterbi-simd-investigation-2026-11-05)
+test een AVX2-proef met behoud van de floating-pointberekeningen. In 24 live
+bestandsruns bleef de TS-uitvoer exact gelijk, met 2,4–13,3% minder decoder-CPU,
+inclusief de 35/40 kHz-opnamen en een proef met ruis/fading/drift. Alle vijf FEC's
+zijn bovendien per decoderstap vergeleken. De optimalisatie is nu ingebouwd:
+automatisch AVX2 op geschikte x86-CPU's en NEON bij een AArch64-build, zoals
+voor de ODROID-N2. Andere builds behouden de scalarroute. Het onderzoek en de
+meetgegevens blijven afzonderlijk beschikbaar.
+De [aanvullende hogere-FEC-proef](components/dvbt/benchmarks/viterbi-high-fec-2026-11-05.json)
+gebruikt zelf gegenereerde IQ met een vaste bronklok, zonder vertragen bij
+tegendruk: 3/4, 5/6 en 7/8 op 250/500 kHz, plus 60 seconden 500 kHz/7/8 en
+een fadingproef. Alle 24 runs hielden de invoer bij zonder sampleverlies of
+groeiende FEC-wachtrij en leverden per geval identieke TS-bytes. Dit is een
+SDR-invoersimulatie op deze x86-machine; de NEON-doorvoer moet op de N2 zelf
+worden gemeten. `LINRAD_DVBT_VITERBI_SCALAR=1` forceert de oude rekenroute voor
+een A/B-vergelijking. FEC, traceback, wachtrijen en ontvangstinstellingen blijven
+gelijk. De decoder meldt `kernel=avx2-float`, `neon-float` of `scalar-float`.
 
 De acquisitiecorrectie uit [LeanDVB issue #41](https://github.com/pabr/leansdr/issues/41)
 van Ondřej OK1CDJ is opgenomen: een volledig zoekvenster voor normale frames,
@@ -1428,6 +1451,37 @@ kan `-j 2` worden toegevoegd. De compileropties zijn `-march=armv8-a` en
 `-mtune=cortex-a73.cortex-a53`, geschikt voor beide CPU-clusters. De GCC-opties
 staan in de [AArch64-documentatie](https://gcc.gnu.org/onlinedocs/gcc/AArch64-Options.html).
 De bestaande `build/` en ontvangerconfiguratie worden niet overschreven.
+
+De DVB-T-Viterbi gebruikt in deze AArch64-build automatisch **NEON**, op zowel
+de Cortex-A73- als de Cortex-A53-kernen. De logregel `[viterbi] kernel=neon-float`
+bevestigt de gekozen route. De NEON-kern is hier op bitgelijke scores en
+beslissingen gecontroleerd onder ARM-emulatie; de volledige native build en
+live doorvoer moeten nog op de fysieke N2 worden gevalideerd. De AVX2-winst
+van de Ryzen-metingen is geen snelheidsclaim voor de N2.
+
+Na bouwen op de N2 voert dit de decodercontroles uit, inclusief alle vijf FEC's,
+NEON/scalarvergelijking en een build met alleen scalarcode:
+
+```sh
+make BUILD_DIR=build-odroid-n2 test-dvbt
+```
+
+Vergelijk daarna met dezelfde bestaande configuratie en SDR/zenderinstellingen
+(stop de eerste run voordat je de tweede start):
+
+```sh
+# NEON automatisch:
+./build-odroid-n2/linrad_dvb --config pi6ehv-odroid.ini --headless --rtlsdr-serial 1002
+# Scalarreferentie, uitsluitend voor deze start:
+LINRAD_DVBT_VITERBI_SCALAR=1 ./build-odroid-n2/linrad_dvb --config pi6ehv-odroid.ini --headless --rtlsdr-serial 1002
+```
+
+Gebruik de juiste dongle/configuratie voor jouw opstelling. Controleer vooral
+3/4, 5/6 en 7/8 bij passende zenderinstellingen: CPU, groeiende Buffer-wachtrij,
+IQ-verlies, FEC-drops en TS-uitvoer. Laat ook de gebruikelijke video/SRT-keten
+meedraaien; die concurreert op de N2 om CPU-tijd. Herhaal beide routes met een
+stabiel signaal. Gelijke TS-bytes worden met identieke IQ-bestanden gecontroleerd;
+twee opeenvolgende RF-ontvangsten bevatten niet noodzakelijk dezelfde data.
 
 Ubuntu 20.04 heeft oudere GLib-, json-c- en SoapySDR-bibliotheken. De broncode
 houdt daar rekening mee; de volledige toepassing blijft GTK/VLC-devpakketten

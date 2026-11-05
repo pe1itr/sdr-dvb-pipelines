@@ -108,6 +108,183 @@ this optimization. The manifest specifies each file's actual input sample rate;
 in particular, the 35/40 kHz test files use **250,000 samples/s**, not their RF
 bandwidth, for live pacing.
 
+## Viterbi SIMD investigation (2026-11-05)
+
+The following records the **research phase** of the now integrated optimization.
+The [experiment tool](../../tools/dvbt_viterbi_experiment.py) builds
+the baseline from `3b9077b`, an AVX2 candidate, and a per-step comparison checker.
+Both variants include the already integrated frontend optimization above.
+The [report](benchmarks/viterbi-2026-11-05.json) records all 24 live runs,
+input/output hashes, build commands, object identities and validation results.
+
+The candidate computes eight Viterbi states at a time with AVX2 floating-point
+operations and packs eight survivor decisions into one byte. It preserves the
+original costs, addition order, tie decisions, scalar best-state reduction,
+normalization, puncturing, traceback, resets and chunk boundaries. It adds no
+batching or waiting. The kernel is restricted to one function; the surrounding
+decoder retains the normal compiler flags. No integer quantization is used.
+
+Measured on Ryzen 7 5800H with IQ supplied at its original sample rate. Each
+case ran baseline/candidate/candidate/baseline. Values are median decoder CPU
+seconds across all threads, excluding the feeder, GUI and video renderer:
+
+| Input | IQ duration | Baseline CPU s | Candidate CPU s | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| 35 kHz, FEC 2/3, oliYYC | 40.01 s | 2.759 | 2.643 | 4.2% |
+| 40 kHz, FEC 1/2, OAeYaF | 40.01 s | 2.579 | 2.473 | 4.1% |
+| 40 kHz, FEC 1/2, jubzGI | 40.01 s | 4.066 | 3.968 | 2.4% |
+| 250 kHz, FEC 1/2 | 10 s | 2.758 | 2.570 | 6.8% |
+| 333 kHz, FEC 2/3 | 10 s | 2.599 | 2.252 | 13.3% |
+| 250 kHz, noise/fading/drift | 10 s | 2.376 | 2.192 | 7.7% |
+
+All runs consumed every input sample with zero IQ overruns and zero FEC queue
+drops. TS bytes, TS hashes, Viterbi step counts and uncorrectable RS counts were
+identical per input. First TS timing showed no added delay. The narrow recordings
+were replayed in full at **250,000 samples/s**, taking about 40.1 seconds each;
+the 250/333 kHz references used the same ten-second inputs as the frontend study.
+
+Thread CPU timing around the complete Viterbi function shows a **2.08–2.28×**
+speedup, including depuncturing, normalization, traceback and packing. Viterbi
+accounted for approximately 13% of baseline decoder CPU on the clean 250 kHz
+input and 28% on the 333 kHz input, explaining the different end-to-end gains.
+The separate unpaced FEC 2/3 benchmark took 0.1971 versus 0.0938 seconds for one
+million trellis steps (three runs per variant). That is not a live receiver
+speedup claim. The existing sampled ACS wall-time breakdown is not used for
+the CPU figures above.
+
+The checker compares every float metric byte, survivor decision and selected
+best state against the original loop at every step. Tests cover all five FECs
+(1/2, 2/3, 3/4, 5/6, 7/8), independently encoded data, sparse errors, chunk
+continuity, tails, resets, random floating-point costs, ties and erased bursts.
+Recorded-IQ tests cover FEC 1/2 and 2/3; the other rates have synthetic coverage.
+
+Reproduce on an AVX2 machine with the Git history and local recordings present:
+
+```sh
+make all
+python3 tools/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
+python3 tools/dvbt_viterbi_experiment.py test /tmp/dvbt-viterbi
+python3 tools/dvbt_viterbi_experiment.py kernel /tmp/dvbt-viterbi --repeat 3
+python3 - <<'PY'
+import json
+from pathlib import Path
+r = json.loads(Path('components/dvbt/benchmarks/viterbi-2026-11-05.json').read_text())
+Path('/tmp/viterbi-cases.json').write_text(json.dumps(r['fixtures']))
+PY
+python3 tools/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/viterbi-cases.json --repeat 2
+```
+
+Adjust recording paths in the manifest as needed. The controlled fading input
+can be recreated with `dvbt_frontend_experiment.py impair` and a manifest
+containing just the clean 250 kHz case; update its output path in the run manifest.
+Both variants link the same current backend objects from `build/`.
+
+The production decoder now selects AVX2 at runtime on supporting x86 CPUs,
+NEON in AArch64 builds, and scalar otherwise. `LINRAD_DVBT_VITERBI_SCALAR=1`
+forces the scalar route for comparison; this changes no buffering or receive
+parameters. The selected kernel is logged once during table initialization.
+There is no sensitivity improvement claim and no DVB-S change.
+
+`make test-dvbt` tests independent encoded payloads for every FEC, errors,
+chunk/reset handling, random soft values and ties. It runs automatic selection,
+forced scalar and a build excluding all explicit SIMD kernels. On AArch64 it
+also runs `test_viterbi_neon`: 100,000 independently checked ACS cases, including
+signed zero and subnormal floats. The NEON kernel has passed those 6.4 million
+metric checks under `qemu-aarch64 -cpu cortex-a53`; this verifies computations,
+not physical N2 performance or a full native receiver build. The native build
+and SDR throughput test on the ODROID-N2 remain to be performed there.
+
+Integration checks and their limits are recorded in the
+[integration report](benchmarks/viterbi-integration-2026-11-05.json).
+The full x86 receiver was replayed with the fixed-clock source, including high
+FECs, 60 seconds at 500 kHz/7/8, fading, the 35/40 kHz recordings and forced
+scalar; outputs matched the saved baseline. See the root README's ODROID-N2
+section for native build/test and scalar/NEON comparison commands.
+
+### Higher FEC with a fixed SDR-like input clock
+
+The earlier live IQ comparison used the regular file player, which can slow
+down under backpressure. Acceptance for a live SDR requires input that keeps
+arriving when processing stalls. The additional
+[high-FEC report](benchmarks/viterbi-high-fec-2026-11-05.json) records **24 runs**
+with this stricter source model, including FEC **3/4, 5/6 and 7/8**.
+
+`tools/fixed_iq_source.py` releases 10 ms chunks against one monotonic sample
+clock. Its 100 ms FIFO is bounded: overflow drops incoming samples and records
+the loss; it never shifts the clock to accommodate the receiver. The kernel
+pipe and the receiver's existing buffers also have finite capacity. The source
+reports its peak FIFO occupancy, sample losses and scheduling lateness.
+`tests/test_fixed_iq_source.py` verifies byte-exact normal delivery and explicit
+loss when the reader is deliberately stalled for 300 ms.
+
+No matching RF recordings were available. The independent `datv-transmitter`
+`datv-iq` test encoder generated valid QPSK 2K, GI 1/32 IQ, with known counter
+TS payloads and PAT/PMT. The 250 kHz cases use 1.25 Msamples/s and the 500 kHz
+cases 2.5 Msamples/s. Generation and testing open no radio hardware. Every
+received payload packet is checked against the known pattern as well as the
+baseline output. Generated files and metadata are under the ignored
+`build/diagnostics/viterbi-high-fec/` directory.
+
+Total decoder CPU reductions at the fixed input rate:
+
+| FEC | 250 kHz, 20 s | 500 kHz, 20 s |
+| --- | ---: | ---: |
+| 3/4 | 13.5% | 16.7% |
+| 5/6 | 15.3% | 17.7% |
+| 7/8 | 15.6% | 15.8% |
+
+The 500 kHz high-FEC cases were run twice per variant in alternating order;
+the 250 kHz cases once per variant. A 500 kHz/FEC 1/2 control also passed.
+The complete FEC thread used 36.6–45.7% less CPU in the high-FEC clean cases.
+
+For **60 continuous seconds at 500 kHz/FEC 7/8**, decoder CPU decreased from
+23.762 to 19.544 seconds (**17.8%**), while FEC-thread CPU decreased from
+11.251 to 6.921 seconds. Both variants returned the same 4,945,716 TS bytes.
+The 20-second 7/8 noise/fading/drift case also returned identical TS and the
+same 318 uncorrectable RS blocks, with every emitted payload packet intact.
+
+Across all 24 runs:
+
+- No source FIFO loss, receiver IQ overrun or FEC queue drop; every input sample
+  was consumed, and all TS bytes and RS outcomes matched per case.
+- Peak FEC queue occupancy was **64/1024 symbols (6.25%)** in both variants.
+  This counts waiting symbols, excluding the job currently being processed.
+  First-third and last-third queue medians remained 64 symbols, with no buildup.
+- The slowest successful FEC job used at most 66.8% of its represented signal
+  duration in the baseline and 60.0% in the candidate.
+- Source completion exceeded the nominal signal duration by less than **1 ms**.
+  Maximum individual source scheduling lateness was 5.42 ms. This is measured
+  OS scheduling, not a hardware real-time clock guarantee.
+
+The historical high-FEC problem involved falling back to repeated block
+decoding; the baseline already contains the fix that enables the continuous
+Viterbi path for all five rates. Both current baseline and SIMD candidate keep
+up here. These results establish additional CPU headroom on this Ryzen 7 5800H,
+not that the historical failure is still present or that every slower machine
+will keep up. The longest test is 60 seconds; RF and longer soak tests remain
+separate from this generated-IQ result. These measurements precede production
+integration and measure the AVX2 prototype, not NEON.
+
+Reproduce the files and fixed-clock comparison (NumPy and the independently
+built transmitter fixture are required):
+
+```sh
+python3 tests/test_fixed_iq_source.py
+python3 tools/dvbt_high_fec_fixtures.py /path/to/datv-transmitter/build/datv-iq build/diagnostics/viterbi-high-fec
+python3 tools/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path('build/diagnostics/viterbi-high-fec/cases.json')
+cases = json.loads(p.read_text())
+for c in cases:
+    c['repeat'] = 2 if (c['bandwidth'] == 500000 and c['nominal_duration_s'] == 20
+                       and c['fec'] != '1/2' and c['expected_clean']) else 1
+Path('/tmp/high-fec-sdr.json').write_text(json.dumps(cases))
+PY
+python3 tools/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/high-fec-sdr.json --sdr-live --repeat 1
+```
+
 ## Live-rate frontend investigation (2026-11-05)
 
 The following records the earlier research phase, before integration above. The

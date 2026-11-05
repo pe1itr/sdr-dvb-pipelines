@@ -26,6 +26,18 @@ extern long syscall(long number, ...);
 #include <sys/time.h>
 #include <time.h>
 
+/* Restrict AVX2 code generation to the ACS function. The rest of the binary
+ * keeps its baseline ISA and runs on CPUs without AVX2 (and on other hosts). */
+#if (defined(__x86_64__) || defined(__i386__)) && \
+    (defined(__GNUC__) || defined(__clang__)) && !defined(RBDVBT_VITERBI_SCALAR_ONLY)
+#define RBDVBT_HAVE_VITERBI_AVX2 1
+#include <immintrin.h>
+#endif
+#if defined(__aarch64__) && defined(__ARM_NEON) && !defined(RBDVBT_VITERBI_SCALAR_ONLY)
+#define RBDVBT_HAVE_VITERBI_NEON 1
+#include "viterbi_neon.h"
+#endif
+
 #ifdef RBDVBT_HAVE_X11
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -4997,6 +5009,45 @@ static uint8_t viterbi_transition_index_table[VITERBI_STATE_COUNT][2];
 static viterbi_transition_t viterbi_transition_table[128];
 static int viterbi_tables_ready;
 
+#if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
+static int viterbi_use_simd;
+#endif
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+/* Same floating-point arithmetic and tie rules as the scalar ACS loop. */
+static int viterbi_avx2_exp0[64], viterbi_avx2_exp1[64];
+
+__attribute__((target("avx2")))
+static void viterbi_acs_avx2(const float *old_metrics, float *new_metrics,
+                           const float cost[4], uint8_t history[8],
+                           float *best_metric, int *best_state)
+{
+    const __m256i order = _mm256_setr_epi32(0,1,4,5,2,3,6,7);
+    const __m128 c = _mm_loadu_ps(cost);
+    const __m256 costs = _mm256_insertf128_ps(_mm256_castps128_ps256(c),c,1);
+    for (unsigned s=0; s<64; s+=8) {
+        unsigned p=(s & 31)*2;
+        __m256 a=_mm256_loadu_ps(old_metrics+p);
+        __m256 b=_mm256_loadu_ps(old_metrics+p+8);
+        __m256 even=_mm256_permutevar8x32_ps(_mm256_shuffle_ps(a,b,0x88),order);
+        __m256 odd=_mm256_permutevar8x32_ps(_mm256_shuffle_ps(a,b,0xdd),order);
+        __m256 c0=_mm256_permutevar8x32_ps(costs,_mm256_loadu_si256((const __m256i *)(viterbi_avx2_exp0+s)));
+        __m256 c1=_mm256_permutevar8x32_ps(costs,_mm256_loadu_si256((const __m256i *)(viterbi_avx2_exp1+s)));
+        __m256 m0=_mm256_add_ps(even,c0), m1=_mm256_add_ps(odd,c1);
+        __m256 choose1=_mm256_cmp_ps(m1,m0,_CMP_LT_OQ);
+        _mm256_storeu_ps(new_metrics+s,_mm256_blendv_ps(m0,m1,choose1));
+        history[s/8]=(uint8_t)_mm256_movemask_ps(choose1);
+    }
+    /* Keep scalar reduction order, including ties and the original bound. */
+    float best=1.0e30f;
+    int state=0;
+    for (unsigned s=0; s<64; ++s) {
+        if (new_metrics[s]<best) { best=new_metrics[s]; state=(int)s; }
+    }
+    *best_metric=best;
+    *best_state=state;
+}
+#endif
+
 static void survivor_row_set(uint8_t row[8], uint32_t state, uint8_t pred)
 {
     uint8_t mask = (uint8_t)(1u << (state & 7u));
@@ -5672,6 +5723,24 @@ static void viterbi_init_tables(void)
             tr->survivor_bit = (uint8_t)bit;
         }
     }
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+    for (unsigned s=0; s<64; ++s) {
+        viterbi_avx2_exp0[s]=viterbi_expected_table[s][0];
+        viterbi_avx2_exp1[s]=viterbi_expected_table[s][1];
+    }
+    viterbi_use_simd = __builtin_cpu_supports("avx2") &&
+                      !getenv("LINRAD_DVBT_VITERBI_SCALAR");
+    rbdvbt_log_printf(RBDVBT_LOG_INFO, "[viterbi] kernel=%s\n",
+                      viterbi_use_simd ? "avx2-float" : "scalar-float");
+#elif defined(RBDVBT_HAVE_VITERBI_NEON)
+    /* Advanced SIMD is part of the supported ARMv8-A AArch64 target. */
+    viterbi_neon_init(viterbi_expected_table);
+    viterbi_use_simd = !getenv("LINRAD_DVBT_VITERBI_SCALAR");
+    rbdvbt_log_printf(RBDVBT_LOG_INFO, "[viterbi] kernel=%s\n",
+                      viterbi_use_simd ? "neon-float" : "scalar-float");
+#else
+    rbdvbt_log_printf(RBDVBT_LOG_INFO, "[viterbi] kernel=scalar-float\n");
+#endif
     viterbi_tables_ready = 1;
 }
 
@@ -5922,21 +5991,34 @@ static int live_viterbi_stream_decode_bytes(rbdvbt_fec_t fec,
         int sample_trace_timing = detail != NULL && ((t & 4095u) == 7u);
         double acs_t0 = sample_acs_timing ? monotonic_seconds() : 0.0;
 
-        for (uint32_t next_state = 0; next_state < VITERBI_STATE_COUNT; ++next_state) {
-            uint8_t prev0 = viterbi_prev_state_table[next_state][0];
-            uint8_t prev1 = viterbi_prev_state_table[next_state][1];
-            uint8_t exp0 = viterbi_expected_table[next_state][0];
-            uint8_t exp1 = viterbi_expected_table[next_state][1];
-            float metric0 = old_metrics[prev0] + pair->cost[exp0];
-            float metric1 = old_metrics[prev1] + pair->cost[exp1];
-            uint8_t choose1 = (uint8_t)(metric1 < metric0);
-            float selected = choose1 ? metric1 : metric0;
+#ifdef RBDVBT_HAVE_VITERBI_AVX2
+        if (viterbi_use_simd) {
+            viterbi_acs_avx2(old_metrics, new_metrics, pair->cost, history_row,
+                              &step_best, &best_state);
+        } else
+#elif defined(RBDVBT_HAVE_VITERBI_NEON)
+        if (viterbi_use_simd) {
+            viterbi_acs_neon(old_metrics, new_metrics, pair->cost, history_row,
+                              &step_best, &best_state);
+        } else
+#endif
+        {
+            for (uint32_t next_state = 0; next_state < VITERBI_STATE_COUNT; ++next_state) {
+                uint8_t prev0 = viterbi_prev_state_table[next_state][0];
+                uint8_t prev1 = viterbi_prev_state_table[next_state][1];
+                uint8_t exp0 = viterbi_expected_table[next_state][0];
+                uint8_t exp1 = viterbi_expected_table[next_state][1];
+                float metric0 = old_metrics[prev0] + pair->cost[exp0];
+                float metric1 = old_metrics[prev1] + pair->cost[exp1];
+                uint8_t choose1 = (uint8_t)(metric1 < metric0);
+                float selected = choose1 ? metric1 : metric0;
 
-            new_metrics[next_state] = selected;
-            survivor_row_set(history_row, next_state, choose1);
-            if (selected < step_best) {
-                step_best = selected;
-                best_state = (int)next_state;
+                new_metrics[next_state] = selected;
+                survivor_row_set(history_row, next_state, choose1);
+                if (selected < step_best) {
+                    step_best = selected;
+                    best_state = (int)next_state;
+                }
             }
         }
         if (step_best >= inf) {
