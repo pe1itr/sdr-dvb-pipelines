@@ -84,7 +84,7 @@ $(BUILD_DIR)/scatter/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SCATTER_DIR)/src/*
 
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
-GUI_HEADERS += src/lime_rx.h
+GUI_HEADERS += src/lime_rx.h src/rx_limits.h
 GUI_SOURCES += src/program_view.c
 GUI_HEADERS += src/program_view.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
@@ -128,12 +128,13 @@ $(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h 
 
 test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 	python3 tests/test_linrad.py
+	python3 tests/test_soapy_inputs.py
 
 clean:
 	rm -rf $(BUILD_DIR)
 
 SDR_SOURCES := src/sdr_to_stdout.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
-$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(LIME_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)

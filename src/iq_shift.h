@@ -13,10 +13,10 @@ typedef struct {
 
 /* Leave 2.5% of the source rate at each analog/anti-alias filter edge.
  * Width is the occupied channel (or enabled IQ filter) width in Hz.
- * Zero offset preserves legacy operation, including wide decoder settings. */
+ * The channel must fit even when the digital mixer is bypassed. */
 static inline int iq_shift_fits(double rate, double offset, double width) {
     return isfinite(rate) && rate > 0 && isfinite(offset) && isfinite(width) && width >= 0 &&
-        (offset == 0 || fabs(offset) + width/2 <= rate*.475);
+        fabs(offset) + width/2 <= rate*.475;
 }
 static inline int iq_shift_init(IQShift *s, double rate, double offset) {
     if (!iq_shift_fits(rate, offset, 0)) return -1;

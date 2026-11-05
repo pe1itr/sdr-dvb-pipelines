@@ -116,6 +116,79 @@ static void exercise_record_controls(App *a) {
     status(a, "");
 }
 
+static void exercise_model_limits(App *a) {
+    int source=a->source, standard=a->standard, sr=a->sr;
+    a->standard=0; a->sr=125000;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_AIRSPYHF);
+    double low,high;
+    gtk_spin_button_get_range(GTK_SPIN_BUTTON(a->frequency_box),&low,&high);
+    g_assert_cmpfloat(low,==,64000); g_assert_cmpfloat(high,==,260000);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),144000);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box),293000);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"437.000000 MHz");
+    g_assert_null(receiver_offset_problem(a));
+    g_key_file_set_double(a->config,"airspyhf","frequency",260000000);
+    tune_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"airspyhf","frequency",NULL),==,260000000);
+    /* A digital offset cannot move the channel beyond the physical VHF input. */
+    g_key_file_set_double(a->config,"airspyhf","receiver_offset",1000);
+    g_assert_nonnull(receiver_offset_problem(a));
+    g_key_file_set_double(a->config,"airspyhf","receiver_offset",0);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_AIRSPYR2);
+    gtk_spin_button_get_range(GTK_SPIN_BUTTON(a->frequency_box),&low,&high);
+    g_assert_cmpfloat(low,==,24000); g_assert_cmpfloat(high,==,1700000);
+    g_assert_true(gtk_widget_get_visible(a->sdriq_rate_box));
+    g_assert_false(gtk_widget_get_visible(a->rate_box));
+    g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box)),==,"10000000");
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->sdriq_rate_box),"2500000");
+    a->sr=2000000; refresh_preview(a);
+    g_assert_nonnull(receiver_offset_problem(a));
+    g_assert_false(gtk_widget_get_sensitive(a->power_button));
+    a->sr=1000000; refresh_preview(a);
+    g_assert_null(receiver_offset_problem(a));
+    gain_step(a,1);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)),==,"Gain setting 31");
+    g_key_file_set_double(a->config,"airspyr2","frequency",1700000000);
+    tune_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"airspyr2","frequency",NULL),==,1700000000);
+    a->sr=125000;
+    for (int input=SOURCE_RSP1A;input<=SOURCE_RSP1B;++input) {
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),input);
+        gtk_spin_button_get_range(GTK_SPIN_BUTTON(a->frequency_box),&low,&high);
+        g_assert_cmpfloat(low,==,1); g_assert_cmpfloat(high,==,2000000);
+        gain_step(a,1);
+        g_assert_cmpfloat(g_key_file_get_double(a->config,sources[input],"gain",NULL),==,41);
+        g_assert_null(receiver_offset_problem(a));
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),3);
+    double saved_rate=g_key_file_get_double(a->config,"sdriq","sample_rate",NULL);
+    g_key_file_set_double(a->config,"sdriq","sample_rate",196078);
+    a->sr=333000; populate_rates(a); refresh_preview(a);
+    g_assert_nonnull(receiver_offset_problem(a));
+    g_assert_false(gtk_widget_get_sensitive(a->power_button));
+    /* Check the actual popup renderer, not just the validation function. */
+    GtkTreeModel *model=gtk_combo_box_get_model(GTK_COMBO_BOX(a->sr_box));
+    GtkTreeIter iter;
+    g_assert_true(gtk_tree_model_iter_nth_child(model,&iter,NULL,4)); /* 333000 */
+    GtkCellRenderer *cell=gtk_cell_renderer_text_new();
+    g_object_ref_sink(cell);
+    rate_cell_data(GTK_CELL_LAYOUT(a->sr_box),cell,model,&iter,a);
+    gboolean sensitive=TRUE;
+    g_object_get(cell,"sensitive",&sensitive,NULL);
+    g_assert_false(sensitive);
+    g_assert_true(gtk_tree_model_iter_nth_child(model,&iter,NULL,2)); /* 125000 */
+    rate_cell_data(GTK_CELL_LAYOUT(a->sr_box),cell,model,&iter,a);
+    g_object_get(cell,"sensitive",&sensitive,NULL);
+    g_assert_true(sensitive); g_object_unref(cell);
+    a->sr=125000; refresh_preview(a);
+    g_assert_null(receiver_offset_problem(a));
+    g_assert_true(gtk_widget_get_sensitive(a->power_button));
+    g_key_file_set_double(a->config,"sdriq","sample_rate",saved_rate);
+    a->standard=standard; a->sr=sr;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
+    populate_rates(a); refresh_preview(a);
+}
+
 static void exercise_lime(App *a) {
     int source=a->source;
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_LIME);
@@ -1065,6 +1138,7 @@ static gboolean exercise(gpointer data) {
         exercise_afedri(a);
         exercise_rtlsdr(a);
         exercise_lime(a);
+        exercise_model_limits(a);
         exercise_funcube(a);
         exercise_receiver_offset(a);
         exercise_live_gain_locale(a);

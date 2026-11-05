@@ -88,7 +88,8 @@ class Checker:
             self.report("WARNING", f"Cannot determine available Soapy drivers:\n{output}")
             return
         for driver, device in (("hackrf", "HackRF"), ("rfspace", "SDR-IQ"),
-                               ("rtlsdr", "RTL-SDR")):
+                               ("rtlsdr", "RTL-SDR"), ("sdrplay", "SDRplay RSP1A/B (API v3)"),
+                               ("airspyhf", "Airspy HF+ Dual Port"), ("airspy", "Airspy R2")):
             if re.search(r"\b" + driver + r"\b", factories.group()):
                 self.report("OK", f"Soapy driver {driver}: {device}")
             else:

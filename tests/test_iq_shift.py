@@ -70,7 +70,7 @@ class ShiftTests(unittest.TestCase):
             self.assertLess(np.sqrt(np.mean(abs(byte_z-expected)**2))/3000,.04)
 
     def test_invalid_offset_or_shifted_passband(self):
-        for offset, width in ((96000, 0), (-96000, 0), (50000, 150000),
+        for offset, width in ((0, 192000), (0, 333000), (96000, 0), (-96000, 0), (50000, 150000),
                               (50000, 168750), ('nan', 40000), ('inf', 0)):
             p = subprocess.run([PROBE, '192000', str(offset), str(width), '2048'], capture_output=True)
             self.assertEqual(p.returncode, 2)

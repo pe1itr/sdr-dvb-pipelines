@@ -7,6 +7,7 @@
 #include "lime_rx.h"
 #include "iq_file.h"
 #include "iq_shift.h"
+#include "rx_limits.h"
 #include <glib-unix.h>
 #include <arpa/inet.h>
 #include <errno.h>
@@ -30,6 +31,9 @@
 #include "program_view.h"
 #include "usb_receiver.h"
 
+enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
+       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_FILE = 12 };
+
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
     GKeyFile *config;
@@ -39,7 +43,7 @@ typedef struct {
     GtkWidget *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
-    GtkWidget *hardware_entries[8][3], *ip_box, *port_box, *header_box, *center_box;
+    GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
@@ -91,9 +95,8 @@ static gboolean valid_fec(App *a, int fec) {
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7, SOURCE_FILE = 8 };
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "file"};
-static const char *source_labels[] = {"linrad", "hackrf", "b210", "sdriq", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "File (IQ)"};
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "rsp1a", "rsp1b", "airspyhf", "airspyr2", "file"};
+static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
@@ -105,6 +108,7 @@ static gboolean udp_output(App *a) {
 }
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
 static gboolean use_scatter(App *a) { return a->scatter; }
+static const int airspyr2_rates[] = {2500000, 10000000};
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
@@ -141,19 +145,41 @@ static double receiver_offset(App *a) {
 static double channel_bandwidth(App *a) { return a->standard == 2 ? a->sr : a->sr*1.35; }
 static const char *receiver_offset_problem(App *a) {
     if (!hardware_source(a)) return NULL;
+    const char *section=sources[a->source];
+    GError *error=NULL;
+    double frequency=g_key_file_get_double(a->config,section,"frequency",&error);
+    if (error) { g_error_free(error); frequency=NAN; error=NULL; }
+    double lo=g_key_file_get_double(a->config,section,"lo_offset",&error);
+    if (error) { g_error_free(error); lo=NAN; }
     double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
     double offset=receiver_offset(a);
-    double width=channel_bandwidth(a);
-    if (!iq_shift_fits(rate,offset,width)) {
+    if (a->source == SOURCE_AIRSPYR2 && !rx_airspyr2_rate_valid(rate)) {
         g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
-            "Receiver offset + DVB bandwidth does not fit the source sample rate (2.5%% edge margin). "
-            "Receiver offset: %+.9g Hz; DVB bandwidth: %.9g Hz; source sample rate: %.9g samples/s. "
-            "Reduce offset/bandwidth or increase sample rate.",offset,width,rate);
+            "Airspy R2: select sample rate 2500000 or 10000000 samples/s (also checked against the connected device).");
+        return a->receiver_offset_error;
+    }
+    if (!rx_tuning_valid(section,frequency,offset) || !isfinite(lo) ||
+        !isfinite(frequency+lo+offset) || frequency+lo+offset < 0) {
+        g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
+            "%s: invalid SDR/IF tuning. SDR/IF %.9g Hz + converter LO %+.9g Hz + receiver offset %+.9g Hz. "
+            "Hardware range: %.9g..%.9g Hz%s. Converter LO changes the RF label, not the hardware range.",
+            source_labels[a->source],frequency,lo,offset,rx_frequency_min(section),rx_frequency_max(section),
+            a->source == SOURCE_FCDPP ? " (240..420 MHz gap)" : "");
+        return a->receiver_offset_error;
+    }
+    double width=channel_bandwidth(a);
+    if (!rx_bandwidth_fits(section,rate,offset,width)) {
+        g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
+            "Receiver offset + DVB bandwidth does not fit %s. Required: %.9g Hz; usable: %.9g Hz; "
+            "sample rate: %.9g samples/s; receiver offset: %+.9g Hz. "
+            "%s Reduce symbol rate/bandwidth or offset, or increase sample rate.",
+            source_labels[a->source],width+2*fabs(offset),rx_usable_bandwidth(section,rate),rate,offset,
+            a->standard == 2 ? "DVB-T uses the selected channel bandwidth." : "DVB-S/S2 bandwidth = symbol rate x 1.35 (35% roll-off).");
         return a->receiver_offset_error;
     }
     width=g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL);
     if (g_key_file_get_boolean(a->config,sources[a->source],"filter_enabled",NULL) &&
-        !iq_shift_fits(rate,offset,width)) {
+        !rx_bandwidth_fits(section,rate,offset,width)) {
         g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
             "Receiver offset + IQ filter does not fit the source band. "
             "Receiver offset: %+.9g Hz; filter bandwidth: %.9g Hz; source sample rate: %.9g samples/s. "
@@ -259,8 +285,8 @@ static void build_pipeline(App *a) {
     if (a->window) add(s, "--control-stdin");
     } else {
         const char *section = sources[a->source];
-        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
-                                      a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
+                                      a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
         if (a->source == SOURCE_RTLSDR && !rtlsdr_rate_valid(sample_rate)) fatal("Invalid RTL-SDR sample rate: %d", sample_rate);
         if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
@@ -270,9 +296,11 @@ static void build_pipeline(App *a) {
         if (a->window) add(s, "--control-stdin");
         add(s, "--format"); add(s, format);
         add_number(s, "--sample-rate", sample_rate);
-        if (receiver_offset(a) != 0) {
+        {
             char value[G_ASCII_DTOSTR_BUF_SIZE];
-            add(s, "--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
+            if (receiver_offset(a) != 0) {
+                add(s, "--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
+            }
             add(s, "--channel-bandwidth"); add(s,g_ascii_dtostr(value,sizeof(value),channel_bandwidth(a)));
         }
         const char *keys[] = {"frequency", "gain", "args", "images", "antenna"};
@@ -530,8 +558,9 @@ static void power_refresh(App *a) {
         "Stopping the receiver pipeline. Please wait…",
         "Reception stopped due to an error. Check the status and log; click to restart."};
     gtk_label_set_text(GTK_LABEL(a->power_label), connecting ? "Stop SDR · connecting Afedri…" : a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
-    gtk_widget_set_tooltip_text(a->power_button, connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
-    gtk_widget_set_sensitive(a->power_button, !a->stopping);
+    const char *problem=a->running ? NULL : receiver_offset_problem(a);
+    gtk_widget_set_tooltip_text(a->power_button, problem ? problem : connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
+    gtk_widget_set_sensitive(a->power_button, !a->stopping && !problem);
 }
 
 static void finish_if_stopped(App *a) {
@@ -793,6 +822,8 @@ static void refresh_summaries(App *a) {
 
 static void refresh_preview(App *a) {
     const char *problem=receiver_offset_problem(a);
+    power_refresh(a);
+    if (a->sr_box) gtk_widget_queue_draw(a->sr_box);
     if (problem) {
         clear_stages(a);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(a->preview)),problem,-1);
@@ -809,7 +840,7 @@ static void tuning_refresh(App *a) {
     if (!a->frequency_display) return;
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
-        char *gain=g_strdup_printf(a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
+        char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, hardware_source(a));
@@ -877,9 +908,9 @@ static void tune_step(App *a, int direction) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
-    double low = a->source == SOURCE_LIME ? LIME_RX_MIN_FREQUENCY : a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 500 : a->source == 1 ? 1000000 : 70000000;
-    double high = a->source == SOURCE_LIME ? LIME_RX_MAX_FREQUENCY : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY : a->source == SOURCE_AFEDRI ? 35000000 : a->source == 3 ? 30000000 : 6000000000.0;
-    if (next < low || next > high || (a->source == SOURCE_FCDPP && !funcube_frequency_valid(next))) { status(a, "SDR tuning limit reached"); return; }
+    if (!rx_tuning_valid(section,next,receiver_offset(a))) {
+        status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return;
+    }
     if (a->running) {
         char command[64];
         int length = g_snprintf(command, sizeof(command), "%.0f\n", next);
@@ -901,12 +932,13 @@ static void tune_step(App *a, int direction) {
 }
 
 static void gain_step(App *a, int direction) {
+    if (a->source == SOURCE_AIRSPYHF) { status(a,"Airspy HF+ VHF uses automatic gain control"); return; }
     if (!hardware_source(a) || a->stopping) return;
     const char *section = sources[a->source];
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
     double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
-    double low = a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
-    double high = a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    double low = rx_rsp(section) ? 20 : a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
+    double high = a->source == SOURCE_AIRSPYR2 ? 45 : rx_rsp(section) ? 59 : a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
     if (a->source == SOURCE_RTLSDR) next = CLAMP(next, low, high);
     if (next == gain || next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
@@ -949,7 +981,7 @@ static void filter_refresh(App *a) {
 static void filter_apply(App *a, int width, gboolean enabled) {
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
-    if (enabled && !iq_shift_fits(g_key_file_get_double(a->config,section,"sample_rate",NULL),receiver_offset(a),width)) {
+    if (enabled && !rx_bandwidth_fits(section,g_key_file_get_double(a->config,section,"sample_rate",NULL),receiver_offset(a),width)) {
         status(a,"Filter width + receiver offset exceeds source band"); filter_refresh(a); return;
     }
     if (a->running) {
@@ -1219,18 +1251,18 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->format_box, source_changed, a);
         g_signal_handlers_block_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box), a->source == SOURCE_LIME ? LIME_RX_MIN_FREQUENCY/1000.0 : a->source == SOURCE_FCDPP ? FUNCUBE_MIN_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MIN_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 0 : a->source == 3 ? 0.5 : a->source == 2 ? 70000 : 1000,
-                                  a->source == SOURCE_LIME ? LIME_RX_MAX_FREQUENCY/1000.0 : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_FREQUENCY/1000.0 : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_FREQUENCY/1000.0 : a->source == SOURCE_AFEDRI ? 35000 : a->source == 3 ? 30000 : 6000000.0);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),
+            rx_frequency_min(section)/1000.0, rx_frequency_max(section)/1000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
-                                  a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
+                                  a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),
             integer_setting(a, section, "sample_rate", 1, 100000000));
-        if (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP) {
+        if (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2) {
             g_signal_handlers_block_by_func(a->sdriq_rate_box, source_changed, a);
             gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->sdriq_rate_box));
-            const int *rates = a->source == SOURCE_FCDPP ? funcube_rates : a->source == SOURCE_RTLSDR ? rtlsdr_rates : sdriq_rates;
-            size_t count = a->source == SOURCE_FCDPP ? G_N_ELEMENTS(funcube_rates) : a->source == SOURCE_RTLSDR ? G_N_ELEMENTS(rtlsdr_rates) : G_N_ELEMENTS(sdriq_rates);
+            const int *rates = a->source == SOURCE_AIRSPYR2 ? airspyr2_rates : a->source == SOURCE_FCDPP ? funcube_rates : a->source == SOURCE_RTLSDR ? rtlsdr_rates : sdriq_rates;
+            size_t count = a->source == SOURCE_AIRSPYR2 ? G_N_ELEMENTS(airspyr2_rates) : a->source == SOURCE_FCDPP ? G_N_ELEMENTS(funcube_rates) : a->source == SOURCE_RTLSDR ? G_N_ELEMENTS(rtlsdr_rates) : G_N_ELEMENTS(sdriq_rates);
             int configured = g_key_file_get_integer(a->config, section, "sample_rate", NULL);
             gboolean found = FALSE;
             for (size_t i = 0; i < count; ++i) {
@@ -1253,15 +1285,15 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_unblock_by_func(a->frequency_box, source_changed, a);
     } else {
         g_key_file_set_string(a->config, section, "format", gtk_combo_box_get_active(GTK_COMBO_BOX(a->format_box)) ? "u8" : "s16");
-        g_key_file_set_integer(a->config, section, "sample_rate", (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP) ?
+        g_key_file_set_integer(a->config, section, "sample_rate", (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2) ?
             atoi(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box))) :
             gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)));
         if (hardware_source(a)) {
             g_key_file_set_double(a->config, section, "frequency", gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
-    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP);
+    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
+    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
     gtk_widget_set_sensitive(a->frequency_box, hardware_source(a));
     gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE);
     if (a->hardware_stack) gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), section);
@@ -1326,6 +1358,21 @@ static void populate_rates(App *a) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), active);
     gtk_widget_set_sensitive(a->gi_box, a->standard == 2);
     g_signal_handlers_unblock_by_func(a->sr_box, selection_changed, a);
+}
+
+/* Keep an incompatible saved selection visible so the user can correct it;
+ * prevent choosing physically impossible rates from the popup. Start and CLI
+ * validation use the same bandwidth calculation, including zero offset. */
+static void rate_cell_data(GtkCellLayout *layout, GtkCellRenderer *cell,
+        GtkTreeModel *model, GtkTreeIter *iter, gpointer data) {
+    (void)layout; App *a=data;
+    char *label=NULL;
+    gtk_tree_model_get(model,iter,0,&label,-1);
+    double width=label ? g_ascii_strtod(label,NULL)*(a->standard == 2 ? 1 : 1.35) : NAN;
+    gboolean valid=!hardware_source(a) || rx_bandwidth_fits(sources[a->source],
+        g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL),receiver_offset(a),width);
+    g_object_set(cell,"sensitive",valid,NULL);
+    g_free(label);
 }
 
 static void populate_fecs(App *a) {
@@ -1534,6 +1581,9 @@ static void source_defaults(App *a) {
     const char *rtlsdr_values[] = {"2400000", "437000000", "30", "driver=rtlsdr", "", "RX", "u8"};
     const char *lime_values[] = {"10000000", "437000000", "30", "", "", "AUTO", "s16"};
     const char *funcube_values[] = {"192000", "437000000", "20", "lna=1,mixer=1", "", "", "s16"};
+    const char *rsp_values[] = {"2000000", "144600000", "40", "driver=sdrplay", "", "", "s16"};
+    const char *airspyr2_values[] = {"10000000", "437000000", "30", "driver=airspy", "", "RX", "s16"};
+    const char *airspyhf_values[] = {"768000", "144600000", "0", "driver=airspyhf", "", "", "s16"};
     const char *afedri_values[] = {"1010526", "28000000", "14", "", "", "", "s16"};
     const char *net_keys[] = {"ip", "port", "bind"};
     const char *net_values[] = {"192.168.0.118", "50005", "0.0.0.0"};
@@ -1543,7 +1593,7 @@ static void source_defaults(App *a) {
     for (int j = 1; j < SOURCE_FILE; ++j)
         for (int i = 0; i < 7; ++i)
             if (!g_key_file_has_key(a->config, sources[j], keys[i], NULL))
-                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_LIME ? lime_values[i] : j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
+                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_AIRSPYR2 ? airspyr2_values[i] : j == SOURCE_AIRSPYHF ? airspyhf_values[i] : rx_rsp(sources[j]) ? rsp_values[i] : j == SOURCE_LIME ? lime_values[i] : j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j) {
         if (!g_key_file_has_key(a->config,sources[j],"receiver_offset",NULL))
             g_key_file_set_double(a->config,sources[j],"receiver_offset",0);
@@ -1768,8 +1818,8 @@ static gboolean config_close(GtkWidget *widget, GdkEvent *event, gpointer data) 
 static void show_config(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
     gtk_widget_show_all(a->config_dialog);
-    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP);
+    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
+    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
     gtk_window_present(GTK_WINDOW(a->config_dialog));
 }
 
@@ -1963,12 +2013,15 @@ static void create_config(App *a) {
             const char *labels[] = {"Device arguments", "UHD images (B210)", "Antenna"};
             const char *net_keys[] = {"ip", "port", "bind"};
             const char *net_labels[] = {"Afedri IP address", "TCP / UDP port", "UDP bind address"};
-            for (int field=0; field<(source == SOURCE_FCDPP ? 1 : 3); ++field) {
+            for (int field=0; field<((source == SOURCE_FCDPP || source == SOURCE_AIRSPYHF || source == SOURCE_AIRSPYR2 || rx_rsp(sources[source])) ? 1 : 3); ++field) {
                 if (source == SOURCE_LIME && field == 1) continue;
                 GtkWidget *entry = entry_field(grid, source == SOURCE_AFEDRI ? net_labels[field] : labels[field],
                     field, a, sources[source], source == SOURCE_AFEDRI ? net_keys[field] : keys[field]);
                 if (source == SOURCE_LIME) gtk_widget_set_tooltip_text(entry, field == 0 ? "Empty for a single device, or serial=SERIAL to select a Mini. Native LimeSuite RX channel 0." : "AUTO switches LNAW below 2 GHz / LNAH from 2 GHz; or select LNAW or LNAH explicitly.");
                 if (source == SOURCE_FCDPP) gtk_widget_set_tooltip_text(entry, "Optional: hid=/dev/hidrawN,lna=0|1,mixer=0|1. Gain arrows set IF gain (0..59 dB). If the spectrum collapses at high IF gain, reduce IF gain or try lna=1,mixer=0 while stopped. The usable gain depends on the mixer setting and input signal.");
+                if (source == SOURCE_AIRSPYR2) gtk_widget_set_tooltip_text(entry,"SoapyAirspy + libairspy. Optional serial=HEX selects a device. 24..1700 MHz; 10 MS/s or experimental 2.5 MS/s. Gain setting 0..45 distributes LNA/MIX/VGA steps; not calibrated dB. Bias tee off by default.");
+                if (source == SOURCE_AIRSPYHF) gtk_widget_set_tooltip_text(entry,"SoapyAirspyHF: driver=airspyhf,serial=HEX (serial optional). Connect the VHF input: 64..260 MHz. VHF gain is automatic; sample rate is checked against the device at start.");
+                if (rx_rsp(sources[source])) gtk_widget_set_tooltip_text(entry,"SoapySDRPlay3 and SDRplay API v3 required. Optional serial=SERIAL selects a device. The selected RSP model is checked at start. Gain arrows adjust IF reduction (20..59 dB); higher means less gain. RF reduction state is 0.");
                 a->hardware_entries[source][field] = entry;
                 g_signal_connect(entry, "changed", G_CALLBACK(hardware_entry_changed), a);
             }
@@ -2178,6 +2231,10 @@ static void create_mode_renderer(App *a) {
     a->mode_dialog = settings_dialog(a, "Mode · DVB settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, 3, a->standard);
     a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
+    GList *rate_cells=gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(a->sr_box));
+    for (GList *cell=rate_cells;cell;cell=cell->next)
+        gtk_cell_layout_set_cell_data_func(GTK_CELL_LAYOUT(a->sr_box),cell->data,rate_cell_data,a,NULL);
+    g_list_free(rate_cells);
     a->sr_label = gtk_grid_get_child_at(GTK_GRID(a->controls), 0, 1);
     a->fec_box = combo(a->controls, "FEC", 2, NULL, 0, -1);
     a->gi_box = combo(a->controls, "Guard interval", 3, guards, 4, a->gi);
@@ -2479,7 +2536,7 @@ int main(int argc, char **argv) {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2 or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},

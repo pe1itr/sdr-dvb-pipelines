@@ -6,6 +6,7 @@
 #include "iq_output.h"
 #include "iq_convert.h"
 #include "iq_shift.h"
+#include "rx_limits.h"
 #include "sdriq.h"
 #include "funcube.h"
 #include "rtlsdr.h"
@@ -62,7 +63,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2 --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
@@ -82,6 +83,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--gain")) gain = number(v);
         else { fprintf(stderr, "Unknown option: %s\n", key); return 2; }
     }
+    int rsp = rx_rsp(source), airspyhf = rx_airspyhf(source), airspyr2 = rx_airspyr2(source);
     int lime = !strcmp(source, "lime");
     if (!*antenna) antenna = lime ? "AUTO" : "TX/RX";
     int fcdpp = !strcmp(source, "fcdpp");
@@ -89,8 +91,13 @@ int main(int argc, char **argv) {
     int rtlsdr = !strcmp(source, "rtlsdr");
     int sdriq = !strcmp(source, "sdriq");
     int hackrf = !strcmp(source, "hackrf"), u8 = !strcmp(format, "u8");
-    if ((!lime && !fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
-        (lime ? !lime_rx_valid(rate, freq, gain) : fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
+    int soapy = hackrf || sdriq || rtlsdr || rsp || airspyhf || airspyr2;
+    int float_stream = sdriq || rsp || airspyhf;
+    if ((!airspyr2 && !rsp && !airspyhf && !lime && !fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
+        (airspyr2 ? (!rx_airspyr2_rate_valid(rate) || !rx_frequency_valid(source,freq) || gain < 0 || gain > 45 || gain != floor(gain)) :
+         airspyhf ? (rate < 1000 || rate > 768000 || rate != floor(rate) || !rx_frequency_valid(source,freq) || gain != 0) :
+         rsp ? (rate < 62500 || rate > 10000000 || rate != floor(rate) || !rx_frequency_valid(source,freq) || gain < 20 || gain > 59 || gain != floor(gain)) :
+         lime ? !lime_rx_valid(rate, freq, gain) : fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
          rtlsdr ? (!rtlsdr_rate_valid(rate) || freq < RTLSDR_MIN_FREQUENCY ||
                     freq > RTLSDR_MAX_FREQUENCY || gain < 0 || gain > RTLSDR_MAX_GAIN) : afedri ? (rate < 48000 || rate > 2400000 || rate != floor(rate) ||
                    freq < 0 || freq > 35000000 || !afedri_gain_valid(gain) ||
@@ -98,6 +105,9 @@ int main(int argc, char **argv) {
          (rate < 2000000 || rate > (hackrf ? 20000000 : 61440000) ||
           freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < 0 || gain > (hackrf ? 116 : 76)))) {
         fprintf(stderr, "Invalid source, format, rate, frequency or gain\n");
+        if (airspyr2) fprintf(stderr,"Airspy R2: frequency 24000000..1700000000 Hz; rate 2500000 or 10000000; gain setting 0..45 in whole steps\n");
+        if (airspyhf) fprintf(stderr,"Airspy HF+ Dual Port VHF: frequency 64000000..260000000 Hz; rate from device (default 768000); automatic gain (gain=0)\n");
+        if (rsp) fprintf(stderr,"SDRplay RSP1A/B: frequency 1000..2000000000 Hz; rate 62500..10000000; IF gain reduction 20..59 dB\n");
         if (lime) fprintf(stderr, "LimeSDR Mini: rate 100000..30720000; frequency 10000000..3500000000 Hz; LimeSuite RX gain 0..73 in 1 dB steps\n");
         if (fcdpp) fprintf(stderr, "FUNcube Pro+: fixed rate 192000; frequency 150000..240000000 or 420000000..1900000000 Hz; IF gain 0..59 dB in 1 dB steps\n");
         if (afedri) fprintf(stderr, "AFEDRI: rate 48000..2400000; frequency 0..35000000 Hz; gain -10..35 dB in 3 dB steps; IPv4 and TCP/UDP port required\n");
@@ -105,13 +115,16 @@ int main(int argc, char **argv) {
         if (sdriq) fprintf(stderr, "SDR-IQ: rates 8138, 16276, 37793, 55556, 111111, 158730, 196078; frequency 500..30000000 Hz; ATT -20, -10, 0, 10 dB\n");
         return 2;
     }
+    if (!rx_tuning_valid(source,freq,receiver_offset)) {
+        fprintf(stderr,"SDR/IF frequency or receiver offset outside model tuning range\n"); return 2;
+    }
     if (!iq_bandfilter_valid(rate, bandwidth)) {
         fprintf(stderr, "Invalid filter width: use 0 (off), or max(10, sample-rate/256)..0.95*sample-rate Hz\n"); return 2;
     }
     IQShift shift;
     if (iq_shift_init(&shift, rate, receiver_offset) ||
-        !iq_shift_fits(rate, receiver_offset, channel_bandwidth) ||
-        !iq_shift_fits(rate, receiver_offset, bandwidth)) {
+        !rx_bandwidth_fits(source, rate, receiver_offset, channel_bandwidth) ||
+        !rx_bandwidth_fits(source, rate, receiver_offset, bandwidth)) {
         fprintf(stderr, "Receiver offset/channel/filter does not fit the sample rate (2.5%% edge margin)\n"); return 2;
     }
     struct sigaction sa = {.sa_handler = stop}; sigemptyset(&sa.sa_mask);
@@ -138,7 +151,7 @@ int main(int argc, char **argv) {
     float float_iq[2048 * 2];
     /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
      * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
-    size_t block_samples = lime ? (size_t)fmax(256, fmin(65536, ceil(rate/100/256)*256)) : fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : sdriq ? 2048 : rtlsdr ? 8192 : 65536;
+    size_t block_samples = lime ? (size_t)fmax(256, fmin(65536, ceil(rate/100/256)*256)) : fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : float_stream ? 2048 : rtlsdr ? 8192 : 65536;
     float *shifted=receiver_offset != 0 ? malloc(block_samples*2*sizeof(float)) : NULL;
     if (receiver_offset != 0 && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
     if (lime) {
@@ -151,14 +164,69 @@ int main(int argc, char **argv) {
     } else if (afedri) {
         net = afedri_open(ip, (int)port, bind_ip, rate, freq, gain, &actual);
         if (!net) goto done;
-    } else if (hackrf || sdriq || rtlsdr) {
-        dev = SoapySDRDevice_makeStrArgs(*args ? args :
+    } else if (soapy) {
+        if (rsp || airspyhf || airspyr2) {
+            const char *driver=airspyr2 ? "airspy" : airspyhf ? "airspyhf" : "sdrplay";
+            SoapySDRKwargs selection=SoapySDRKwargs_fromString(args);
+            const char *requested_driver=SoapySDRKwargs_get(&selection,"driver");
+            if (requested_driver && *requested_driver && strcmp(requested_driver,driver)) {
+                fprintf(stderr,"%s requires driver=%s\n",source,driver);
+                SoapySDRKwargs_clear(&selection); goto done;
+            }
+            SoapySDRKwargs_set(&selection,"driver",driver);
+            dev=SoapySDRDevice_make(&selection);
+            SoapySDRKwargs_clear(&selection);
+        } else dev = SoapySDRDevice_makeStrArgs(*args ? args :
             (rtlsdr ? "driver=rtlsdr" : sdriq ? "driver=rfspace,sdr-iq=/dev/ttyUSB0" : "driver=hackrf"));
         if (!dev) { fprintf(stderr, "%s: %s\n", source, SoapySDRDevice_lastError()); goto done; }
+        if (rsp || airspyhf || airspyr2) {
+            char *model=SoapySDRDevice_getHardwareKey(dev);
+            const char *expected=airspyr2 ? "Airspy" : airspyhf ? "AirspyHF" : !strcmp(source,"rsp1a") ? "RSP1A" : "RSP1B";
+            int matches=model && !strcmp(model,expected);
+            fprintf(stderr,"[SDR] Selected %s; detected %s\n",source,model ? model : "unknown");
+            SoapySDR_free(model);
+            if (!matches) { fprintf(stderr,"Wrong SDR model for the selected input; select the matching model/serial\n"); goto done; }
+            size_t count=0;
+            SoapySDRRange *ranges=SoapySDRDevice_getFrequencyRange(dev,SOAPY_SDR_RX,0,&count);
+            int valid=0;
+            for (size_t i=0;i<count;++i)
+                if (freq >= ranges[i].minimum && freq <= ranges[i].maximum &&
+                    freq+receiver_offset >= ranges[i].minimum && freq+receiver_offset <= ranges[i].maximum) valid=1;
+            SoapySDR_free(ranges);
+            if (!valid) { fprintf(stderr,"SDR/IF frequency outside connected device range\n"); goto done; }
+            if (airspyhf || airspyr2) {
+                double *rates=SoapySDRDevice_listSampleRates(dev,SOAPY_SDR_RX,0,&count);
+                valid=0;
+                for (size_t i=0;i<count;++i) if (fabs(rates[i]-rate)<.5) valid=1;
+                if (!valid) {
+                    fprintf(stderr,"Unsupported %s sample rate %.0f; available:",source,rate);
+                    for (size_t i=0;i<count;++i) fprintf(stderr," %.0f",rates[i]);
+                    fprintf(stderr,"\n");
+                }
+                SoapySDR_free(rates);
+                if (!valid) goto done;
+            }
+        }
         S(SoapySDRDevice_setSampleRate(dev, SOAPY_SDR_RX, 0, rate));
         actual = SoapySDRDevice_getSampleRate(dev, SOAPY_SDR_RX, 0);
+        if (rsp) S(SoapySDRDevice_setBandwidth(dev, SOAPY_SDR_RX, 0, rate));
         S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, freq, NULL));
-        if (sdriq) {
+        if (airspyr2) {
+            /* SoapyAirspy exposes raw LNA/MIX/VGA steps as aggregate gain.
+             * It has no settable analog bandwidth; the sample rate sets it. */
+            S(SoapySDRDevice_setGainMode(dev, SOAPY_SDR_RX, 0, false));
+            S(SoapySDRDevice_setGain(dev, SOAPY_SDR_RX, 0, gain));
+            gain=SoapySDRDevice_getGain(dev, SOAPY_SDR_RX, 0);
+        } else if (airspyhf) {
+            S(SoapySDRDevice_setGainMode(dev, SOAPY_SDR_RX, 0, true));
+        } else if (rsp) {
+            S(SoapySDRDevice_setGainMode(dev, SOAPY_SDR_RX, 0, false));
+            /* RFGR=0 is valid across the supported bands of both models.
+             * Expose IF reduction explicitly instead of aggregate "gain". */
+            S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "RFGR", 0));
+            S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "IFGR", gain));
+            gain=SoapySDRDevice_getGainElement(dev,SOAPY_SDR_RX,0,"IFGR");
+        } else if (sdriq) {
             S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "ATT", gain));
             gain = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "ATT");
         } else {
@@ -178,7 +246,7 @@ int main(int argc, char **argv) {
             snprintf(buffers, sizeof(buffers), "%.0f", fmax(15, ceil(rate*.5/8192)));
             SoapySDRKwargs_set(&stream_args, "buffers", buffers);
         }
-        stream = SoapySDRDevice_setupStream(dev, SOAPY_SDR_RX, sdriq ? SOAPY_SDR_CF32 : (u8 ? SOAPY_SDR_CS8 : SOAPY_SDR_CS16), &channel, 1, &stream_args);
+        stream = SoapySDRDevice_setupStream(dev, SOAPY_SDR_RX, float_stream ? SOAPY_SDR_CF32 : (u8 && !airspyr2 ? SOAPY_SDR_CS8 : SOAPY_SDR_CS16), &channel, 1, &stream_args);
         SoapySDRKwargs_clear(&stream_args);
         if (!stream) { fprintf(stderr, "setupStream: %s\n", SoapySDRDevice_lastError()); goto done; }
     } else {
@@ -213,7 +281,7 @@ int main(int argc, char **argv) {
     if (!isfinite(actual) || fabs(actual-rate) > (sdriq || afedri ? 0.5 : rate*1e-6)) {
         fprintf(stderr, "Requested rate %.0f, hardware rate %.0f; select the hardware rate in the GUI\n", rate, actual); goto done;
     }
-    fprintf(stderr, "[SDR] %s: %.0f Hz, %.0f samples/s, gain %.1f dB, %s IQ\n", source, freq, actual, gain, format);
+    fprintf(stderr, "[SDR] %s: %.0f Hz, %.0f samples/s, gain %.1f %s, %s IQ\n", source, freq, actual, gain, airspyr2 ? "(setting)" : "dB", format);
     if (receiver_offset != 0) fprintf(stderr, "[SDR] Receiver offset %+.0f Hz: hardware %.0f Hz, channel %.0f Hz; spectrum and recording remain at hardware center\n", receiver_offset, freq, freq+receiver_offset);
     size_t slots = (size_t)ceil(rate * 0.5 / block_samples);
     output = iq_output_create(STDOUT_FILENO, block_samples * (u8 ? 2 : 4), slots);
@@ -222,7 +290,7 @@ int main(int argc, char **argv) {
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
     if (lime) { if (lime_rx_start(mini)) goto done; }
     else if (afedri) { if (afedri_start(net)) goto done; }
-    else if (hackrf || sdriq || rtlsdr) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
+    else if (soapy) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
     else if (!fcdpp) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
     double last_report = monotonic_seconds();
@@ -232,12 +300,12 @@ int main(int argc, char **argv) {
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
-                lime ? LIME_RX_MIN_FREQUENCY : fcdpp ? FUNCUBE_MIN_FREQUENCY : rtlsdr ? RTLSDR_MIN_FREQUENCY : afedri ? 0 : sdriq ? 500 : hackrf ? 1000000 : 70000000,
-                lime ? LIME_RX_MAX_FREQUENCY : fcdpp ? FUNCUBE_MAX_FREQUENCY : rtlsdr ? RTLSDR_MAX_FREQUENCY : afedri ? 35000000 : sdriq ? 30000000 : 6000000000.0, &requested,
-                afedri ? -10 : sdriq ? -20 : 0, lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
-                lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
-        if (fcdpp && (changed & 1) && !funcube_frequency_valid(requested)) {
-            fprintf(stderr, "FUNcube Pro+: ignoring tune into unsupported 240..420 MHz gap\n");
+                rx_frequency_min(source), rx_frequency_max(source), &requested,
+                rsp ? 20 : afedri ? -10 : sdriq ? -20 : 0,
+                airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                airspyr2 || rsp || lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+        if ((changed & 1) && !rx_tuning_valid(source,requested,receiver_offset)) {
+            fprintf(stderr, "[SDR] Ignoring tune outside model/input range\n");
             changed &= ~1;
         }
         if ((changed & 1) && requested != freq) {
@@ -269,19 +337,22 @@ int main(int argc, char **argv) {
             } else if (afedri) {
                 if (afedri_gain(net, requested_gain)) goto done;
                 gain = requested_gain;
+            } else if (rsp) {
+                S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "IFGR", requested_gain));
+                gain=SoapySDRDevice_getGainElement(dev,SOAPY_SDR_RX,0,"IFGR");
             } else if (sdriq) {
                 S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "ATT", requested_gain));
                 gain = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "ATT");
-            } else if (hackrf || rtlsdr) {
+            } else if (hackrf || rtlsdr || airspyr2) {
                 S(SoapySDRDevice_setGain(dev, SOAPY_SDR_RX, 0, requested_gain));
                 gain = SoapySDRDevice_getGain(dev, SOAPY_SDR_RX, 0);
             } else {
                 U(uhd_usrp_set_rx_gain(usrp, requested_gain, 0, ""));
                 U(uhd_usrp_get_rx_gain(usrp, 0, "", &gain));
             }
-            fprintf(stderr, "[SDR] RX gain %.1f dB (requested %.1f dB)\n", gain, requested_gain);
+            fprintf(stderr, "[SDR] RX gain %.1f %s (requested %.1f)\n", gain, airspyr2 ? "(setting)" : "dB", requested_gain);
         }
-        if ((changed & 4) && !iq_shift_fits(rate, receiver_offset, requested_bw)) {
+        if ((changed & 4) && !rx_bandwidth_fits(source, rate, receiver_offset, requested_bw)) {
             fprintf(stderr, "[SDR] Ignoring filter width: receiver offset + filter exceeds source band\n");
             changed &= ~4;
         }
@@ -292,7 +363,7 @@ int main(int argc, char **argv) {
         }
         int output_error = iq_output_error(output);
         if (output_error) { fprintf(stderr, "IQ output: %s\n", strerror(output_error)); goto done; }
-        size_t got = 0; void *buffers[] = {sdriq ? (void *)float_iq : ((hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq)};
+        size_t got = 0; void *buffers[] = {float_stream ? (void *)float_iq : ((hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq)};
         if (lime) {
             int n = lime_rx_read(mini, iq, block_samples);
             if (n < 0) goto done;
@@ -308,7 +379,7 @@ int main(int argc, char **argv) {
             if (n < 0) goto done;
             if (!n) continue;
             got = (size_t)n;
-        } else if (hackrf || sdriq || rtlsdr) {
+        } else if (soapy) {
             int flags = 0; long long time = 0;
             int n = SoapySDRDevice_readStream(dev, stream, buffers, block_samples, &flags, &time, 100000);
             if (n == SOAPY_SDR_TIMEOUT) continue;
@@ -335,7 +406,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "SDR receive: %s (decoder/USB may not keep up)\n", msg); goto done;
             }
         }
-        if (sdriq) iq_cf32_to_s16(float_iq, iq, got);
+        if (float_stream) iq_cf32_to_s16(float_iq, iq, got);
         iq_record_feed(&capture, (hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq, got, (hackrf || rtlsdr) && u8 ? 2 : 0);
         if (u8) {
             if (hackrf || rtlsdr) iq_cs8_to_u8(packed, got);

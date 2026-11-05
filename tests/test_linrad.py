@@ -281,6 +281,83 @@ class PipelineTests(unittest.TestCase):
             self.assertIn('--fastlock', decoder)
             self.assertNotIn('--ldpc-batch', decoder)
 
+    def test_model_frequency_limits_and_converter_offsets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            for source, low, high in (("airspyhf", 64000000, 260000000),
+                                      ("airspyr2", 24000000, 1700000000),
+                                      ("rsp1a", 1000, 2000000000),
+                                      ("rsp1b", 1000, 2000000000)):
+                cfg[source] = {}  # Upgrade from a config without the new sources.
+                for frequency, lo, valid in ((low, 0, True), (high, 0, True),
+                        (low-1, 0, False), (high+1, 0, False),
+                        (144000000, 293000000, True), (144000000, -100000000, True),
+                        (high+1, -100000000, False)):
+                    with self.subTest(source=source, frequency=frequency, lo=lo):
+                        cfg[source].update(frequency=str(frequency), lo_offset=str(lo))
+                        self.write_config(cfg, path)
+                        result = subprocess.run([UI, "--config", path, "--source", source,
+                            "--standard", "DVB-S2", "--sr", "125000", "--print-pipeline"],
+                            capture_output=True, text=True, timeout=3)
+                        self.assertEqual(result.returncode, 0 if valid else 2, result.stderr)
+                        if valid:
+                            command = shlex.split(next(line for line in result.stdout.splitlines() if line.startswith("'")))
+                            self.assertEqual(command[command.index("--frequency")+1], str(frequency))
+                            self.assertEqual(command[command.index("--channel-bandwidth")+1], "168750")
+                        else:
+                            self.assertIn("SDR/IF tuning", result.stderr)
+
+    def test_symbol_rate_requires_usable_bandwidth_even_at_zero_offset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            for source, rate, sr, offset, valid in (
+                    ("sdriq", 196078, 333000, 0, False),
+                    ("sdriq", 196078, 125000, 0, True),
+                    ("sdriq", 111111, 125000, 0, False),
+                    ("sdriq", 111111, 66000, 0, True),
+                    ("sdriq", 196078, 125000, 10000, False),
+                    ("airspyhf", 768000, 500000, 0, False),
+                    ("airspyhf", 768000, 333000, 0, True),
+                    ("rsp1b", 2000000, 2000000, 0, False),
+                    ("rsp1b", 2000000, 1000000, 0, True),
+                    ("rsp1b", 4000000, 2000000, 0, False),
+                    ("airspyr2", 10000000, 5000000, 0, True),
+                    ("airspyr2", 2500000, 2000000, 0, False),
+                    ("airspyr2", 2500000, 1000000, 0, True),
+                    ("airspyr2", 2500000, 1000000, 500000, False)):
+                with self.subTest(source=source, rate=rate, sr=sr, offset=offset):
+                    if source not in cfg:
+                        cfg[source] = {}
+                    cfg[source].update(sample_rate=str(rate), receiver_offset=str(offset))
+                    self.write_config(cfg, path)
+                    result = subprocess.run([UI, "--config", path, "--source", source,
+                        "--standard", "DVB-S2", "--sr", str(sr), "--print-pipeline"],
+                        capture_output=True, text=True, timeout=3)
+                    self.assertEqual(result.returncode, 0 if valid else 2, result.stderr)
+                    if not valid:
+                        self.assertIn("Required:", result.stderr)
+                        self.assertIn("usable:", result.stderr)
+
+    def test_airspyr2_defaults_and_invalid_saved_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.config(tmp)
+            cfg.remove_section('airspyr2')
+            cfg['session'] = {'source':'airspyr2', 'standard':'DVB-S2', 'sr':'333000', 'fec':'1/2'}
+            self.write_config(cfg, path)
+            result = subprocess.run([UI, '--config', path, '--print-pipeline'],
+                                    capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            command = shlex.split(next(line for line in result.stdout.splitlines() if line.startswith("'")))
+            for key, value in (('--source','airspyr2'), ('--sample-rate','10000000'),
+                               ('--frequency','437000000'), ('--args','driver=airspy'), ('--format','s16')):
+                self.assertEqual(command[command.index(key)+1], value)
+            cfg['airspyr2'] = {'sample_rate':'3000000'}
+            self.write_config(cfg, path)
+            result = subprocess.run([UI, '--config', path, '--print-pipeline'],
+                                    capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn('Airspy R2: select sample rate', result.stderr)
+
     def test_direct_sdr_5ms(self):
         for source, fmt in (("hackrf", "--u8"), ("b210", "--s16"), ("lime", "--s16")):
             p = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", "--source", source,
@@ -401,7 +478,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn('192000', decoder)
                 if offset == '0':
                     self.assertNotIn('--receiver-offset', source)
-                    self.assertNotIn('--channel-bandwidth', source)
+                    self.assertEqual(source[source.index('--channel-bandwidth')+1], '40000')
                 else:
                     self.assertEqual(source[source.index('--receiver-offset')+1], offset)
                     self.assertEqual(source[source.index('--channel-bandwidth')+1], '40000')
@@ -478,7 +555,7 @@ class PipelineTests(unittest.TestCase):
             for legacy in (False, True):
                 if legacy:
                     del cfg["sdriq"]
-                for standard, sr in (("DVB-T", "35000"), ("DVB-T", "40000"), ("DVB-S", "35000"), ("DVB-S2", "125000")):
+                for standard, sr in (("DVB-T", "35000"), ("DVB-T", "40000"), ("DVB-S", "35000"), ("DVB-S2", "66000")):
                     self.write_config(cfg, path)
                     p = subprocess.run([UI, "--config", str(path), "--print-pipeline", "--source", "sdriq",
                                         "--standard", standard, "--sr", sr],
@@ -510,7 +587,7 @@ class PipelineTests(unittest.TestCase):
             p = subprocess.run([UI, "--config", str(path), "--source", "sdriq", "--print-pipeline"],
                                capture_output=True, timeout=3)
             self.assertNotEqual(p.returncode, 0)
-            self.assertIn(b"SDR-IQ sample rate", p.stderr)
+            self.assertTrue(b"SDR-IQ sample rate" in p.stderr or b"DVB bandwidth" in p.stderr, p.stderr)
 
     def test_saved_session_and_cli_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -537,6 +614,9 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("b210", cmds[0])
             self.assertIn("0x10", cmds[1])
             # Changing standard alone must not retain an incompatible saved rate.
+            # The default 125 ksym/s needs a higher SDR-IQ sample rate.
+            cfg["sdriq"]["sample_rate"] = "196078"
+            self.write_config(cfg, path)
             cmds = preview("--standard", "DVB-S")
             self.assertEqual(cmds[1][cmds[1].index("--sr")+1], "125000")
 

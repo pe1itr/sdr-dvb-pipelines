@@ -1,6 +1,6 @@
 # LeanDVB receive helpers for multiple SDR sources
 
-For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+, LimeSDR Mini and IQ files), run `python3 tools/build.py` followed by
+For the C receiver and GUI (Linrad, HackRF, B210, SDR-IQ, Afedri Net, RTL-SDR, FUNcube Pro+, LimeSDR Mini, SDRplay RSP1A/B, Airspy HF+ VHF, Airspy R2 and IQ files), run `python3 tools/build.py` followed by
 `./build/linrad_dvb`. First copy `linrad-dvb.example.ini` to `linrad-dvb.ini`.
 Set parameters directly in the GUI and edit the local `linrad-dvb.ini` for paths and startup options. See
 [Linrad DVB ontvanger in C](#linrad-dvb-ontvanger-in-c) below.
@@ -1559,6 +1559,106 @@ External / upstream software used by this project, including LeanDVB / LeanSDR, 
 
 Many thanks to the authors and maintainers of these excellent tools, and especially to the LeanDVB / LeanSDR and Linrad authors, for making this kind of experimentation possible.
 
+
+### SDRplay RSP1A/RSP1B en Airspy HF+ Dual Port (VHF)
+
+De C GUI heeft aparte ingangen **SDRplay RSP1A**, **SDRplay RSP1B** en
+**Airspy HF+ Dual Port (VHF)**. CLI/config-namen: `rsp1a`, `rsp1b`, `airspyhf`.
+Bestaande configuraties krijgen de ontbrekende secties automatisch met defaults;
+zie ook `linrad-dvb.example.ini`. De integratie is met gesimuleerde drivers getest;
+een praktijktest met deze ontvangers is nog nodig.
+
+| Ingang | SDR/IF-afstembereik | Driver | Default sample rate |
+| --- | --- | --- | --- |
+| SDRplay RSP1A | 1 kHz–2 GHz | SoapySDRPlay3 + SDRplay API v3 | 2 MS/s |
+| SDRplay RSP1B | 1 kHz–2 GHz | SoapySDRPlay3 + SDRplay API ≥3.14 | 2 MS/s |
+| Airspy HF+ Dual Port, VHF | 64–260 MHz | SoapyAirspyHF + libairspyhf | 768 kS/s |
+
+Installeer de betreffende driver apart. De buildcontrole meldt ontbrekende
+Soapy-modules als waarschuwing. Gebruik voor SDRplay de API-v3-module, niet de
+oude API-v2-module met dezelfde drivernaam. API 3.15 ondersteunt beide RSP's.
+`args=driver=sdrplay,serial=SERIAL` of `args=driver=airspyhf,serial=HEX`
+selecteert een apparaat; laat het serial-veld weg voor één aangesloten ontvanger.
+Een ander aangesloten RSP-model dan de gekozen ingang blokkeert het starten.
+SoapyAirspyHF identificeert de HF+-familie, maar onderscheidt Dual Port en
+Discovery niet; dit profiel houdt altijd de Dual Port **VHF**-grenzen aan.
+Sluit de antenne/converter dus aan op de VHF-connector.
+
+Bij SDRplay is `gain` de **IF gain reduction**, 20–59 dB: hoger betekent minder
+gain. RFGR staat op 0. De HF+ VHF-ingang gebruikt automatische gain (`gain=0`);
+de gainpijlen veranderen daar niets. Beide ingangen gebruiken CF32 van de driver
+met conversie naar `s16` of `u8` voor de bestaande decoderketen. De helper
+controleert de werkelijke sample rate; een stilzwijgend afgeronde rate wordt
+geweigerd. HF+-rates worden bij starten gecontroleerd tegen de lijst uit het apparaat.
+
+De frequentiebeveiliging controleert de **SDR/IF-frequentie** en de digitaal
+gekozen kanaalfrequentie binnen die IF-band, zowel bij starten als bij live
+afstemmen. De converteroffset verandert alleen de RF-aanduiding:
+
+`ontvangstfrequentie = SDR/IF + converteroffset + DVB receiver offset`
+
+Voor 437 MHz via een converter naar 144 MHz: **SDR/IF = 144000 kHz**,
+**LO offset = +293000 kHz**, **DVB receiver offset = 0**. Dat is geldig voor de
+HF+ VHF-ingang; rechtstreeks 437 MHz instellen wordt geweigerd. Negatieve
+converteroffsets werken eveneens; spectrumsinversie bij high-side mixing is
+hiermee niet geïmplementeerd.
+
+Bij alle directe SDR-ingangen moet de DVB-bandbreedte passen, **ook bij receiver
+offset 0**. DVB-S/S2 gebruikt conservatief 35% roll-off: benodigde bandbreedte
+= `1.35 × symbolrate`. DVB-T gebruikt de ingestelde kanaalbandbreedte. De
+beschikbare breedte is maximaal `0.95 × sample rate`, verminderd met tweemaal de
+absolute receiveroffset. Voor de HF+ geldt bovendien maximaal 660 kHz; bij
+SDRplay telt ook de door de driver gekozen analoge filterbreedte mee.
+Onmogelijke symbolrates/BW's staan grijs in de keuzelijst. Een ongeldige opgeslagen
+instelling blijft zichtbaar met een foutmelding en blokkeert **Start SDR**;
+ook `--run` en `--print-pipeline` weigeren deze combinaties.
+
+Voorbeeld SDR-IQ: bij 196078 samples/s past 125 ksym/s (168750 Hz), maar
+333 ksym/s (449550 Hz) niet. Bij 111111 samples/s past 66 ksym/s wel en
+125 ksym/s niet. Een converteroffset vergroot de beschikbare bandbreedte niet.
+
+Bronnen: [SDRplay API-specificatie](https://www.sdrplay.com/docs/SDRplay_API_Specification_v3.15.pdf),
+[HF+ Dual Port-specificaties](https://airspy.com/airspy-hf-plus/),
+[SoapySDRPlay3](https://github.com/pothosware/SoapySDRPlay3),
+[SoapyAirspyHF](https://github.com/pothosware/SoapyAirspyHF).
+
+### Airspy R2 in de C GUI
+
+Kies **SDR → Input / SDR → Airspy R2**. De defaults zijn 437 MHz,
+10.000.000 samples/s, gain setting 30 en `s16` IQ. Installeer **SoapyAirspy**
+en **libairspy**; de HF+-driver is een aparte module. CLI/config-naam:
+`airspyr2`. Bestaande configuraties krijgen de sectie automatisch.
+
+- Afstembereik: **24–1700 MHz**, ook gecontroleerd tijdens live afstemmen.
+- Sampleratekeuze: **10 MS/s** of **2,5 MS/s**. Die laatste modus noemt Airspy
+  experimenteel; gebruik 10 MS/s als uitgangspunt. Bij starten moet de gekozen
+  rate ook voorkomen in de lijst die het aangesloten apparaat meldt.
+- Gain setting **0–45**, in gehele stappen. Dit is de gecombineerde
+  Soapy-instelling voor LNA, mixer en VGA, geen gekalibreerde dB-schaal.
+  AGC staat uit; de gainpijlen werken ook tijdens ontvangst.
+- De driver levert native `CS16`; de helper behoudt de samples voor `s16`
+  of converteert ze naar `u8`. Beide uitvoerformaten zijn ondersteund.
+- `args=driver=airspy,serial=HEX` selecteert een specifieke ontvanger;
+  zonder serial wordt een beschikbaar apparaat gebruikt. Bias tee staat
+  standaard uit; `biastee=true` in de device arguments schakelt hem in.
+
+Voor de bandbreedtebeveiliging gebruiken we **90% van de samplerate**:
+9 MHz bij 10 MS/s, en conservatief 2,25 MHz bij 2,5 MS/s. De gekozen
+symbolrate, 35% roll-off en digitale receiveroffset moeten daarin passen.
+De converteroffset verandert alleen de RF-aanduiding, niet deze grenzen.
+Voorbeelden: 5 Msym/s past bij 10 MS/s; 2 Msym/s past niet bij 2,5 MS/s.
+
+SoapyAirspy meldt de familie als `Airspy`; het onderscheid R2/Mini wordt
+niet door deze interface gerapporteerd. Het profiel gebruikt daarom de
+R2-specificaties en controleert de beschikbare rates bij het aangesloten
+apparaat. Firmware met andere rates valt buiten dit profiel.
+De integratie is getest met gesimuleerde drivers; een praktijktest met de
+R2 is nog nodig. Begin bijvoorbeeld op 437 MHz, 10 MS/s, DVB-S2 333 ksym/s,
+met de FEC passend bij het ontvangen signaal.
+
+Bronnen: [Airspy R2-specificaties](https://airspy.com/airspy-r2/),
+[SoapyAirspy-instellingen](https://github.com/pothosware/SoapyAirspy/blob/master/Settings.cpp),
+[SoapyAirspy-streamformaten](https://github.com/pothosware/SoapyAirspy/blob/master/Streaming.cpp).
 
 ### RTL-SDR in de C GUI
 
