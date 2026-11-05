@@ -270,6 +270,12 @@ static void check_programs(const char *path) {
         g_assert_cmpuint(v.program, ==, program);
         g_assert_cmpint(libvlc_video_get_track(v.player), ==, red ? 0x102 : 0x100);
         g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 1);
+        g_assert_cmpint(libvlc_audio_get_volume(v.player), ==, 100);
+        /* Startup normalization must not fight subsequent mixer changes. A
+         * later service switch creates a player and restores the start level. */
+        g_assert_cmpint(libvlc_audio_set_volume(v.player,37), ==, 0);
+        for (int i=0;i<12;++i) iterate();
+        g_assert_cmpint(libvlc_audio_get_volume(v.player), ==, 37);
         g_assert_true(v.relay == relay); g_assert_cmpint(v.source_fd, ==, source_fd);
     }
     g_assert_cmpuint(forwarded, >, 100 * 188);

@@ -209,6 +209,30 @@ op Fedora, of `sudo apt install libzvbi-dev` op Debian/Ubuntu.
 Voor USB-audio zijn `alsa-lib-devel libsamplerate-devel` (Fedora) of
 `libasound2-dev libsamplerate0-dev` (Debian/Ubuntu) nodig.
 
+De aparte [DVB-T2-component](components/dvbt2/README.md) vereist bovendien een
+C++20-compiler en Rust/Cargo 1.70 of nieuwer (`rust cargo` op Fedora,
+`rustc cargo` op Debian/Ubuntu; controleer de versies op oudere distributies).
+Alle Rust-bronafhankelijkheden zijn meegeleverd; de build werkt offline.
+De bestaande DVB-T-mode blijft voor smalband/DX. DVB-T2 is voorlopig uitsluitend
+voor 8 MHz omroep, met automatische FEC/modulatie/GI en PLP-keuze in **Mode**.
+
+Voor de vrije NPO-multiplex in Eindhoven staat een aparte voorbeeldconfiguratie
+klaar: **570 MHz, kanaal 33, 8 MHz BW, 10 Msps**. Deze overschrijft de gewone
+configuratie niet. Stel bij een B210-clone eerst de juiste firmwaremap in bij
+Input; kies ook de aansluiting waarop de antenne zit.
+
+```sh
+./build/linrad_dvb -c linrad-dvbt2-eindhoven.example.ini
+# Of dezelfde instelling met HackRF:
+./build/linrad_dvb -c linrad-dvbt2-eindhoven.example.ini --source hackrf
+make test-dvbt2
+```
+
+De T2-status toont de gekozen PLP en verlies door overbelasting. Niet alle
+T2-varianten zijn ondersteund: onder meer MISO, inter-frame interleaving en
+type-2/sub-sliced PLP's ontbreken. De decoder meldt zulke parameters in het log.
+Zie de componentdocumentatie voor tests, herkomst en GPL-3.0-licentie.
+
 De GUI gebruikt één venster zonder tabs, standaard 83% van de beschikbare
 schermbreedte en 80% van de beschikbare hoogte.
 Bovenaan staan de menu's
@@ -365,6 +389,11 @@ ontvangstsessie begint weer ingebouwd. De gekozen service en dempstand gaan mee;
 een servicewissel of **M** in het hoofdvenster heropent uitsluitend FFplay wanneer
 de externe speler actief is. FFplay heeft in zijn eigen venster ook **M** voor
 lokale demping en **F** voor volledig scherm.
+
+De ingebouwde speler en GPU-speler starten beide op 100% spelervolume. De
+ingebouwde speler stelt dit ook in zodra audio actief wordt, zodat een eerder
+opgeslagen laag toepassingsvolume niet het startniveau bepaalt. Daarna kun je
+het volume gewoon met de systeemmixer aanpassen; **M** blijft dempen.
 
 De knop gebruikt standaard `/usr/bin/ffplay` en selecteert een Vulkan-device
 waarvan de naam `NVIDIA` bevat. Dit staat los van de bestaande FFplay-renderer
@@ -706,7 +735,7 @@ Met **TSscatterFix aan** komt het reconstructiepaneel op deze plek terug.
 
 Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.
 Elke knop is grijs zolang er nog geen inhoud beschikbaar is en wordt groen zodra
-voor de gekozen service EIT-programmainformatie of teletekstpagina 100 is ontvangen.
+voor de gekozen service EIT-programmainformatie of de gekozen teletekstpagina is ontvangen.
 De tooltip vermeldt de laatste ontvangsttijd. Beide knoppen blijven aanklikbaar.
 Elke knop opent een eigen niet-modaal venster zonder tabbladen. Beide vensters kunnen
 tegelijk openstaan; sluiten van een venster onderbreekt de ontvangst niet.
@@ -719,7 +748,14 @@ en onderste regel (rij 24). Het beeld bevat geen eigen zenderlogo, lokale klok,
 statusbalk of gegenereerde navigatietekst. Servicekeuze, ontvangststatus en de
 knop **Reveal** staan buiten het scherm. De pagina schaalt als geheel mee met
 het venster, met behoud van de beeldverhouding en scherpe bitmaptekens.
-Ontvangen subpagina's van pagina 100 volgen de uitzending; er is geen paginabrowser.
+Met **Pagina** kies je 100–899: typ drie cijfers en druk op Enter, of gebruik
+**Vorige** en **Volgende**. **Index (100)** gaat terug naar de beginpagina.
+De navigatie loopt van 899 terug naar 100 en omgekeerd. Bij een andere pagina
+verdwijnt het oude beeld en verschijnt een wachtmelding totdat de gekozen
+pagina wordt uitgezonden; niet iedere pagina bestaat. Ontvangen subpagina's
+volgen automatisch de uitzending. De paginakeuze blijft bij een servicewissel
+behouden en wordt bij stoppen/herstarten 100. Alleen de informatieviewer wijzigt:
+SDR, videospeler (ook extern op GPU) en TS-uitvoer blijven lopen.
 
 De verwerking volgt [ETSI EN 300 706 V1.2.1](https://www.etsi.org/deliver/etsi_en/300700_300799/300706/01.02.01_60/en_300706v010201p.pdf)
 voor teletekst en [ETSI EN 300 472 V1.4.1](https://www.etsi.org/deliver/etsi_en/300400_300499/300472/01.04.01_60/en_300472v010401p.pdf)
@@ -750,7 +786,7 @@ Stoppen, opnieuw starten, afstemmen met de app of een andere informatieservice k
 wist de oude inhoud. Verandering van transportstream-ID wist de inhoud eveneens.
 Afstemmen buiten de app (bijvoorbeeld in Linrad) is alleen via veranderingen in de
 ontvangen transportstream herkenbaar. Ontbrekende teletekst in de PMT en wachten op
-pagina 100 hebben afzonderlijke statusmeldingen; ontbreken van EIT wordt niet uit
+de gekozen pagina hebben afzonderlijke statusmeldingen; ontbreken van EIT wordt niet uit
 een korte wachttijd afgeleid.
 
 De TS-informatieverwerking draait op een eigen thread met maximaal 1 MiB wachtende

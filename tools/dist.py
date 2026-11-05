@@ -12,6 +12,8 @@ FILES = (
     "README.md",
     "LICENSE",
     "linrad-dvb.example.ini",
+    "linrad-dvbt2-eindhoven.example.ini",
+    "benchmarks/dvbt2-ldpc-2026-11-05.json",
     "direwolf-pcm.conf",
 )
 DIRECTORIES = ("src", "components", "third_party", "tools", "tests")

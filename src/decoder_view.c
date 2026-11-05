@@ -270,17 +270,18 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     if (!v->area) return;
     gboolean fresh=active && v->status_time && g_get_monotonic_time()-v->status_time<STATUS_AGE;
     DecoderStatus *s=&v->status;
-    gboolean satellite=strcmp(mode,"DVB-T")!=0;
+    gboolean satellite=!strcmp(mode,"DVB-S") || !strcmp(mode,"DVB-S2");
+    gboolean t2=!strcmp(mode,"DVB-T2");
     gboolean s2=!strcmp(mode,"DVB-S2");
     update_margin(v,fresh,mode);
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption")),satellite ? "MER" : "SNR");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),satellite ? "Pilots" : "Pilot");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"units")),satellite ? "" : "%");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->guard),"caption")),satellite ? "Frame" : "GI");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),s2 ? "BCH OK" : "RS OK");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),s2 ? "BCH errors" : "RS errors");
-    gtk_widget_set_tooltip_text(v->buffer,satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
-    if (satellite) {
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),(s2 || t2) ? "BCH OK" : "RS OK");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),(s2 || t2) ? "BCH errors" : "RS errors");
+    gtk_widget_set_tooltip_text(v->buffer,t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
+    if (satellite || t2) {
         s->lock_valid |= DECODER_SERVICE;
         if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
         g_strlcpy(s->service,v->selected_service,sizeof(s->service));
@@ -288,6 +289,8 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     }
     char text[512];
     g_snprintf(text,sizeof(text),"%s · %s",mode,!active ? "stopped" : fresh ? "live" : "waiting for decoder status");
+    if (t2 && fresh) g_snprintf(text,sizeof(text),"DVB-T2 · PLP %d · IQ lost: %" G_GUINT64_FORMAT " · FEC frames lost: %" G_GUINT64_FORMAT,
+        s->plp_id,s->input_dropped,s->fec_frames_dropped);
     gtk_label_set_text(GTK_LABEL(v->state),text);
     const char *names[]={satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", "FEC", "TS", "Service"};
     for (int i=0;i<4;++i) {

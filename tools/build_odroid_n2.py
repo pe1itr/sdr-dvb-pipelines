@@ -17,7 +17,7 @@ BUILD_DIR = "build-odroid-n2"
 FFMPEG_TAG = "n6.1.6"
 FFMPEG_COMMIT = "f1e3a2bf7a2f2cde936d1ed97f09a26853d20125"
 PACKAGES = (
-    "build-essential", "pkg-config", "python3", "libgtk-3-dev", "libglib2.0-dev",
+    "build-essential", "pkg-config", "python3", "cargo", "rustc", "libgtk-3-dev", "libglib2.0-dev",
     "libjson-c-dev", "libfftw3-dev", "libsoapysdr-dev", "libuhd-dev", "libboost-system-dev",
     "libasound2-dev", "libsamplerate0-dev", "libvlc-dev", "libavcodec-dev",
     "libavformat-dev", "libavutil-dev", "libswscale-dev", "libzvbi-dev",

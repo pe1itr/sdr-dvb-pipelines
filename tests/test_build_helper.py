@@ -54,7 +54,7 @@ class BuildHelperTests(unittest.TestCase):
         make.assert_not_called()
 
     def test_missing_build_tool_blocks_build(self):
-        for program in ("cc", "g++", "pkg-config", "make"):
+        for program in ("cc", "g++", "pkg-config", "make", "cargo", "rustc"):
             with self.subTest(program=program):
                 status, output, make = self.run_helper(missing_programs=(program,))
                 self.assertEqual(status, 1)

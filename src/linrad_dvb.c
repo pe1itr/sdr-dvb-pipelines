@@ -25,6 +25,7 @@
 #include "decoder_view.h"
 #include "video_view.h"
 #include "dvbt_backend.h"
+#include "dvbt2_backend.h"
 #include "leansdr_backend.h"
 #include "scatter_view.h"
 #include "ts_info_view.h"
@@ -47,6 +48,7 @@ typedef struct {
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *mode_summary;
+    GtkWidget *t2_plp_box;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
@@ -78,7 +80,7 @@ typedef struct {
     GtkWidget *pcm_udp_enabled, *pcm_udp_host, *pcm_udp_port;
 } App;
 
-static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T"};
+static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2"};
 static const char *constellations[] = {"QPSK", "8PSK"};
 static const char *s2_latency_modes[] = {"auto", "low", "throughput"};
 static const char *s2_acquisition_modes[] = {"auto", "fast", "normal"};
@@ -91,6 +93,7 @@ static const unsigned modcods[2][G_N_ELEMENTS(fecs)] = {
 };
 static gboolean valid_fec(App *a, int fec) {
     if (fec < 0 || fec >= (int)G_N_ELEMENTS(fecs)) return FALSE;
+    if (a->standard == 3) return fec == 0; /* automatic L1 signalling */
     if (a->standard == 1) return modcods[a->constellation][fec] != 0;
     if (a->standard == 2) return fec < 3 || !strcmp(fecs[fec], "5/6") || !strcmp(fecs[fec], "7/8");
     return fec < 3;
@@ -111,6 +114,7 @@ static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mp
 static gboolean use_scatter(App *a) { return a->scatter; }
 static const int airspyr2_rates[] = {2500000, 10000000};
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
+static const int t2_rates[] = {8000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
 static void fatal(const char *fmt, ...) G_GNUC_PRINTF(1, 2) G_GNUC_NORETURN;
@@ -168,8 +172,17 @@ static double receiver_offset(App *a) {
     if (error) { g_error_free(error); return NAN; }
     return offset;
 }
-static double channel_bandwidth(App *a) { return a->standard == 2 ? a->sr : a->sr*1.35; }
+static double channel_bandwidth(App *a) { return a->standard >= 2 ? a->sr : a->sr*1.35; }
 static const char *receiver_offset_problem(App *a) {
+    if (a->standard == 3) {
+        const char *section=sources[a->source];
+        double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
+        double filter=g_key_file_get_double(a->config,section,"filter_bandwidth",NULL);
+        if (a->sr != 8000000 || !isfinite(rate) || rate < 8000000 || rate > 20000000)
+            return "DVB-T2 broadcast: select 8 MHz BW and 8..20 Msps input (10 Msps recommended).";
+        if (g_key_file_get_boolean(a->config,section,"filter_enabled",NULL) && filter < 8000000)
+            return "DVB-T2: disable the narrow IQ filter or select at least 8 MHz.";
+    }
     if (!hardware_source(a)) return NULL;
     const char *section=sources[a->source];
     GError *error=NULL;
@@ -200,7 +213,7 @@ static const char *receiver_offset_problem(App *a) {
             "sample rate: %.9g samples/s; receiver offset: %+.9g Hz. "
             "%s Reduce symbol rate/bandwidth or offset, or increase sample rate.",
             source_labels[a->source],width+2*fabs(offset),rx_usable_bandwidth(section,rate),rate,offset,
-            a->standard == 2 ? "DVB-T uses the selected channel bandwidth." : "DVB-S/S2 bandwidth = symbol rate x 1.35 (35% roll-off).");
+            a->standard >= 2 ? "DVB-T/T2 uses the selected channel bandwidth." : "DVB-S/S2 bandwidth = symbol rate x 1.35 (35% roll-off).");
         return a->receiver_offset_error;
     }
     width=g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL);
@@ -345,7 +358,21 @@ static void build_pipeline(App *a) {
             fatal("IQ filter width must be between max(10, sample-rate/256) and 0.95*sample-rate");
         add_number(s, "--filter-bandwidth", width);
     }
-    if (a->standard == 2) {
+    if (a->standard == 3) {
+        if (a->sr != 8000000 || sample_rate < 8000000 || sample_rate > 20000000)
+            fatal("DVB-T2 broadcast requires 8 MHz BW and 8..20 Msps input (10 Msps recommended)");
+        if (g_key_file_get_boolean(a->config, filter_section, "filter_enabled", NULL) &&
+            integer_setting(a, filter_section, "filter_bandwidth", 10, 100000000) < 8000000)
+            fatal("DVB-T2: disable the narrow IQ filter or select at least 8 MHz");
+        s = &a->stages[a->stage_count++];
+        s->args = g_ptr_array_new_with_free_func(g_free);
+        char *self = g_file_read_link("/proc/self/exe", NULL);
+        if (!self) fatal("Cannot locate the built-in DVB-T2 decoder");
+        add(s, self); g_free(self); add(s, "--decoder-worker=dvbt2");
+        add(s, "--input-format"); add(s, format);
+        add_number(s, "--sample-rate", sample_rate); add_number(s, "--bandwidth", a->sr);
+        add_number(s, "--plp", integer_setting(a, "dvbt2", "plp", -1, 255));
+    } else if (a->standard == 2) {
         s = &a->stages[a->stage_count++];
         s->args = g_ptr_array_new_with_free_func(g_free);
         char *self = g_file_read_link("/proc/self/exe", NULL);
@@ -862,8 +889,8 @@ pipe_error:
 static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
     char *text = g_strdup_printf("%s · %s %d%s · FEC %s",
-        standards[a->standard], a->standard == 2 ? "BW" : "Symb/s", a->sr,
-        a->standard == 2 ? " Hz" : "", fecs[a->fec]);
+        standards[a->standard], a->standard >= 2 ? "BW" : "Symb/s", a->sr,
+        a->standard >= 2 ? " Hz" : "", a->standard == 3 ? "auto" : fecs[a->fec]);
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
     scatter_refresh(a);
 }
@@ -1021,7 +1048,8 @@ static void filter_refresh(App *a) {
     a->iq_view.bandwidth = width;
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
     a->iq_view.receiver_offset = receiver_offset(a);
-    gtk_widget_set_tooltip_text(a->filter_box, a->iq_view.enabled ?
+    gtk_widget_set_tooltip_text(a->filter_box, a->standard == 3 ?
+        "DVB-T2 IQ filter: at least 8 MHz. Click to toggle; [ and ] adjust the bandwidth. Use 10 Msps or more for filtering." : a->iq_view.enabled ?
         "IQ bandpass filter on. Click to turn off. [ and ] adjust the bandwidth." :
         "IQ bandpass filter off. Click to turn on. [ and ] adjust the bandwidth.");
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
@@ -1029,6 +1057,11 @@ static void filter_refresh(App *a) {
 static void filter_apply(App *a, int width, gboolean enabled) {
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
+    if (enabled && a->standard == 3 && (width < 8000000 ||
+        width > .95*g_key_file_get_double(a->config,section,"sample_rate",NULL))) {
+        status(a,"DVB-T2 IQ filter needs at least 8 MHz within 95% of the sample rate; use 10 Msps or leave the filter off.");
+        filter_refresh(a); return;
+    }
     if (enabled && !rx_bandwidth_fits(section,g_key_file_get_double(a->config,section,"sample_rate",NULL),receiver_offset(a),width)) {
         status(a,"Filter width + receiver offset exceeds source band"); filter_refresh(a); return;
     }
@@ -1047,6 +1080,7 @@ static void filter_apply(App *a, int width, gboolean enabled) {
 static void filter_changed(GtkWidget *widget, gpointer data) {
     App *a = data; (void)widget;
     int width = g_key_file_get_integer(a->config, sources[a->source], "filter_bandwidth", NULL);
+    if (a->standard == 3) width = MAX(width,8000000);
     filter_apply(a, width, gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->filter_box)));
 }
 static void filter_step(App *a, int direction) {
@@ -1055,6 +1089,11 @@ static void filter_step(App *a, int direction) {
     int rate = integer_setting(a, section, "sample_rate", 1, 100000000);
     int low = MAX(10, (rate+255)/256), high = MAX(low, (int)(rate*.95));
     int width = g_key_file_get_integer(a->config, section, "filter_bandwidth", NULL);
+    if (a->standard == 3) {
+        low = MAX(low,8000000);
+        if (high < low) { filter_apply(a,low,TRUE); return; }
+        width = MAX(width,low);
+    }
     int step = MAX(1, width/20); /* 5% of the current total width. */
     filter_apply(a, CLAMP(width + direction*step, low, high), TRUE);
 }
@@ -1102,7 +1141,7 @@ static void save_screenshot(App *a) {
     char khz[G_ASCII_DTOSTR_BUF_SIZE];
     g_ascii_formatd(khz, sizeof(khz), "%.0f", frequency / 1e3);
     char *name = g_strdup_printf("linrad-dvb-%s-%s-%s%d-%skHz.png", timestamp,
-        standards[a->standard], a->standard == 2 ? "BW" : "SR", a->sr, khz);
+        standards[a->standard], a->standard >= 2 ? "BW" : "SR", a->sr, khz);
     char *path = g_build_filename(a->directory, name, NULL);
 
     /* Paint the whole widget tree, including our Cairo-backed video frame.
@@ -1389,9 +1428,9 @@ static void scatter_changed(GtkWidget *widget, gpointer data) {
 }
 
 static void populate_rates(App *a) {
-    if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard == 2 ? "BW (Hz)" : "Symbol rate (sym/s)");
-    const int *rates = a->standard == 2 ? terrestrial_rates : sat_rates;
-    int count = a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
+    if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard >= 2 ? "BW (Hz)" : "Symbol rate (sym/s)");
+    const int *rates = a->standard == 3 ? t2_rates : a->standard == 2 ? terrestrial_rates : sat_rates;
+    int count = a->standard == 3 ? 1 : a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
     g_signal_handlers_block_by_func(a->sr_box, selection_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->sr_box));
     for (int i = 0; i < count; ++i) {
@@ -1399,14 +1438,15 @@ static void populate_rates(App *a) {
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->sr_box), label); g_free(label);
         if (rates[i] == a->sr) active = i;
     }
-    if (active < 0 && a->source==SOURCE_FILE && a->sr>0) {
+    if (active < 0 && a->standard != 3 && a->source==SOURCE_FILE && a->sr>0) {
         char *label=g_strdup_printf("%d",a->sr);
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->sr_box),label); g_free(label);
         active=count;
     }
-    if (active < 0) active = a->standard == 2 ? 0 : 2;
+    if (active < 0) active = a->standard >= 2 ? 0 : 2;
     if (active<count) a->sr = rates[active];
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), active);
+    if (a->standard == 3) { a->gi=3; gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),3); }
     gtk_widget_set_sensitive(a->gi_box, a->standard == 2);
     g_signal_handlers_unblock_by_func(a->sr_box, selection_changed, a);
 }
@@ -1419,13 +1459,14 @@ static void rate_cell_data(GtkCellLayout *layout, GtkCellRenderer *cell,
     (void)layout; App *a=data;
     char *label=NULL;
     gtk_tree_model_get(model,iter,0,&label,-1);
-    double width=label ? g_ascii_strtod(label,NULL)*(a->standard == 2 ? 1 : 1.35) : NAN;
+    double width=label ? g_ascii_strtod(label,NULL)*(a->standard >= 2 ? 1 : 1.35) : NAN;
     gboolean valid=!hardware_source(a) || rx_bandwidth_fits(sources[a->source],
         g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL),receiver_offset(a),width);
     g_object_set(cell,"sensitive",valid,NULL);
     g_free(label);
 }
 
+static void constellation_changed(GtkWidget *widget, gpointer data);
 static void populate_fecs(App *a) {
     g_signal_handlers_block_by_func(a->fec_box, selection_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->fec_box));
@@ -1433,10 +1474,19 @@ static void populate_fecs(App *a) {
     for (int i = 0; i < (int)G_N_ELEMENTS(fecs); ++i) {
         if (!valid_fec(a, i)) continue;
         char *id = g_strdup_printf("%d", i);
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, fecs[i]);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, a->standard == 3 ? "auto (L1)" : fecs[i]);
         if (i == a->fec) gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), id);
         g_free(id);
     }
+    gtk_widget_set_sensitive(a->fec_box, a->standard != 3);
+    g_signal_handlers_block_by_func(a->constellation_box, constellation_changed, a);
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->constellation_box));
+    if (a->standard == 3) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto (L1)");
+    else for (unsigned i=0;i<G_N_ELEMENTS(constellations);++i)
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),constellations[i]);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->constellation_box),a->standard == 1 ? a->constellation : 0);
+    g_signal_handlers_unblock_by_func(a->constellation_box, constellation_changed, a);
+    if (a->t2_plp_box) gtk_widget_set_sensitive(a->t2_plp_box, a->standard == 3);
     gtk_widget_set_sensitive(a->constellation_box, a->standard == 1);
     if (a->ldpc_mode_box) {
         gboolean soft=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box))==0;
@@ -1455,8 +1505,15 @@ static void constellation_changed(GtkWidget *widget, gpointer data) {
     populate_fecs(a); refresh_preview(a);
 }
 
+static void t2_plp_changed(GtkWidget *widget, gpointer data) {
+    App *a = data;
+    g_key_file_set_integer(a->config,"dvbt2","plp",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget)));
+    refresh_preview(a);
+}
 static void standard_changed(GtkWidget *widget, gpointer data) {
     App *a = data; a->standard = gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
+    if (a->standard != 1) a->constellation = 0;
+    if (a->standard == 3) a->gi = 3;
     populate_rates(a); populate_fecs(a); refresh_preview(a);
 }
 static void power_clicked(GtkWidget *w, gpointer data) {
@@ -1599,6 +1656,8 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    if (!g_key_file_has_key(a->config,"dvbt2","plp",NULL))
+        g_key_file_set_integer(a->config,"dvbt2","plp",-1);
     const char *srt_keys[] = {"url", "loss_timeout_ms", "retry_interval_ms", "fps", "video_bitrate_kbps", "x264_preset", "video_threads", "filter_threads"};
     const char *srt_values[] = {"", "2000", "2000", "25", "4000", "veryfast", "0", "0"};
     for (unsigned i = 0; i < G_N_ELEMENTS(srt_keys); ++i)
@@ -1699,7 +1758,8 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
     int constellation=*info.constellation ? find_choice(info.constellation,constellations,G_N_ELEMENTS(constellations)) : 0;
     int fec=*info.fec ? find_choice(info.fec,fecs,G_N_ELEMENTS(fecs)) : 0;
     int gi=*info.gi ? find_choice(info.gi,guards,G_N_ELEMENTS(guards)) : 0;
-    int sr=info.symbol_rate ? info.symbol_rate : standard!=a->standard ? (standard==2 ? 150000 : 125000) : a->sr;
+    int sr=info.symbol_rate ? info.symbol_rate : standard!=a->standard ? (standard==3 ? 8000000 : standard==2 ? 150000 : 125000) : a->sr;
+    if (standard == 3) { constellation=0; fec=0; gi=3; }
     App candidate={.standard=standard,.constellation=constellation,.fec=fec};
     if (standard<0 || constellation<0 || fec<0 || gi<0 ||
         (standard!=1 && constellation!=0) || !valid_fec(&candidate,fec)) {
@@ -1710,7 +1770,7 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
     const char *format=*info.format ? info.format : fallback;
     int rate=info.sample_rate ? info.sample_rate : integer_setting(a,"file","sample_rate",1,100000000);
     guint64 samples;
-    if (rate<1 || rate>100000000 || !iq_file_validate(info.path,format,info.header_bytes,&samples,error)) {
+    if ((standard==3 && (sr!=8000000 || rate<8000000 || rate>20000000)) || rate<1 || rate>100000000 || !iq_file_validate(info.path,format,info.header_bytes,&samples,error)) {
         if (error && !*error) g_set_error_literal(error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Invalid sample rate");
         g_free(fallback); iq_file_info_clear(&info); return FALSE;
     }
@@ -1931,7 +1991,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
     about_label(box,"Receiver controls","about-heading");
     about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
-        "Mode: DVB-S/S2/T, symbol rate or bandwidth, FEC, constellation and guard interval. "
+        "Mode: DVB-S/S2/T/T2, symbol rate or bandwidth, FEC, constellation and guard interval. "
         "For DVB-S2, choose Soft-decision LDPC or Bit-flipping, 1–8 LDPC workers, "
         "and automatic acquisition/processing based on symbol rate: up to 333 ksym/s, "
         "continuous search and low latency; above that, normal search and throughput. "
@@ -2298,7 +2358,7 @@ static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
 
 static void create_mode_renderer(App *a) {
     a->mode_dialog = settings_dialog(a, "Mode · DVB settings", &a->controls);
-    a->standard_box = combo(a->controls, "Mode", 0, standards, 3, a->standard);
+    a->standard_box = combo(a->controls, "Mode", 0, standards, G_N_ELEMENTS(standards), a->standard);
     a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
     GList *rate_cells=gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(a->sr_box));
     for (GList *cell=rate_cells;cell;cell=cell->next)
@@ -2321,6 +2381,12 @@ static void create_mode_renderer(App *a) {
     gtk_label_set_xalign(GTK_LABEL(auto_hint),0);
     gtk_grid_attach(GTK_GRID(a->controls),auto_hint,0,9,2,1);
     g_free(ldpc_mode);
+    a->t2_plp_box=spin(a->controls,"DVB-T2 PLP (-1 = auto)",10,-1,255,1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),integer_setting(a,"dvbt2","plp",-1,255));
+    g_signal_connect(a->t2_plp_box,"value-changed",G_CALLBACK(t2_plp_changed),a);
+    GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
+    gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
+    gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,11,2,1);
     g_signal_connect(a->ldpc_mode_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
@@ -2586,7 +2652,8 @@ static void load_session(App *a) {
         *values[i] = choice(value, lists[i], counts[i], keys[i]); g_free(value);
     }
     a->sr = g_key_file_has_key(a->config, "session", "sr", NULL) ?
-        integer_setting(a, "session", "sr", 1, 100000000) : (a->standard == 2 ? 150000 : 125000);
+        integer_setting(a, "session", "sr", 1, 100000000) : (a->standard == 3 ? 8000000 : a->standard == 2 ? 150000 : 125000);
+    if (a->standard == 3) { a->fec=0; a->gi=3; a->constellation=0; }
     if (g_key_file_has_key(a->config, "session", "scatterfix", NULL)) {
         GError *error = NULL;
         a->scatter = g_key_file_get_boolean(a->config, "session", "scatterfix", &error);
@@ -2601,11 +2668,13 @@ int main(int argc, char **argv) {
         return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
+    if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt2"))
+        return dvbt2_backend_main(argc-1, argv+1);
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
     char *source = NULL, *constellation = NULL, *renderer = NULL, *srt_url = NULL, *rtlsdr_serial = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
     gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE;
-    int sr = -1;
+    int sr = -1, plp = -2;
     GOptionEntry entries[] = {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, srt, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"srt-output",0,0,G_OPTION_ARG_STRING,&srt_url,"Select gated 1920x1080 H.264/AAC SRT caller output","URL"},
@@ -2614,8 +2683,9 @@ int main(int argc, char **argv) {
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2 or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
-        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2 or DVB-T", "MODE"},
-        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000)", "RATE"},
+        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T or DVB-T2", "MODE"},
+        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
+        {"plp", 0, 0, G_OPTION_ARG_INT, &plp, "DVB-T2 PLP ID (-1 = automatic, 0..255 = explicit)", "ID"},
         {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC supported by the standard/constellation (e.g. 3/4)", "FEC"},
         {"gi", 0, 0, G_OPTION_ARG_STRING, &gi, "DVB-T: 1/32, 1/16, 1/8 or auto", "GI"},
         {"no-scatterfix", 0, 0, G_OPTION_ARG_NONE, &no_scatter, "Disable the saved ScatterFix setting", NULL},
@@ -2624,12 +2694,13 @@ int main(int argc, char **argv) {
         {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Run without a GUI; stop with Ctrl+C", NULL},
         {"headless", 0, 0, G_OPTION_ARG_NONE, &run, "Alias for --run (no display required)", NULL}, {NULL}
     };
-    GOptionContext *context = g_option_context_new("- Linrad DVB receiver with embedded DVB-S/S2/T decoders");
+    GOptionContext *context = g_option_context_new("- Linrad DVB receiver with embedded DVB-S/S2/T/T2 decoders");
     g_option_context_set_description(context,
         "DVB-S2 LDPC method, worker count and latency are configured in Mode or [leandvb] in the INI file.\n"
         "Direct decoder help (IQ on stdin, TS on stdout):\n"
         "  linrad_dvb --decoder-worker=leansdr --help\n"
         "  linrad_dvb --decoder-worker=dvbt --help\n"
+        "  linrad_dvb --decoder-worker=dvbt2 --help\n"
         "Bundled LDPC helper: ldpc_tool --help / --version");
     g_option_context_add_main_entries(context, entries, NULL);
     GError *error = NULL;
@@ -2669,7 +2740,7 @@ int main(int argc, char **argv) {
         int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standard");
         if (selected != a.standard) {
             a.standard = selected; a.constellation = 0; a.fec = 0;
-            a.sr = a.standard == 2 ? 150000 : 125000;
+            a.sr = a.standard == 3 ? 8000000 : a.standard == 2 ? 150000 : 125000;
         }
     }
     if (constellation) {
@@ -2678,15 +2749,23 @@ int main(int argc, char **argv) {
     }
     g_free(constellation);
     if (a.constellation && a.standard != 1) fatal("8PSK requires DVB-S2");
-    if (fec) a.fec = choice(fec, fecs, G_N_ELEMENTS(fecs), "FEC");
+    if (a.standard == 3) {
+        if ((fec && strcmp(fec,"auto")) || (gi && strcmp(gi,"auto")))
+            fatal("DVB-T2 detects FEC and guard interval automatically; use auto");
+        a.fec = 0; a.gi = 3;
+    } else if (fec) a.fec = choice(fec, fecs, G_N_ELEMENTS(fecs), "FEC");
+    if (plp != -2) {
+        if (a.standard != 3 || plp < -1 || plp > 255) fatal("--plp requires DVB-T2 and a value from -1 to 255");
+        g_key_file_set_integer(a.config,"dvbt2","plp",plp);
+    }
     if (!valid_fec(&a, a.fec)) fatal("Invalid FEC for the selected standard/constellation");
     if (gi) a.gi = choice(gi, guards, 4, "guard interval");
     if (sr != -1) a.sr = sr;
-    const int *rates = a.standard == 2 ? terrestrial_rates : sat_rates;
+    const int *rates = a.standard == 3 ? t2_rates : a.standard == 2 ? terrestrial_rates : sat_rates;
     gboolean valid = FALSE;
-    for (int i = 0; i < (a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
+    for (int i = 0; i < (a.standard == 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !(a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (!valid && !(a.standard != 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
     if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;

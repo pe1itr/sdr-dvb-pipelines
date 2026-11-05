@@ -237,6 +237,13 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
 static gboolean tick(gpointer data) {
     VideoView *v = data;
     if (v->player) {
+        /* Audio outputs can restore a per-application volume asynchronously.
+         * Set unity once after audio starts, matching FFplay's -volume 100;
+         * later system mixer changes remain under the user's control. */
+        if (!v->volume_initialized && libvlc_audio_get_track(v->player)>=0 &&
+            libvlc_media_player_get_state(v->player)==libvlc_Playing &&
+            libvlc_audio_set_volume(v->player,100)==0)
+            v->volume_initialized=TRUE;
         libvlc_media_t *media = libvlc_media_player_get_media(v->player);
         if (media) {
             libvlc_media_track_t **tracks = NULL;
@@ -364,6 +371,8 @@ static gboolean start_player(VideoView *v, guint16 program) {
     v->player = libvlc_media_player_new_from_media(media);
     libvlc_media_release(media);
     if (!v->player) return FALSE;
+    v->volume_initialized=FALSE;
+    libvlc_audio_set_volume(v->player,100);
     libvlc_audio_set_mute(v->player, v->muted);
     libvlc_video_set_callbacks(v->player, lock_frame, unlock_frame, display_frame, v);
     libvlc_video_set_format_callbacks(v->player, setup, NULL);

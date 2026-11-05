@@ -5,6 +5,7 @@
 typedef struct {
     GtkWidget *buttons[2], *dialogs[2], *services[2], *eit, *page, *status[2];
     GtkWidget *reveal;
+    GtkWidget *page_number, *page_controls;
     guint flash_timer;
     gboolean flash_on;
     TsInfoBackend *backend; /* borrowed; detached before pipeline destruction */

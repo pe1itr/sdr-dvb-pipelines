@@ -69,6 +69,7 @@ TsInfoParser *ts_info_parser_new(void) {
     TsInfoParser *p=g_new0(TsInfoParser,1);
     p->pat_version=-1;
     p->state.teletext_decoder=TRUE;
+    p->state.page_number=100;
     assembly_clear(&p->pat); assembly_clear(&p->sdt); content_clear(p);
     return p;
 }
@@ -90,6 +91,13 @@ void ts_info_parser_select(TsInfoParser *p, guint16 service) {
         if (service!=p->state.selected) { content_clear(p); p->state.selected=service; }
         return;
     }
+}
+void ts_info_parser_set_page(TsInfoParser *p, unsigned page) {
+    if (page<100 || page>899 || page==p->state.page_number) return;
+    p->state.page_number=page;
+    page_clear(&p->state); p->state.teletext_received=0;
+    /* Keep decoding the same PID. The next complete broadcast of this page
+     * supplies its original header, subpage and reception timestamp. */
 }
 
 /* DVB Annex A: selectors plus ISO-6937 default; never pass control codes or
@@ -348,9 +356,11 @@ static GBytes *teletext_frame(vbi_page *page, gboolean reveal, gboolean flash) {
 }
 static void teletext_event(vbi_event *event, void *data) {
     TsInfoParser *p=data;
-    if (event->type!=VBI_EVENT_TTX_PAGE || event->ev.ttx_page.pgno!=0x100) return;
+    unsigned number=p->state.page_number;
+    int bcd=((number/100)<<8)|(((number/10)%10)<<4)|(number%10);
+    if (event->type!=VBI_EVENT_TTX_PAGE || event->ev.ttx_page.pgno!=bcd) return;
     vbi_page page;
-    if (!vbi_fetch_vt_page(p->teletext,&page,0x100,event->ev.ttx_page.subno,
+    if (!vbi_fetch_vt_page(p->teletext,&page,bcd,event->ev.ttx_page.subno,
                           VBI_WST_LEVEL_3p5,25,FALSE)) return;
     if (page.columns>=40 && page.rows>=25 && page.columns*page.rows<=(int)G_N_ELEMENTS(page.text)) {
         page_clear(&p->state);
@@ -484,6 +494,8 @@ struct TsInfoBackend {
     gsize queued;
     guint64 generation;
     guint16 selected;
+    unsigned page_number;
+    gboolean page_changed;
     gboolean reset, gap, eof, stop;
     gint done;
     GThread *thread;
@@ -496,11 +508,12 @@ static gpointer info_worker(gpointer data) {
     TsInfoBackend *b=data; TsInfoParser *p=ts_info_parser_new();
     while (TRUE) {
         g_mutex_lock(&b->mutex);
-        while (!b->stop && !b->eof && !b->reset && !b->selected && g_queue_is_empty(&b->queue))
+        while (!b->stop && !b->eof && !b->reset && !b->selected && !b->page_changed && g_queue_is_empty(&b->queue))
             g_cond_wait(&b->wake,&b->mutex);
         gboolean stop=b->stop, reset=b->reset, gap=b->gap;
         guint16 selected=b->selected; guint64 generation=b->generation;
-        b->reset=b->gap=FALSE; b->selected=0;
+        unsigned page_number=b->page_number;
+        b->reset=b->gap=b->page_changed=FALSE; b->selected=0;
         GBytes *chunk=g_queue_pop_head(&b->queue);
         if (chunk) b->queued-=g_bytes_get_size(chunk);
         gboolean eof=b->eof && !chunk;
@@ -509,6 +522,7 @@ static gpointer info_worker(gpointer data) {
         if (reset) { ts_info_parser_free(p); p=ts_info_parser_new(); }
         else if (gap) ts_info_parser_gap(p);
         if (selected) ts_info_parser_select(p,selected);
+        ts_info_parser_set_page(p,page_number);
         if (chunk) {
             gsize n; const guint8 *bytes=g_bytes_get_data(chunk,&n);
             ts_info_parser_feed(p,bytes,n); g_bytes_unref(chunk);
@@ -525,6 +539,7 @@ TsInfoBackend *ts_info_backend_new(void) {
     TsInfoBackend *b=g_new0(TsInfoBackend,1);
     g_mutex_init(&b->mutex); g_cond_init(&b->wake); g_queue_init(&b->queue);
     b->snapshot.teletext_decoder=TRUE;
+    b->page_number=b->snapshot.page_number=100;
     b->thread=g_thread_new("ts-information",info_worker,b); return b;
 }
 void ts_info_backend_feed(TsInfoBackend *b, const guint8 *data, gsize size) {
@@ -543,6 +558,7 @@ void ts_info_backend_reset(TsInfoBackend *b) {
     ++b->generation; b->reset=TRUE; b->selected=0; queue_clear(b);
     gboolean decoder=b->snapshot.teletext_decoder;
     ts_info_snapshot_clear(&b->snapshot); b->snapshot.teletext_decoder=decoder;
+    b->page_number=b->snapshot.page_number=100; b->page_changed=FALSE;
     g_cond_signal(&b->wake); g_mutex_unlock(&b->mutex);
 }
 void ts_info_backend_select(TsInfoBackend *b, guint16 service) {
@@ -563,6 +579,19 @@ void ts_info_backend_select(TsInfoBackend *b, guint16 service) {
 void ts_info_backend_snapshot(TsInfoBackend *b, TsInfoSnapshot *out) {
     if (!b) { memset(out,0,sizeof(*out)); return; }
     g_mutex_lock(&b->mutex); snapshot_copy(out,&b->snapshot); g_mutex_unlock(&b->mutex);
+}
+void ts_info_backend_set_page(TsInfoBackend *b, unsigned page) {
+    if (!b || page<100 || page>899) return;
+    g_mutex_lock(&b->mutex);
+    if (!b->stop && b->page_number!=page) {
+        ++b->generation; b->page_number=page; b->page_changed=TRUE;
+        b->snapshot.page_number=page;
+        page_clear(&b->snapshot); b->snapshot.teletext_received=0;
+        /* Invalidate an in-flight old-page snapshot, without dropping TS or
+         * resetting service/EIT/PES state. Commands also wake an idle worker. */
+        g_cond_signal(&b->wake);
+    }
+    g_mutex_unlock(&b->mutex);
 }
 void ts_info_backend_finish(TsInfoBackend *b) {
     if (!b) return;

@@ -1,0 +1,360 @@
+#include "dect2/common/stage_prof.h"
+#include "dect2/common/thread_name.h"
+#include "dect2/t2/t2rx.h"
+#include "dect2/t2/t2ofdm.h"
+#include "dect2/dsp/resampler.h"
+#include "dect2/dsp/clock_correct.h"
+#include "dect2/common/platform.h"
+#include "dect2/t2/t2pilots.h"
+#include "dect2/t2/t2l1.h"
+#include "dect2/t2/t2interleave.h"
+
+#include "dect2/dsp/dsp_compat.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <complex>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <utility>
+#include <chrono>
+#include <memory>
+#include <condition_variable>
+#include <thread>
+#include "dect2/ofdm/csi_erase.h"
+#include <string>
+#include <vector>
+// The inside of the DVB-T2 receiver (t2rx.cpp has the public interface). The work is spread over t2rx.cpp (driver, resampler thread, telemetry),
+// t2rx_sync.cpp (P1 and guard interval), t2rx_symbols.cpp (OFDM symbols), t2rx_l1.cpp (P2 and L1 signalling) and t2rx_data.cpp (data stage).
+#pragma once
+
+namespace dect2 {
+
+// Where the receiver thread spends its time (shown in the log when a source stops): resampler, P1 search, guard check, symbols, FFTs, data stage.
+// The same stages, by name and in CPU time without the stages inside them, for tests/bench/bench_dvb.cpp (dect2/common/stage_prof.h).
+namespace t2rxi {
+struct StageClock {
+    std::chrono::steady_clock::time_point t0;
+    int which;
+    prof::Scope ps;
+    explicit StageClock(int w) : t0(std::chrono::steady_clock::now()), which(w), ps(stage(w)) {}
+    ~StageClock() { g()[which] += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+    static double* g() { static double v[9] = {}; return v; }
+    static prof::Stage& stage(int w) {
+        static prof::Stage s[9] = {prof::Stage("t2.resample"), prof::Stage("t2.p1"), prof::Stage("t2.guard"), prof::Stage("t2.symbol"), prof::Stage("t2.fft"),
+                                   prof::Stage("t2.chanest+eq"), prof::Stage("t2.cp-track"), prof::Stage("t2.display"), prof::Stage("t2.p2+l1")};
+        return s[w];
+    }
+};
+}
+using cd = std::complex<double>;
+static constexpr double kTwoPi = 6.283185307179586;
+
+namespace t2rxi {
+
+constexpr double kP1Threshold = 0.30; // C-A-B correlation needed to try decoding
+constexpr double kP1MinConf = 0.40;   // decoded S1/S2 sequence correlation needed to accept
+constexpr int kP1CfoBins = 64;        // frequency offset P1 is searched over: +-64 P1 carriers (+-571 kHz at 8 MHz, +-115 kHz at 1.7 MHz)
+constexpr int kPeakHalfWidth = 700;
+inline bool trackDisabled() { static const bool v = getenv("DECT2_NOTRACK") != nullptr; return v; }   // switch the windowed P1 search off
+constexpr int kTrackWindow = 1200;    // half width of the window around the expected P1 once locked (samples at the native rate)
+constexpr int kCoarseBlk = 32;        // grid of the cheap first stage of a full P1 search (start positions, and the block the products are summed over)
+constexpr double kP1PreThreshold = 0.20;   // cheap-stage metric that sends a stretch to the exact metric (a P1 at kP1Threshold reads about 0.28 there)
+
+struct Frame {
+    int64_t anchor;      // absolute index of the first symbol after P1
+    int next = 0;        // next symbol index to process
+    int maxSyms = 0;
+    double sro = 0;      // clock error left in its samples when it started: the placement of its symbols must not change half-way through
+    // Samples lost inside the frame (a USB stall): from symbol lostAt on (the first whose cyclic prefix no longer matched) the symbols sit
+    // `lost` samples earlier, known exactly from where the next P1 turned up. Those that overlap the gap are erased; the rest decode.
+    int lostAt = -1;
+    bool lostKnown = false, intactAgain = false;
+    int64_t lost = 0;
+    int64_t lostFrom = 0;   // where the first mismatching symbol would have started: the gap lies after it
+};
+
+} // namespace t2rxi
+
+using namespace t2rxi;
+
+struct T2Receiver::Impl {
+    // ---- configuration
+    double inRate = 0, fn = 0;
+    bool decimate = false, rateOk = true;
+    RationalResampler resampler;
+    std::vector<cf32> rsOut;
+    // ---- sample-clock correction: a fine resampler at the native rate, steered by the P1 spacing (onFrameSpacing). Off (samples copied
+    // straight through) until a clock error is measured; then every sample goes through it, so that the 32K carriers stay orthogonal.
+    ClockCorrector sroRs;
+    bool sroOn = false;
+    double sroCorr = 0;          // relative clock error removed by sroRs (its step is 1 + sroCorr)
+    int sroN = 0;                // frame spacings the loop has taken in (its gain falls with them)
+    std::vector<cf32> sroOut;
+    std::vector<cf32> dcIn;       // input with the DC offset removed (append)
+    double dcRe = 0, dcIm = 0;    // the DC offset followed so far
+    void append(const cf32* x, size_t n);
+    void sroReset();
+    // sets the correction (clamped to +-200 ppm), switching sroRs in if it is off; then the buffered samples from absolute index `from` on
+    // (if they are still there) go through it too, so that a whole frame is corrected from its first symbol
+    void steerSro(double corr, int64_t from = -1);
+
+    // ---- optional resampler stage on its own thread (live radios): input chunks go in, resampled chunks come back in the same order
+    struct Stage {
+        std::thread th;
+        std::mutex mu;      // the queues
+        std::mutex rsMu;    // the resampler: held by the worker while it resamples, and by whoever reconfigures or resets it
+        std::condition_variable cvIn, cvSpace;
+        std::deque<std::pair<uint64_t, std::vector<cf32>>> in, out;
+        uint64_t gen = 0;   // bumped by a reset: chunks of an earlier generation are dropped
+        std::deque<size_t> gaps;   // sizes of the gaps whose (empty) marker chunks are queued, in the same order
+        bool stop = false;
+    } stage;
+    static constexpr size_t kStageMaxIn = 32;
+    bool pipelined = false;
+
+    void stageLoop();
+    void gapReset(size_t skippedIn);   // `skippedIn` input samples were thrown away: forget the frames in flight and look for the next P1 where the frame cadence puts it
+    void stageStart() {
+        { std::lock_guard<std::mutex> lk(stage.mu); stage.stop = false; }
+        stage.th = dect2::namedThread("onair-t2stage", [this] { stageLoop(); });
+    }
+    void stageStop() {
+        if (!stage.th.joinable()) return;
+        { std::lock_guard<std::mutex> lk(stage.mu); stage.stop = true; stage.gen++; stage.in.clear(); stage.out.clear(); stage.gaps.clear(); }
+        stage.cvIn.notify_all();
+        stage.cvSpace.notify_all();
+        stage.th.join();
+    }
+    void stageFlush() {   // forget everything that is queued or being resampled
+        std::lock_guard<std::mutex> lk(stage.mu);
+        stage.gen++; stage.in.clear(); stage.out.clear(); stage.gaps.clear();
+        stage.cvSpace.notify_all();
+    }
+    ~Impl() { stageStop(); }
+
+    // ---- native-rate buffer
+    std::vector<cf32> buf;
+    int64_t base = 0; // absolute index of buf[0]
+    int64_t end() const { return base + (int64_t)buf.size(); }
+    // Samples outside the buffered range read as silence: timing corrections can place a symbol slightly before the oldest retained
+    // sample or after the newest one, and that must cost one symbol, not a crash.
+    const cf32& at(int64_t abs) const {
+        static const cf32 kZero(0.f, 0.f);
+        const int64_t i = abs - base;
+        if (i >= 0 && i < (int64_t)buf.size()) return buf[(size_t)i];
+        return kZero;
+    }
+
+    // ---- FFT
+    std::vector<float> fr, fi;
+    std::vector<cd> cpP;       // processSymbol scratch: per-sample cyclic-prefix products
+    std::vector<double> cpE;
+    void derotate(int64_t w0, double ph0, double dph);   // fr/fi = the N samples at w0, rotated by exp(j (ph0 + dph n))
+    void doFft(int log2n, bool inverse = false) { fftSplit(fr.data(), fi.data(), log2n, inverse); }
+
+    // ---- P1 scanner
+    int64_t scanPos = 0;
+    bool scanFirst = true;
+    std::vector<cd> pq1, pq2;   // scanP1 scratch (prefix sums), kept to avoid reallocating per chunk
+    int64_t trackKeep = -1;               // samples from here on stay buffered while tracking, so a missed P1 can be searched for again
+    std::vector<std::pair<int64_t, int64_t>> done;   // stretches of `m` the last P1 search filled in
+    int trackMiss = 0, trackFrames = 0;   // windowed P1 search: expected P1s not found in a row, P1s accepted since the last full pass
+    double trackExpect = 0;               // where the next P1 is expected (absolute sample index), 0 = not set
+    int64_t trackFullUntil = 0;           // search everything up to here
+    std::vector<double> pe;
+    std::vector<float> m;
+    std::array<cd, 1024> phiTab; // exp(-j 2 pi g / 1024)
+    // cheap first stage of a full search: its metric on the kCoarseBlk grid (from coarseFrom on, relative to the pass's lo), and scratch
+    std::vector<float> coarse;
+    int64_t coarseFrom = 0;
+    std::vector<cd> cbC, cbB;   // prefix sums over blocks of the turned C-A and A-B products
+    std::vector<double> cbE;    // and of the energy
+    std::array<cd, 1024> phiBlk; // exp(-j 2 pi (g + (kCoarseBlk - 1) / 2) / 1024): the phase at the centre of a block that starts at g
+    bool gateOff = false;       // DECT2_NOP1GATE: search everything with the exact metric (tests compare the two)
+    uint64_t p1Evaluated = 0, p1Rescans = 0;
+    int64_t lastP1Abs = INT64_MIN / 2;
+    double rejectedPos = 0;
+    bool haveRejected = false;
+    std::vector<float> trace;
+
+    // ---- state
+    int state = 0;
+    P1Info p1;
+    uint64_t p1Count = 0;
+    double prevPos = -1;
+    int64_t giAnchor = 0;
+    int giIdx = -1;
+    float giScore[kNumGi] = {};
+    float giMargin = 0;
+    int fftN = 0, guard = 0, carriers = 0, nP2 = 0;
+    int fftCode = -1, curS1 = -1;
+    int frameSyms = 0;
+    double frameLen = 0, sro = 0, frameMsv = 0;
+    std::deque<Frame> frames;
+    double cfoEst = 0;
+    double cpCorrAvg = 0, timingAvg = 0;
+    int lowCount = 0;
+    int64_t gridOff = 0, pendingGridOff = 0;
+    uint64_t symbols = 0, symCounter = 0;
+    std::vector<cf32> prevCells;
+    int64_t prevSymAbs = -1;
+    int64_t lastP1Seen = 0;
+    double frameCfo = 0;   // CFO used for every symbol of the current frame (constant, so phase stays continuous)
+    int64_t curAnchor = 0;
+
+    // ---- P2 stage
+    int kMax = 0;
+    std::vector<std::vector<cf32>> p2cells;
+    GridInterpolator interp;
+    ofdm::CarrierInterference carrierErase;   // narrowband-interferer erasure per carrier, tracked over the symbols of all frames
+    const bool flatN0 = ofdm::envOn("DECT2_OFDM_FLAT_N0");   // A/B tests only: no channel-state weighting
+    // data stage: the pilot map and the cell types of every symbol only change with the signal configuration, not from frame to frame
+    struct DsCache {
+        PilotConfig pc; int L = 0;
+        std::unique_ptr<PilotMap> pm;
+        std::vector<std::vector<uint8_t>> types;
+        std::vector<std::vector<int>> dataIdx;   // per symbol: the carriers that carry data cells
+    } dsCache;
+    // pilot maps of the P2 stage by configuration (building one generates a 28,000-value PRBS, and the stage runs every frame)
+    std::map<int, std::unique_ptr<PilotMap>> pmCache;
+    const PilotMap& cachedPilotMap(int fftCode, bool ext, int pp) {
+        std::unique_ptr<PilotMap>& e = pmCache[(fftCode * 2 + (ext ? 1 : 0)) * 8 + pp];
+        if (!e) { PilotConfig c; c.fftCode = fftCode; c.ext = ext; c.pp = pp; e.reset(new PilotMap(c)); }
+        return *e;
+    }
+    bool chValid = false, extDetected = false;
+    std::vector<cf32> chH;
+    int chK = 0, irMin = 0;
+    std::vector<float> chMag, chPh, irDb, snrDbv;
+    float p2Snr = 0;
+    std::vector<cf32> eqP2;
+    L1Pre l1pre;
+    L1Post l1post;
+    std::atomic<int> plpSelect{-1};
+    bool l1preOk = false, l1postOk = false;
+    bool haveGoodL1 = false;       // the last L1 that passed its CRC, kept to bridge frames whose own L1 fails
+    L1Pre goodPre; L1Post goodPost;
+    int64_t goodAnchor = 0;
+    int l1Reuse = 0;               // consecutive frames that used the kept L1
+    uint64_t l1Reused = 0;
+    uint64_t l1preGood = 0, l1preBad = 0, l1postGood = 0, l1postBad = 0;
+    int l1Iters = 0;
+    float l1N0 = 0;
+    // data stage
+    std::vector<std::vector<cf32>> frameCells;
+    std::vector<uint8_t> symErased;   // per symbol of the current frame: lost with the samples (no pilots, no data)
+    double cpRhoAt(int64_t s) const;
+    void eraseSymbol(int k);
+    bool dataValid = false;
+    float dataSnr = 0;
+    int dataDx = 0, dataDy = 0, dataPp = 0;
+    std::vector<cf32> eqData;
+    double chDelayCentre = 0, chDelayHalf = 0; // delay support of the channel (samples rel. to the main path)
+    bool chDelayKnown = false;
+    std::vector<float> dataSnrCar;
+    uint64_t dataFrames = 0;
+    // PLP
+    PlpDecoder plpDec;
+    std::function<void(const PlpResult&)> plpCb;
+    std::vector<std::vector<cf32>> p2Sym, p2G2;
+    uint64_t frameCounter = 0;
+    bool plpValid = false;
+    int plpId = 0, plpBlocks = 0, plpSkipped = 0, selectedPlpId = -1;
+    PlpFec plpFec;
+    uint64_t plpFrames = 0, blocksOk = 0, blocksBad = 0, headersOk = 0, plpBchCorr = 0;
+    double plpMer = 0, plpPre = 0, plpIters = 0, plpMs = 0;
+    bool plpGpu = false;
+    std::deque<std::vector<uint8_t>> blockMaps;
+    std::vector<cf32> plpConst;
+    std::vector<uint8_t> plpConstErr;
+    std::vector<uint16_t> plpConstTx;
+    uint64_t plpConstSeq = 0;
+    int hUpl = 0, hDfl = 0, hSyncd = 0;
+
+    // ---- outputs
+    std::mutex mu;
+    RxTelemetry tel;
+    std::vector<cf32> p1Const, diffCells, rawCells;
+
+    Impl() {
+        for (int i = 0; i < 1024; i++) phiTab[i] = std::polar(1.0, -kTwoPi * i / 1024.0);
+        for (int i = 0; i < 1024; i++) phiBlk[i] = std::polar(1.0, -kTwoPi * (i + 0.5 * (kCoarseBlk - 1)) / 1024.0);
+    }
+
+    void resetAll();
+
+    // ------------------------------------------------------------ P1 detection
+    // The P1 correlator metric for the start positions d in [d0, d1] (relative to lo), into m[]. The prefix sums start at d0, so a call that
+    // starts at 0 gives exactly the numbers the whole-chunk computation always gave.
+    void p1Metric(int64_t lo, int64_t len, int64_t d0, int64_t d1);
+
+    // Picks the P1 candidates among d in [dA, dB] (relative to lo) out of m[] and hands them on; true if one was accepted.
+    bool p1Detect(int64_t lo, int64_t lastD, int64_t dA, int64_t dB);
+
+    // The cheap first stage: the metric on the grid dA + k kCoarseBlk (k up to the first point at or past dB), into coarse[].
+    void p1Coarse(int64_t lo, int64_t dA, int64_t dB);
+
+    // Searches every start position in [dA, dB]: the cheap stage first, the exact metric only where it fires.
+    void p1Search(int64_t lo, int64_t len, int64_t lastD, int64_t dA, int64_t dB);
+
+    void scanP1();
+
+    struct P1Decode {
+        bool ok = false;
+        int s1 = 0, s2 = 0;
+        double conf = 0, cfo = 0, frac = 0;
+        std::vector<cf32> z, y;
+    };
+
+    P1Decode decodeP1(int64_t d, double cfoC);
+    P1Decode decodeP1Range(int64_t d, double cfoC, int kLo, int kHi);
+    void refineP1Timing(P1Decode& b);
+
+    void handleP1Candidate(int64_t d, float metric);
+
+    void onFrameSpacing(double L);
+
+    // ------------------------------------------------------------ guard-interval detection
+    bool evaluateGi();
+
+    // ------------------------------------------------------------ OFDM symbols
+    void processFrames();
+
+    // FFT of the symbol that starts at s (guard included); returns the K central carriers, CFO-corrected.
+    void fftCells(int64_t s, std::vector<cf32>& cells, int K);
+
+    // Channel estimate from the P2 pilots, equalisation, L1-pre / L1-post decoding.
+    bool p2Hypothesis(bool ext, bool final);
+
+    // Integer-bin frequency error: the CP correlation only resolves the offset modulo one carrier spacing, so a wrong
+    // P1-based estimate can leave the whole spectrum shifted by whole carriers. Correlate the P2 pilots at shifts.
+    int p2IntegerShift();
+
+    void runP2Stage();
+
+    // Assemble the frame's cell stream, cut out the PLP and hand it to the decoder threads.
+    void submitPlp(const std::vector<cf32>& dstream, const std::vector<float>& dn0, double sigma2);
+
+    void pollPlp();
+
+    // Scattered-pilot channel estimation for the data / frame-closing symbols of the frame just received.
+    void runDataStage();
+
+    void processSymbol(int64_t s, int k);
+
+    // ------------------------------------------------------------ driver
+    void run();
+
+    void publish();
+};
+
+} // namespace dect2

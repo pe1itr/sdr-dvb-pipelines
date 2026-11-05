@@ -63,7 +63,9 @@ class DecoderStatus(ctypes.Structure):
                 + [(k, ctypes.c_char*n) for k,n in [('service',128),('provider',128),('modulation',24),('fec',16),('guard',16)]]
                 + [(k, ctypes.c_uint32) for k in ('satellite','constellation_order','lock_valid','fec_good','fec_bad')]
                 + [('mer_db',ctypes.c_float)]
-                + [(k, ctypes.c_int32) for k in ('modcod','short_frame','pilots')])
+                + [(k, ctypes.c_int32) for k in ('modcod','short_frame','pilots')]
+                + [(k, ctypes.c_uint64) for k in ('input_dropped','fec_frames_dropped')]
+                + [('plp_id', ctypes.c_int32)])
 
 
 class LeanDvbTests(unittest.TestCase):

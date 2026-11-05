@@ -15,6 +15,7 @@ typedef struct {
     double aspect;
     gboolean ready, dirty, local_display;
     gboolean active, muted;
+    gboolean volume_initialized;
     GThread *relay;
     gint stopping, relay_failed;
     gint input_ended;

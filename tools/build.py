@@ -132,7 +132,7 @@ def main(argv=None):
 
     ready = {}
     for name, command in (("make", ["make"]), ("pkg-config", ["pkg-config"]),
-                          ("CC", words["CC"]), ("CXX", words["CXX"])):
+                          ("CC", words["CC"]), ("CXX", words["CXX"]), ("cargo", [os.environ.get("CARGO", "cargo")]), ("rustc", ["rustc"])):
         ready[name] = bool(command and shutil.which(command[0]))
         checker.report("OK" if ready[name] else "ERROR",
                        f"{name}: {shlex.join(command) or '(empty)'}"
@@ -189,6 +189,11 @@ def main(argv=None):
                 checker.report("OK" if ok else "ERROR", f"{module} ({purpose}): headers/link check"
                                + ("" if ok else f" failed\n{detail}"))
 
+    if ready.get("CXX"):
+        with tempfile.TemporaryDirectory(prefix="sdr-t2-check-") as temp:
+            ok, detail = checker.compile(Path(temp), words["CXX"], words["CPPFLAGS"] + words["CXXFLAGS"] + ["-std=gnu++20"],
+                "#include <bit>\nint main() { return std::popcount(7u) != 3; }\n", "cc", link_flags)
+            checker.report("OK" if ok else "ERROR", "DVB-T2: C++20 compiler" + ("" if ok else "\n" + detail))
     checker.optional()
     print(f"\nDependency check: {checker.errors} error(s), {checker.warnings} warning(s).", flush=True)
     if checker.errors:

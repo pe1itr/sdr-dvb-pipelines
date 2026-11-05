@@ -1181,6 +1181,39 @@ static void exercise_information(App *a) {
         g_assert_cmpint(cairo_surface_write_to_png(surface,file),==,CAIRO_STATUS_SUCCESS);
         g_free(dir); g_free(file); cairo_destroy(cr); cairo_surface_destroy(surface);
     }
+    /* Page commands work with no incoming TS, preserve EIT/service selection,
+     * and immediately hide the image belonging to the old page. */
+    gtk_entry_set_text(GTK_ENTRY(v->page_number),"200");
+    v->next_tick=0; ts_info_view_tick(v,backend);
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(v->page_number)),==,"200");
+    gtk_spin_button_update(GTK_SPIN_BUTTON(v->page_number));
+    g_assert_cmpuint(v->snapshot.page_number,==,200);
+    g_assert_null(v->snapshot.page);
+    g_assert_true(v->snapshot.events[0].valid);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->status[1])),==,"Waiting for Teletext page 200");
+    GList *navigation=gtk_container_get_children(GTK_CONTAINER(v->page_controls));
+    GtkWidget *previous=g_list_nth_data(navigation,2), *next=g_list_nth_data(navigation,3);
+    GtkWidget *index=g_list_nth_data(navigation,4);
+    gtk_button_clicked(GTK_BUTTON(previous));
+    g_assert_cmpuint(v->snapshot.page_number,==,199);
+    gtk_button_clicked(GTK_BUTTON(next));
+    g_assert_cmpuint(v->snapshot.page_number,==,200);
+    gtk_button_clicked(GTK_BUTTON(index));
+    g_assert_cmpuint(v->snapshot.page_number,==,100);
+    gtk_button_clicked(GTK_BUTTON(previous));
+    g_assert_cmpuint(v->snapshot.page_number,==,899);
+    gtk_button_clicked(GTK_BUTTON(next));
+    g_assert_cmpuint(v->snapshot.page_number,==,100);
+    g_list_free(navigation);
+    ts_info_backend_feed(backend,(guint8 *)bytes,size);
+    ts_info_backend_set_page(backend,888); /* In-flight page 100 must stay hidden. */
+    deadline=g_get_monotonic_time()+100000;
+    do {
+        v->next_tick=0; ts_info_view_tick(v,backend);
+        g_assert_cmpuint(v->snapshot.page_number,==,888);
+        g_assert_null(v->snapshot.page); g_usleep(1000);
+    } while (g_get_monotonic_time()<deadline);
+    gtk_button_clicked(GTK_BUTTON(index));
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(v->services[1]),"2");
     g_assert_cmpint(v->snapshot.selected,==,2);
     g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(v->services[0])),==,"2");
@@ -1240,11 +1273,79 @@ static void exercise_s2_automatic(App *a) {
     a->sr=sr; populate_rates(a); refresh_preview(a);
 }
 
+static void exercise_t2_mode(App *a) {
+    int standard=a->standard, source=a->source, sr=a->sr, fec=a->fec, gi=a->gi;
+    /* A compatible source lets the preview validate the complete T2 path. */
+    a->source=2;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),3);
+    g_assert_cmpint(a->sr,==,8000000);
+    g_assert_false(gtk_widget_get_sensitive(a->fec_box));
+    g_assert_false(gtk_widget_get_sensitive(a->gi_box));
+    g_assert_false(gtk_widget_get_sensitive(a->constellation_box));
+    g_assert_true(gtk_widget_get_sensitive(a->t2_plp_box));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),7);
+    g_assert_cmpint(integer_setting(a,"dvbt2","plp",-1,255),==,7);
+    char *pipeline=describe(a);
+    g_assert_nonnull(strstr(pipeline,"--decoder-worker=dvbt2"));
+    g_assert_nonnull(strstr(pipeline,"'--bandwidth' '8000000'"));
+    g_assert_nonnull(strstr(pipeline,"'--plp' '7'"));
+    g_free(pipeline);
+    /* Live filtering must never send a saved narrowband width to T2. */
+    const char *section=sources[a->source];
+    int saved_rate=g_key_file_get_integer(a->config,section,"sample_rate",NULL);
+    int saved_width=g_key_file_get_integer(a->config,section,"filter_bandwidth",NULL);
+    gboolean saved_enabled=g_key_file_get_boolean(a->config,section,"filter_enabled",NULL);
+    int control[2]; g_assert_cmpint(pipe(control),==,0);
+    g_assert_true(g_unix_set_fd_nonblocking(control[0],TRUE,NULL));
+    g_assert_false(a->running); g_assert_cmpint(a->tune_fd,==,-1);
+    a->running=TRUE; a->tune_fd=control[1];
+    g_key_file_set_integer(a->config,section,"sample_rate",10000000);
+    g_key_file_set_integer(a->config,section,"filter_bandwidth",50000);
+    g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
+    filter_refresh(a);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->filter_box),TRUE);
+    char command[64]={0};
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 8000000\n");
+    filter_apply(a,50000,TRUE);
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),==,-1);
+    g_assert_cmpint(errno,==,EAGAIN);
+    g_assert_cmpint(g_key_file_get_integer(a->config,section,"filter_bandwidth",NULL),==,8000000);
+    filter_step(a,-1);
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 8000000\n");
+    filter_step(a,1);
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 8400000\n");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->filter_box),FALSE);
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 0\n");
+    g_key_file_set_integer(a->config,section,"sample_rate",8000000);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->filter_box),TRUE);
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),==,-1);
+    g_assert_cmpint(errno,==,EAGAIN);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->filter_box)));
+    close(control[0]); close(control[1]); a->tune_fd=-1; a->running=FALSE;
+    g_key_file_set_integer(a->config,section,"sample_rate",saved_rate);
+    g_key_file_set_integer(a->config,section,"filter_bandwidth",saved_width);
+    g_key_file_set_boolean(a->config,section,"filter_enabled",saved_enabled);
+    filter_refresh(a);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),-1);
+    a->source=source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),standard);
+    a->sr=sr; a->fec=fec; a->gi=gi;
+    populate_rates(a); populate_fecs(a); refresh_preview(a);
+}
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        exercise_t2_mode(a);
         exercise_s2_automatic(a);
         exercise_information(a);
         exercise_scatter_view(a);
@@ -1679,6 +1780,7 @@ static gboolean exercise(gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=dvbt2")) return dvbt2_backend_main(argc-1,argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);

@@ -27,6 +27,7 @@ static void report(const TsInfoSnapshot *s) {
     json_object_object_add(out,"decoder",json_object_new_boolean(s->teletext_decoder));
     json_object_object_add(out,"eit_received",json_object_new_int64(s->eit_received));
     json_object_object_add(out,"teletext_received",json_object_new_int64(s->teletext_received));
+    json_object_object_add(out,"page_number",json_object_new_int(s->page_number));
     json_object_object_add(out,"width",json_object_new_int(s->width));
     json_object_object_add(out,"height",json_object_new_int(s->height));
     json_object_object_add(out,"services",services);
@@ -74,6 +75,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i],"--gap")) ts_info_parser_gap(p);
         else if (!strcmp(argv[i],"--reset")) { ts_info_parser_free(p); p=ts_info_parser_new(); }
         else if (g_str_has_prefix(argv[i],"--select=")) ts_info_parser_select(p,atoi(argv[i]+9));
+        else if (g_str_has_prefix(argv[i],"--page=")) ts_info_parser_set_page(p,atoi(argv[i]+7));
         else {
             char *data; gsize size; g_assert_true(g_file_get_contents(argv[i],&data,&size,NULL));
             /* Vary chunk boundaries, including inside packet headers. */

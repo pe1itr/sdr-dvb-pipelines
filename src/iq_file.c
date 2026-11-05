@@ -93,8 +93,8 @@ static void filename_text(const char *name, const char *pattern, char *out, size
 }
 static void from_filename(const char *path, IQFileInfo *info) {
     char *name=g_path_get_basename(path), value[32]={0};
-    filename_text(name,"(?:^|[-_])(dvbs2|dvbs|dvbt)(?=[-_.])",value,sizeof(value));
-    if (*value) g_strlcpy(info->standard,!g_ascii_strcasecmp(value,"dvbt") ? "DVB-T" :
+    filename_text(name,"(?:^|[-_])(dvbs2|dvbs|dvbt2|dvbt)(?=[-_.])",value,sizeof(value));
+    if (*value) g_strlcpy(info->standard,!g_ascii_strcasecmp(value,"dvbt2") ? "DVB-T2" : !g_ascii_strcasecmp(value,"dvbt") ? "DVB-T" :
         !g_ascii_strcasecmp(value,"dvbs2") ? "DVB-S2" : "DVB-S",sizeof(info->standard));
     value[0]=0; filename_text(name,"(?:^|[-_])(qpsk|8psk)(?=[-_.])",value,sizeof(value));
     if (*value) { char *upper=g_ascii_strup(value,-1); g_strlcpy(info->constellation,upper,sizeof(info->constellation)); g_free(upper); }

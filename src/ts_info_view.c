@@ -60,6 +60,16 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     return FALSE;
 }
 static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
+    unsigned page=s->page_number ? s->page_number : 100;
+    v->updating=TRUE;
+    /* Do not refresh an unchanged value: that would overwrite digits while
+     * the user is typing, before Enter/focus-out commits the spin entry. */
+    if (gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(v->page_number))!=(int)page)
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),page);
+    v->updating=FALSE;
+    gtk_widget_set_sensitive(v->page_controls,v->backend!=NULL);
+    char *page_name=g_strdup_printf("Teletext page %u",page);
+    atk_object_set_name(gtk_widget_get_accessible(v->page),page_name);
     gboolean catalog=force || s->count!=v->snapshot.count || s->selected!=v->snapshot.selected ||
         memcmp(s->services,v->snapshot.services,sizeof(s->services));
     if (catalog) {
@@ -86,18 +96,19 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         if (i==1 && !s->teletext_decoder && v->backend)
             status=g_strdup("Teletext decoder unavailable (libzvbi initialization failed)");
         else if (i==1 && !ready[i])
-            status=g_strdup(s->teletext_announced ? "Waiting for Teletext page 100" :
-                s->pmt_seen ? "No Teletext announced for this service" : "Waiting for service information");
+            status=s->teletext_announced ? g_strdup_printf("Waiting for Teletext page %u",page) :
+                g_strdup(s->pmt_seen ? "No Teletext announced for this service" : "Waiting for service information");
         else status=received_text(i ? s->teletext_received : s->eit_received);
         if (!i && s->eit_received && !ready[i]) { g_free(status); status=g_strdup("EIT received without current/next events"); }
         GtkStyleContext *style=gtk_widget_get_style_context(v->buttons[i]);
         if (ready[i]) gtk_style_context_add_class(style,"information-ready");
         else gtk_style_context_remove_class(style,"information-ready");
-        char *tip=g_strdup_printf("%s%s\n%s",i ? "Teletext page 100" : "EIT",ready[i] ? " available" : "",status);
+        char *tip=g_strdup_printf("%s%s\n%s",i ? page_name : "EIT",ready[i] ? " available" : "",status);
         gtk_widget_set_tooltip_text(v->buttons[i],tip); g_free(tip);
         gtk_label_set_text(GTK_LABEL(v->status[i]),status); g_free(status);
         atk_object_set_description(gtk_widget_get_accessible(v->buttons[i]),ready[i] ? "Information available" : "Waiting for information");
     }
+    g_free(page_name);
     gboolean image_changed=force || s->page!=v->snapshot.page;
     if (force || s->selected!=v->snapshot.selected || !s->page)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),FALSE);
@@ -112,6 +123,21 @@ static void service_changed(GtkComboBox *box, gpointer data) {
         ts_info_backend_select(v->backend,(guint16)g_ascii_strtoull(id,NULL,10));
         v->next_tick=0; ts_info_view_tick(v,v->backend);
     }
+}
+static void page_changed(GtkSpinButton *spin, gpointer data) {
+    TsInfoView *v=data;
+    if (v->updating || !v->backend) return;
+    ts_info_backend_set_page(v->backend,gtk_spin_button_get_value_as_int(spin));
+    v->next_tick=0; ts_info_view_tick(v,v->backend);
+}
+static void page_step(GtkButton *button, gpointer data) {
+    TsInfoView *v=data;
+    int step=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"page-step"));
+    gtk_spin_button_update(GTK_SPIN_BUTTON(v->page_number));
+    int page=step ? gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(v->page_number))+step : 100;
+    if (page<100) page=899;
+    if (page>899) page=100;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),page);
 }
 static void hide_dialog(GtkDialog *dialog, gint response, gpointer data) {
     (void)response; (void)data; gtk_widget_hide(GTK_WIDGET(dialog));
@@ -168,6 +194,25 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
             gtk_text_view_set_left_margin(GTK_TEXT_VIEW(v->eit),8); gtk_text_view_set_right_margin(GTK_TEXT_VIEW(v->eit),8);
             gtk_container_add(GTK_CONTAINER(scroll),v->eit); gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
         } else {
+            v->page_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
+            gtk_box_pack_start(GTK_BOX(box),v->page_controls,FALSE,FALSE,0);
+            gtk_box_pack_start(GTK_BOX(v->page_controls),gtk_label_new("Pagina"),FALSE,FALSE,0);
+            v->page_number=gtk_spin_button_new_with_range(100,899,1);
+            gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(v->page_number),TRUE);
+            gtk_spin_button_set_wrap(GTK_SPIN_BUTTON(v->page_number),TRUE);
+            gtk_entry_set_width_chars(GTK_ENTRY(v->page_number),3);
+            gtk_widget_set_tooltip_text(v->page_number,"Typ een pagina (100–899) en druk op Enter. Wacht tot deze wordt uitgezonden.");
+            atk_object_set_name(gtk_widget_get_accessible(v->page_number),"Teletekstpagina");
+            gtk_box_pack_start(GTK_BOX(v->page_controls),v->page_number,FALSE,FALSE,0);
+            g_signal_connect(v->page_number,"value-changed",G_CALLBACK(page_changed),v);
+            const char *labels[]={"Vorige","Volgende","Index (100)"};
+            const int steps[]={-1,1,0};
+            for (unsigned j=0;j<G_N_ELEMENTS(labels);j++) {
+                GtkWidget *button=gtk_button_new_with_label(labels[j]);
+                g_object_set_data(G_OBJECT(button),"page-step",GINT_TO_POINTER(steps[j]));
+                g_signal_connect(button,"clicked",G_CALLBACK(page_step),v);
+                gtk_box_pack_start(GTK_BOX(v->page_controls),button,FALSE,FALSE,0);
+            }
             GtkWidget *aspect=gtk_aspect_frame_new(NULL,.5,.5,4.0/3.0,FALSE);
             gtk_frame_set_shadow_type(GTK_FRAME(aspect),GTK_SHADOW_NONE);
             gtk_box_pack_start(GTK_BOX(box),aspect,TRUE,TRUE,0);

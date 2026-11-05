@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["onair_common", "onair_fec", "bridge"]
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+publish = false
+[profile.release]
+opt-level = 3
+panic = "abort"
+[profile.dev]
+panic = "abort"

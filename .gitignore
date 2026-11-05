@@ -14,6 +14,7 @@
 !/iq_band_snr_meter.py
 !/tsp_monitor.py
 !/linrad-dvb.example.ini
+!/linrad-dvbt2-eindhoven.example.ini
 !/direwolf-pcm.conf
 !/src/
 !/components/

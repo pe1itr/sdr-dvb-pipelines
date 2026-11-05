@@ -370,6 +370,31 @@ class InformationTests(unittest.TestCase):
         self.assertEqual(result[1]['video_codec'], 'H.265/HEVC')
         self.assertEqual(result[1]['audio_codec'], 'AAC')
 
+    def test_page_selection_decimal_bcd_boundaries_and_waiting(self):
+        t=Stream()
+        initial=t.pat()+t.pmt()+t.eit()+t.teletext()+t.teletext()
+        for number in (101, 199, 200, 888, 899, 100):
+            with self.subTest(page=number):
+                bcd=int(str(number),16)
+                before, waiting, wrong, received, invalid, gap, reset=self.run_streams(
+                    initial, '--page='+str(number),
+                    t.teletext(0x234)+t.teletext(0x234),
+                    t.teletext(bcd, message='CHOSEN PAGE')+t.teletext(bcd, message='CHOSEN PAGE'),
+                    '--page=900', '--gap', '--reset')
+                self.assertEqual(waiting['page_number'], number)
+                if number!=100:
+                    self.assertNotIn('page_hash', waiting)
+                    self.assertNotIn('page_hash', wrong)
+                    self.assertFalse(waiting['teletext_received'])
+                self.assertEqual(waiting['events'], before['events'])
+                self.assertIn('page_hash', received)
+                self.assertEqual(received['page_number'], number)
+                self.assertEqual(received['page_hash'], invalid['page_hash'])
+                self.assertEqual(received['page_hash'], gap['page_hash'])
+                self.assertEqual(reset['page_number'],100)
+        result=self.run_streams(initial,'--page=99','--page=-1')
+        self.assertEqual([s['page_number'] for s in result],[100,100,100])
+
     def test_classic_teletext_page_filter_updates_gap_and_removal(self):
         t=Stream()
         result=self.run_streams(t.pat()+t.pmt()+t.teletext(0x101),

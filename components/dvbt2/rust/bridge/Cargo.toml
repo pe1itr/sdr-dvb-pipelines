@@ -1,0 +1,9 @@
+[package]
+name = "linrad_t2_fec"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+[lib]
+crate-type = ["staticlib"]
+[dependencies]
+onair_fec = {path = "../onair_fec"}

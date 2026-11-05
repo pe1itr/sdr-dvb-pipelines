@@ -1,0 +1,527 @@
+{
+  "date": "2026-11-05",
+  "cpu": "AMD Ryzen 7 5800H",
+  "compiler": "GCC 15, -O3, baseline x86-64 with runtime AVX2/FMA dispatch",
+  "signal": {
+    "frequency_hz": 570000000,
+    "sample_rate_hz": 10000000,
+    "samples": 130376766,
+    "duration_s": 13.0376766,
+    "format": "s16 IQ",
+    "mode": "DVB-T2 32K 256-QAM 3/5 GI 1/8 PLP 0",
+    "sha256": "69e88f39212ccd0fe0903d6daf962c77ed7054e93b73755ef60c21af8de82206"
+  },
+  "method": "Standalone production decoder; fixed-clock source with bounded 100 ms FIFO, no DECT2_NOPACE, profiling disabled. Alternating baseline/candidate order. CPU measured by wait4; excludes source, GUI and video.",
+  "change": "AVX2 buffered min-sum for repeated-group LDPC layers; same scatter order, alpha and iteration limits.",
+  "validation": "504 bit-exact comparisons of convergence, iterations and all hard bits against decodeFast, 14 normal/short rates, alpha 0.66/0.78/0.9, limits 1/2/50/150. Same 504 cases passed with explicit SIMD dispatch disabled; full DVB-T2 FEC/L1/8K/32K/PLP/overload tests and 46 pipeline/GUI tests passed.",
+  "limitations": [
+    "Short recording of one broadcast on one CPU; not a long-duration or hardware sensitivity test.",
+    "Noise is added digitally; noise-db describes signal power / added noise, not resulting RF SNR.",
+    "Deep fade causes input and/or FEC queue loss in BOTH versions. Candidate TS output is at least baseline, but fade output is not bit-identical due to live deadlines, drops and reacquisition. No claim of loss-free deep-fade operation.",
+    "No physical ARM/NEON validation."
+  ],
+  "impairments": {
+    "weak": {
+      "source": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+      "source_sha256": "69e88f39212ccd0fe0903d6daf962c77ed7054e93b73755ef60c21af8de82206",
+      "output_sha256": "3081be34a4689b1aa0d1e72ac6b5c509ad2e5de87d65d8224e34c0605e2d8124",
+      "samples": 130376766,
+      "sample_rate_hz": 10000000,
+      "format": "cs16_le",
+      "seed": 20261105,
+      "added_noise_db": 24.0,
+      "fade": false,
+      "fade_interval_s": null,
+      "fade_amplitude": null,
+      "drift_hz_per_s": 0,
+      "clipped_components": 0
+    },
+    "fade": {
+      "source": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+      "source_sha256": "69e88f39212ccd0fe0903d6daf962c77ed7054e93b73755ef60c21af8de82206",
+      "output_sha256": "af9965b638c74934ade55b7bf5e5b3d55205252a8a486cdd54bcac11173371e5",
+      "samples": 130376766,
+      "sample_rate_hz": 10000000,
+      "format": "cs16_le",
+      "seed": 20261105,
+      "added_noise_db": 26.0,
+      "fade": true,
+      "fade_interval_s": [
+        4,
+        6
+      ],
+      "fade_amplitude": 0.08,
+      "drift_hz_per_s": 0.5,
+      "clipped_components": 0
+    }
+  },
+  "results": {
+    "good": {
+      "baseline": {
+        "median_cpu_s": 48.512038000000004,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.122046634998696,
+            "cpu_s": 48.512038000000004,
+            "cpu_cores": 3.7209112856810704,
+            "peak_rss_kib": 222092,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038116915995488,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.000980286997219082,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.120384316993295,
+            "cpu_s": 48.564185,
+            "cpu_cores": 3.724911001397289,
+            "peak_rss_kib": 221272,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.0383279749949,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.001072446997568477,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.118208316001983,
+            "cpu_s": 48.035128,
+            "cpu_cores": 3.6843319153966436,
+            "peak_rss_kib": 221736,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038127445004648,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0010091990043292753,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "candidate": {
+        "median_cpu_s": 30.177165,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.120518171002914,
+            "cpu_s": 30.124033999999998,
+            "cpu_cores": 2.3105369863216274,
+            "peak_rss_kib": 225200,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038386374995753,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0012987180016352795,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.114925038004003,
+            "cpu_s": 30.177165,
+            "cpu_cores": 2.3146121756080373,
+            "peak_rss_kib": 205080,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.03852869500406,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0007739660068182275,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "linrad-dvb-20261105T224255.407452Z-570000000-10000000.iq",
+            "profile": false,
+            "elapsed_s": 13.114026566006942,
+            "cpu_s": 30.640666,
+            "cpu_cores": 2.3501630650970435,
+            "peak_rss_kib": 211908,
+            "good_blocks": 9304,
+            "bad_blocks": 212,
+            "packets": 239006,
+            "ts_sha256": "b7e83393ad1af916e71e23442bfb24a8c71cd34bdcff08d4c6f6c14d6b33cf0f",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038091176000307,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0007386469951597974,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "cpu_reduction_pct": 37.79448103169775
+    },
+    "weak": {
+      "baseline": {
+        "median_cpu_s": 73.7330825,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "weak.iq",
+            "profile": false,
+            "elapsed_s": 13.137209500993777,
+            "cpu_s": 73.435086,
+            "cpu_cores": 5.632528574914951,
+            "peak_rss_kib": 230588,
+            "good_blocks": 9272,
+            "bad_blocks": 244,
+            "packets": 238193,
+            "ts_sha256": "87fc845118ec1917ac925a1e29ddd6c38b31e6ff3004d92155b8956ccded053d",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.03808587599633,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 200000,
+              "max_clock_lateness_s": 0.0011167609991389327,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "weak.iq",
+            "profile": false,
+            "elapsed_s": 13.127245223993668,
+            "cpu_s": 74.03107899999999,
+            "cpu_cores": 5.678241704507381,
+            "peak_rss_kib": 231228,
+            "good_blocks": 9272,
+            "bad_blocks": 244,
+            "packets": 238193,
+            "ts_sha256": "87fc845118ec1917ac925a1e29ddd6c38b31e6ff3004d92155b8956ccded053d",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.03798977000406,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.000946683001529891,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "candidate": {
+        "median_cpu_s": 36.639806500000006,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "weak.iq",
+            "profile": false,
+            "elapsed_s": 13.130488633003552,
+            "cpu_s": 37.065184,
+            "cpu_cores": 2.8429286242611664,
+            "peak_rss_kib": 206204,
+            "good_blocks": 9272,
+            "bad_blocks": 244,
+            "packets": 238193,
+            "ts_sha256": "87fc845118ec1917ac925a1e29ddd6c38b31e6ff3004d92155b8956ccded053d",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038108669999929,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0008685360007802956,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "weak.iq",
+            "profile": false,
+            "elapsed_s": 13.118306791999203,
+            "cpu_s": 36.214429,
+            "cpu_cores": 2.7776750498627956,
+            "peak_rss_kib": 220748,
+            "good_blocks": 9272,
+            "bad_blocks": 244,
+            "packets": 238193,
+            "ts_sha256": "87fc845118ec1917ac925a1e29ddd6c38b31e6ff3004d92155b8956ccded053d",
+            "input_dropped": 0,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038193450003746,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0013548280039685778,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "cpu_reduction_pct": 50.30750748824314
+    },
+    "fade": {
+      "baseline": {
+        "median_cpu_s": 78.2496115,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "fade.iq",
+            "profile": false,
+            "elapsed_s": 13.12412354999833,
+            "cpu_s": 76.07475500000001,
+            "cpu_cores": 5.834993253322453,
+            "peak_rss_kib": 326900,
+            "good_blocks": 7449,
+            "bad_blocks": 1701,
+            "packets": 191354,
+            "ts_sha256": "3652c82beea2cb20182da19ea6f51dbf512ca7d1cb799586028b61e0291aac4d",
+            "input_dropped": 0,
+            "fec_frames_dropped": 2,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.037985363000189,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.002549479002482258,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker_baseline",
+            "iq": "fade.iq",
+            "profile": false,
+            "elapsed_s": 13.131598785999813,
+            "cpu_s": 80.42446799999999,
+            "cpu_cores": 6.16861964500638,
+            "peak_rss_kib": 316240,
+            "good_blocks": 7449,
+            "bad_blocks": 1701,
+            "packets": 191354,
+            "ts_sha256": "3c4e657936362d174bae2e3ac660f55438fe9e88e82ab7e99b1c001e591b30ff",
+            "input_dropped": 327680,
+            "fec_frames_dropped": 1,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.03799727599835,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0007754539983579889,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "candidate": {
+        "median_cpu_s": 45.424009999999996,
+        "runs": [
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "fade.iq",
+            "profile": false,
+            "elapsed_s": 13.123967144005292,
+            "cpu_s": 42.267773999999996,
+            "cpu_cores": 3.2419713494043867,
+            "peak_rss_kib": 259824,
+            "good_blocks": 7643,
+            "bad_blocks": 1324,
+            "packets": 196340,
+            "ts_sha256": "7e586fddaf888744481d1992f7bb8c7c56d11c3d80f85758d4bf4373d0af3c69",
+            "input_dropped": 851968,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.03807357000187,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 200000,
+              "max_clock_lateness_s": 0.001984016998903826,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          },
+          {
+            "decoder": "dvbt2_worker",
+            "iq": "fade.iq",
+            "profile": false,
+            "elapsed_s": 13.12387758299883,
+            "cpu_s": 48.580246,
+            "cpu_cores": 3.7261428926684688,
+            "peak_rss_kib": 270260,
+            "good_blocks": 7456,
+            "bad_blocks": 1511,
+            "packets": 191533,
+            "ts_sha256": "9bcb95eefe109dacb98abef8146e32abf6041df8b493317da3c28d2ce2e33933",
+            "input_dropped": 589824,
+            "fec_frames_dropped": 0,
+            "source": {
+              "mode": "fixed-clock-bounded-fifo",
+              "input_samples": 130376766,
+              "sent_samples": 130376766,
+              "dropped_samples": 0,
+              "nominal_duration_s": 13.0376766,
+              "elapsed_s": 13.038170663996425,
+              "buffer_capacity_samples": 1000000,
+              "peak_buffer_samples": 100000,
+              "max_clock_lateness_s": 0.0008868840013747104,
+              "buffer_ms": 100
+            },
+            "stages": {}
+          }
+        ]
+      },
+      "cpu_reduction_pct": 41.94985875425081
+    }
+  },
+  "live_after_restart": {
+    "time_local": [
+      "2026-11-05 23:55:34",
+      "2026-11-05 23:56:06"
+    ],
+    "frequency_hz": 570000000,
+    "gain_db": 52,
+    "snr_db": [
+      25.0,
+      26.9
+    ],
+    "good_bch": [
+      16287,
+      40443
+    ],
+    "ts_packets": [
+      418405,
+      1038962
+    ],
+    "bch_errors": [
+      0,
+      0
+    ],
+    "input_samples_lost": [
+      0,
+      0
+    ],
+    "fec_frames_lost": [
+      0,
+      0
+    ],
+    "cc_errors": [
+      0,
+      0
+    ]
+  }
+}

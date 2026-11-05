@@ -19,6 +19,9 @@ typedef struct {
     uint32_t satellite, constellation_order, lock_valid, fec_good, fec_bad;
     float mer_db;
     int32_t modcod, short_frame, pilots;
+    /* DVB-T2 broadcast worker: cumulative live losses and selected PLP. */
+    uint64_t input_dropped, fec_frames_dropped;
+    int32_t plp_id;
 } DecoderStatus;
 typedef struct {
     uint32_t magic, type, count;

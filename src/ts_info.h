@@ -20,6 +20,7 @@ typedef struct {
     char video_codec[32], audio_codec[32]; /* first recognized tracks in selected PMT */
     TsInfoEvent events[2];
     gint64 eit_received, teletext_received; /* wall-clock microseconds */
+    unsigned page_number; /* requested decimal Teletext page, 100..899 */
     GBytes *page; /* immutable native Cairo RGB24 pixels */
     GBytes *page_flash_off, *page_reveal, *page_reveal_flash_off;
     int width, height;
@@ -33,6 +34,7 @@ void ts_info_parser_free(TsInfoParser *p);
 void ts_info_parser_feed(TsInfoParser *p, const guint8 *data, gsize size);
 void ts_info_parser_gap(TsInfoParser *p);
 void ts_info_parser_select(TsInfoParser *p, guint16 service);
+void ts_info_parser_set_page(TsInfoParser *p, unsigned page);
 void ts_info_parser_snapshot(TsInfoParser *p, TsInfoSnapshot *out);
 
 typedef struct TsInfoBackend TsInfoBackend;
@@ -40,6 +42,7 @@ TsInfoBackend *ts_info_backend_new(void);
 void ts_info_backend_feed(TsInfoBackend *b, const guint8 *data, gsize size);
 void ts_info_backend_reset(TsInfoBackend *b);
 void ts_info_backend_select(TsInfoBackend *b, guint16 service);
+void ts_info_backend_set_page(TsInfoBackend *b, unsigned page);
 void ts_info_backend_snapshot(TsInfoBackend *b, TsInfoSnapshot *out);
 void ts_info_backend_finish(TsInfoBackend *b);
 void ts_info_backend_stop(TsInfoBackend *b);

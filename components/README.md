@@ -8,6 +8,7 @@ update sources. Do not replace these directories with upstream snapshots.
 | Component | Responsibility | Host integration | Focused checks |
 |---|---|---|---|
 | [DVB-T / rbdvbt](dvbt/README.md) | IQ to MPEG-TS: acquisition, OFDM, demapping, FEC and TS output | `src/dvbt_backend.c`, `src/decoder_monitor.h` | `make test-dvbt` |
+| [DVB-T2 broadcast](dvbt2/README.md) | 8 MHz IQ to MPEG-TS, automatic L1 parameters and PLP selection | `src/dvbt2_backend.cc`, `src/decoder_monitor.h` | `make test-dvbt2` |
 | [TSscatterFix](tsscatterfix/README.md) | Reconstruct images from incomplete MPEG-TS; publish recovery status | `src/scatter_backend.c`, `src/scatter_view.c` | `make test-scatter` |
 
 Keep signal processing and recovery algorithms in the component that owns them.
@@ -20,19 +21,19 @@ Build and test from the repository root:
 
 ```sh
 python3 tools/build.py
-make test-dvbt test-scatter
+make test-dvbt test-dvbt2 test-scatter
 make test
 make package
 make dist
 ```
 
 The root Makefile is the maintained build definition. Component objects live in
-`build/components/dvbt/` and `build/components/tsscatterfix/`. Focused regression
+`build/components/dvbt/`, `build/components/dvbt2/` and `build/components/tsscatterfix/`. Focused regression
 tests and host integration tests live in the root `tests/` directory; see each
 component README for the relevant files. For changes to reception or recovery,
 also replay a known IQ or TS recording when available.
 
-`make package` includes both component licenses with the binaries. `make dist`
+`make package` includes the component licenses with the binaries. `make dist`
 includes their complete source directories, documentation and licenses; an
 extracted archive can build without Git or neighbouring repositories. Each
 component README records its original import revision. Subsequent development
