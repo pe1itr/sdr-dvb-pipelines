@@ -8,7 +8,10 @@ static void apply_receiver_theme(void) {
         "#frequency-display { font-family: monospace; font-size: 24px; font-weight: bold; }"
         "#gain-display, #mode-display { font-family: monospace; font-size: 16px; font-weight: bold; }"
         "frame > border { border: 1px solid #777777; border-radius: 3px; }"
-        "menubar { background-color: #151515; }"
+        "#receiver-menu { background-color: #151515; }"
+        /* Keep the menu appearance and generous hit area on direct actions. */
+        "#receiver-menu > button { min-height: 28px; padding: 6px 12px; border: none; border-radius: 0; }"
+        "#receiver-menu > button label { background-color: transparent; }"
         "button.spectrum-arrow { min-width: 18px; min-height: 14px; padding: 0; border-radius: 2px; }"
         "* { color: #ffffff; text-shadow: none; -gtk-icon-shadow: none; }"
         "window, dialog, box, grid, frame, notebook, notebook > header,"

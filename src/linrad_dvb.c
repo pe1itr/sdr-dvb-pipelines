@@ -2316,23 +2316,26 @@ static void gui(App *a) {
     gtk_container_add(GTK_CONTAINER(a->window), root);
     GError *usb_error=NULL;
     a->usb_receiver=usb_receiver_new(&usb_error);
-    GtkWidget *menu = gtk_menu_bar_new();
-    GtkWidget *config_item = gtk_menu_item_new_with_label("Input"), *about_item = gtk_menu_item_new_with_label("About");
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), config_item);
-    GtkWidget *mode_item = gtk_menu_item_new_with_label("Mode"), *renderer_item = gtk_menu_item_new_with_label("Renderer");
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mode_item);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), renderer_item);
-    GtkWidget *tci_item=gtk_menu_item_new_with_label("TCI");
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu),tci_item);
+    /* These are direct dialog actions: buttons open on the first click without
+     * the selection/grab lifecycle of a GtkMenuShell. */
+    GtkWidget *menu = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_name(menu, "receiver-menu");
+    GtkWidget *config_item = gtk_button_new_with_label("Input"), *about_item = gtk_button_new_with_label("About");
+    gtk_box_pack_start(GTK_BOX(menu), config_item, FALSE, FALSE, 0);
+    GtkWidget *mode_item = gtk_button_new_with_label("Mode"), *renderer_item = gtk_button_new_with_label("Renderer");
+    gtk_box_pack_start(GTK_BOX(menu), mode_item, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(menu), renderer_item, FALSE, FALSE, 0);
+    GtkWidget *tci_item=gtk_button_new_with_label("TCI");
+    gtk_box_pack_start(GTK_BOX(menu),tci_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(tci_item,"Open TCI · Alt+T");
-    g_signal_connect(tci_item,"activate",G_CALLBACK(show_tci),a);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), about_item);
+    g_signal_connect(tci_item,"clicked",G_CALLBACK(show_tci),a);
+    gtk_box_pack_start(GTK_BOX(menu), about_item, FALSE, FALSE, 0);
     gtk_widget_set_tooltip_text(config_item, "Open Input · Alt+I");
     gtk_widget_set_tooltip_text(mode_item, "Open Mode · Alt+M");
     gtk_widget_set_tooltip_text(renderer_item, "Open Renderer · Alt+R");
     gtk_widget_set_tooltip_text(about_item, "Open About · Alt+A");
-    g_signal_connect(mode_item, "activate", G_CALLBACK(show_mode), a);
-    g_signal_connect(renderer_item, "activate", G_CALLBACK(show_renderer), a);
+    g_signal_connect(mode_item, "clicked", G_CALLBACK(show_mode), a);
+    g_signal_connect(renderer_item, "clicked", G_CALLBACK(show_renderer), a);
     GtkWidget *top_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     gtk_box_pack_start(GTK_BOX(root), top_bar, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(top_bar), menu, FALSE, FALSE, 0);
@@ -2370,8 +2373,8 @@ static void gui(App *a) {
     gtk_box_pack_end(GTK_BOX(top_bar), a->record_button, FALSE, FALSE, 0);
     g_signal_connect(a->record_button, "toggled", G_CALLBACK(record_toggled), a);
     power_refresh(a);
-    g_signal_connect(config_item, "activate", G_CALLBACK(show_config), a);
-    g_signal_connect(about_item, "activate", G_CALLBACK(show_about), a);
+    g_signal_connect(config_item, "clicked", G_CALLBACK(show_config), a);
+    g_signal_connect(about_item, "clicked", G_CALLBACK(show_about), a);
 
     /* Full-width waterfall + spectrum above decoder information and video. */
     a->dashboard = gtk_grid_new();

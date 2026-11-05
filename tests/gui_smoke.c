@@ -571,6 +571,63 @@ static gboolean close_about(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+static void click_menu_button(GtkWidget *button, int x, int y) {
+    GdkWindow *window = gtk_button_get_event_window(GTK_BUTTON(button));
+    GdkDevice *pointer = gdk_seat_get_pointer(gdk_display_get_default_seat(gdk_window_get_display(window)));
+    GdkEvent *event = gdk_event_new(GDK_ENTER_NOTIFY);
+    event->crossing.window = g_object_ref(window);
+    event->crossing.x = x; event->crossing.y = y;
+    event->crossing.mode = GDK_CROSSING_NORMAL;
+    event->crossing.detail = GDK_NOTIFY_NONLINEAR;
+    gdk_event_set_device(event, pointer);
+    gtk_main_do_event(event);
+    gdk_event_free(event);
+    /* Deliver one press/release through GTK, not the clicked signal directly. */
+    for (int release = 0; release < 2; ++release) {
+        event = gdk_event_new(release ? GDK_BUTTON_RELEASE : GDK_BUTTON_PRESS);
+        event->button.window = g_object_ref(window);
+        event->button.time = GDK_CURRENT_TIME;
+        event->button.x = x; event->button.y = y;
+        event->button.button = GDK_BUTTON_PRIMARY;
+        event->button.state = release ? GDK_BUTTON1_MASK : 0;
+        gdk_event_set_device(event, pointer);
+        gtk_main_do_event(event);
+        gdk_event_free(event);
+    }
+}
+
+static void exercise_menu_clicks(App *a) {
+    GtkWidget *top_bar = gtk_widget_get_parent(a->power_button);
+    GList *controls = gtk_container_get_children(GTK_CONTAINER(top_bar));
+    GtkWidget *menu = controls->data;
+    g_assert_cmpstr(gtk_widget_get_name(menu), ==, "receiver-menu");
+    GList *buttons = gtk_container_get_children(GTK_CONTAINER(menu));
+    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog};
+    g_assert_cmpuint(g_list_length(buttons), ==, G_N_ELEMENTS(dialogs) + 1);
+    for (unsigned i = 0; i < G_N_ELEMENTS(dialogs) + 1; ++i) {
+        GtkWidget *button = g_list_nth_data(buttons, i);
+        for (int lower_edge = 0; lower_edge < 2; ++lower_edge) {
+            gtk_window_set_focus(GTK_WINDOW(a->window), a->power_button);
+            g_assert_false(gtk_widget_has_focus(button));
+            GdkWindow *window = gtk_button_get_event_window(GTK_BUTTON(button));
+            int x = gdk_window_get_width(window) / 2;
+            int y = lower_edge ? gdk_window_get_height(window) - 3 : gdk_window_get_height(window) / 2;
+            gboolean seen = FALSE;
+            if (i == G_N_ELEMENTS(dialogs)) g_idle_add(close_about, &seen);
+            else g_assert_false(gtk_widget_get_visible(dialogs[i]));
+            click_menu_button(button, x, y);
+            if (i == G_N_ELEMENTS(dialogs)) g_assert_true(seen);
+            else {
+                g_assert_true(gtk_widget_get_visible(dialogs[i]));
+                gtk_dialog_response(GTK_DIALOG(dialogs[i]), GTK_RESPONSE_CLOSE);
+                g_assert_false(gtk_widget_get_visible(dialogs[i]));
+            }
+        }
+    }
+    g_list_free(buttons);
+    g_list_free(controls);
+}
+
 static void exercise_menu_shortcuts(App *a) {
     g_assert_false(a->video_view.muted);
     for (unsigned upper=0;upper<2;++upper) {
@@ -1167,6 +1224,7 @@ static gboolean exercise(gpointer data) {
             g_assert_cmpint(cairo_surface_write_to_png(surface, screenshot), ==, CAIRO_STATUS_SUCCESS);
             cairo_destroy(cr); cairo_surface_destroy(surface);
         }
+        exercise_menu_clicks(a);
         exercise_menu_shortcuts(a);
         show_config(NULL, a);
         g_assert_true(gtk_widget_get_visible(a->config_dialog));
