@@ -398,6 +398,113 @@ adds cache ownership/fallback tests and further live-rate comparisons. Longer
 SDR reception on the intended hardware remains useful validation. The separate
 scratch-buffer prototype is not production-ready code and has not been adopted.
 
+## Fixed carrier-role lookup and DX validation (2026-11-05)
+
+`dvbt_2k_model.c` now computes the four fixed carrier layouts once during model
+initialization. A role lookup reads one byte from a 4 x 1705 table (6,820 bytes),
+instead of repeatedly searching the 17 TPS and 45 continual-pilot positions.
+The original classification priority is preserved: TPS, scattered pilot,
+continual pilot, then data. Carrier 1704 and out-of-range queries retain their
+original handling.
+
+This caches only the modulation's fixed carrier layout. Pilot phase, slope,
+coherence, CFO, acquisition hypotheses, tracking cadence, normalization and
+soft decisions are still computed from each incoming symbol exactly as before.
+There is no extra smoothing, waiting, frame batching or reduced search range.
+This distinction matters for weak-signal DX, rapid QSB and aircraft scatter.
+The change is ordinary C and does not require SIMD; physical ODROID-N2/NEON
+performance testing remains a separate task.
+
+On the Ryzen 7 5800H, uninstrumented paired replays against `d45f7c8` measured
+the following **decoder-process** user+system CPU times. Video, GUI and SRT CPU
+are not included. Each row is one full A/B replay, on a fixed input clock:
+
+| Recording | Signal duration | Before CPU s | After CPU s | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| 35 kHz, FEC 2/3 | 40.01 s | 2.682 | 1.763 | 34.3% |
+| 40 kHz OAeYaF, FEC 1/2 | 40.01 s | 2.493 | 1.533 | 38.5% |
+| 250 kHz, FEC 1/2 | 10 s | 2.583 | 1.664 | 35.6% |
+| 333 kHz, FEC 2/3 | 10 s | 2.235 | 1.648 | 26.3% |
+| 500 kHz, FEC 3/4 | 20 s | 6.047 | 4.858 | 19.6% |
+| 500 kHz, FEC 5/6 | 20 s | 6.410 | 5.204 | 18.8% |
+| 500 kHz, FEC 7/8 | 20 s | 6.892 | 5.674 | 17.7% |
+| 500 kHz, FEC 7/8, noise/fading | 20 s | 7.096 | 5.935 | 16.4% |
+
+The other 40 kHz recording (jubzGI) was compared in the instrumented profiling
+phase: identical 188 TS packets and 508 uncorrectable RS blocks; decoder CPU
+3.967 to 2.366 seconds. Keep this profiling comparison separate from the table.
+
+Additional 40 kHz DX replays each used two A/B repetitions in reversed order.
+At a median reported SNR of 6.02 dB, both versions delivered the same 332 TS
+packets and 421 uncorrectable RS blocks, with 34.7% less decoder CPU. At median
+5.31 dB they delivered the same 253 packets; at 4.70 dB, the same 67 packets.
+These are partial-reception recordings with varying SNR, not measurements of
+a new decoding threshold. The light-Doppler case had median reported SNR
+5.52 dB and identical 258 packets with 28.9% less CPU. It used reacquisition
+throughout, rather than uninterrupted tracking, in both versions.
+
+The severe continuous QSB/echo case produced **zero TS in both versions**.
+Its identical decisions only validate failure behavior, not usable reception.
+In the separate recovery fixture, QSB/echo ends at 24 seconds: both versions
+produce their first TS in the same subsequent signal block (about 29.8 seconds
+after playback starts), with identical 78 packets and 171 uncorrectable RS
+blocks. The optimization preserves that recovery behavior; it does not change
+the block buffering or acquisition algorithm.
+
+The [measurement report](benchmarks/pilot-roles-2026-11-05.json) retains build
+commands and hashes, fixtures, SNR sequences, CPU measurements, queue/loss
+counters and decision hashes. Validation comprises 48 fixed-clock replays:
+six profiling runs, 38 A/B runs without detailed profiling, and four runs through
+the built `linrad_dvb --decoder-worker=dvbt` (weak 40 kHz, light Doppler, 500 kHz
+FEC 7/8, and QSB recovery). All consumed the full input without source, IQ or
+FEC loss. Each comparison retained exact TS bytes, RS counts and signal
+decisions. `make all test-dvbt` passed.
+
+The investigation is reproducible with:
+
+```sh
+make all test-dvbt
+python3 tools/dvbt_pilot_experiment.py build /tmp/dvbt-pilots
+python3 tools/dvbt_pilot_experiment.py check /tmp/dvbt-pilots
+python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --repeat 1
+python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --variants profile,roles-profile --repeat 1
+```
+
+The baseline probe and carrier model are pinned to `d45f7c8`; the other backend
+objects are taken from `build/` and their hashes are recorded. `check` compares
+both the isolated prototype and the current production model with the pinned
+original: 1,123,400 role lookups, 829,672 data indices, all four phases, frame
+boundaries, uint32 symbol wraparound, invalid inputs and both interleavers.
+`make test-dvbt` also checks initialization through role lookup, the 1512 data /
+17 TPS / 176 pilot counts, data-index ordering and the pilot precedence cases.
+
+Profiling uses thread CPU clocks, separate from the uninstrumented A/B runs.
+Its counters are inclusive: pilot estimation is inside both alignment scans
+and demodulation, and scan time is inside demodulation. Do not sum those nested
+counters. The profile identifies pilot classification as a worthwhile target;
+it does not justify replacing the resampler or FFT.
+
+Every A/B replay uses `fixed_iq_source.py` at the original sample rate. Its
+bounded FIFO drops samples on overflow rather than slowing the source. The
+harness checks full input consumption, source/IQ/FEC losses, TS hashes, RS
+failures, and hashes of the per-stage synchronization, continuity, SNR/CFO and
+outer-decoder decisions independently of thread log ordering.
+
+For additional file-only DX scenarios from a prepared s16 recording:
+
+```sh
+python3 tools/dvbt_dx_fixtures.py CASES.json 40k-OAeYaF /tmp/dvbt-dx
+python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots /tmp/dvbt-dx/dx.json --repeat 2
+```
+
+The generator records seeds, hashes and clipping counts. It covers increasing
+AWGN, 4 Hz QSB with 80 ms deep fades, a 12 us delayed rotating path, a recovery
+interval, and a separate light-Doppler case with a common -6 to +6 Hz sweep
+plus an 8 Hz offset on the weaker reflected path. These are controlled stress
+scenarios, not a calibrated aircraft-scatter channel model. Added-noise values
+refer to sampled wideband IQ power, not the decoder's reported SNR or calibrated
+RF C/N. The reported SNR and actual decoded output are recorded separately.
+
 ## Origin and retained changes
 
 Original author: **Rob Hardenberg / PE1ITR**. See [LICENSE](LICENSE).

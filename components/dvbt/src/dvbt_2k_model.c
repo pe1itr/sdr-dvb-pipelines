@@ -19,6 +19,9 @@ static uint8_t prbs_2k[RBDVBT_DVBT_2K_ACTIVE_CARRIERS];
 static uint16_t data_carriers_mod4[4][RBDVBT_DVBT_2K_DATA_CELLS];
 static uint16_t symbol_interleaver_2k[RBDVBT_DVBT_2K_DATA_CELLS];
 static uint16_t symbol_deinterleaver_2k[RBDVBT_DVBT_2K_DATA_CELLS];
+/* Only the fixed carrier layout repeats every four symbols. Signal-dependent
+ * pilot phase, slope and lock are still estimated afresh for every symbol. */
+static uint8_t carrier_roles_mod4[4][RBDVBT_DVBT_2K_ACTIVE_CARRIERS];
 static int initialized;
 
 static int list_contains_u16(const uint16_t *values, size_t count, uint32_t needle)
@@ -123,6 +126,26 @@ static void build_symbol_interleaver(void)
     }
 }
 
+static rbdvbt_dvbt_carrier_role_t classify_carrier(uint32_t symbol_index,
+                                                 uint32_t logical_k)
+{
+    if (logical_k >= RBDVBT_DVBT_2K_ACTIVE_CARRIERS) {
+        return RBDVBT_DVBT_CARRIER_UNUSED;
+    }
+
+    if (is_tps_carrier(logical_k)) {
+        return RBDVBT_DVBT_CARRIER_TPS;
+    }
+    if (is_scattered_pilot(symbol_index, logical_k)) {
+        return RBDVBT_DVBT_CARRIER_SCATTERED_PILOT;
+    }
+    if (is_continual_pilot(logical_k)) {
+        return RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT;
+    }
+
+    return RBDVBT_DVBT_CARRIER_DATA;
+}
+
 static void build_data_carriers(void)
 {
     uint32_t sym_mod;
@@ -150,6 +173,11 @@ void rbdvbt_dvbt_2k_model_init(void)
 
     build_prbs();
     build_symbol_interleaver();
+    for (uint32_t phase = 0; phase < 4u; ++phase) {
+        for (uint32_t k = 0; k < RBDVBT_DVBT_2K_ACTIVE_CARRIERS; ++k) {
+            carrier_roles_mod4[phase][k] = (uint8_t)classify_carrier(phase, k);
+        }
+    }
     initialized = 1;
     build_data_carriers();
 }
@@ -192,17 +220,8 @@ rbdvbt_dvbt_carrier_role_t rbdvbt_dvbt_2k_carrier_role(uint32_t symbol_index,
         return RBDVBT_DVBT_CARRIER_UNUSED;
     }
 
-    if (is_tps_carrier(logical_k)) {
-        return RBDVBT_DVBT_CARRIER_TPS;
-    }
-    if (is_scattered_pilot(symbol_index, logical_k)) {
-        return RBDVBT_DVBT_CARRIER_SCATTERED_PILOT;
-    }
-    if (is_continual_pilot(logical_k)) {
-        return RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT;
-    }
-
-    return RBDVBT_DVBT_CARRIER_DATA;
+    rbdvbt_dvbt_2k_model_init();
+    return (rbdvbt_dvbt_carrier_role_t)carrier_roles_mod4[symbol_index % 4u][logical_k];
 }
 
 int rbdvbt_dvbt_2k_data_carrier(uint32_t symbol_index,

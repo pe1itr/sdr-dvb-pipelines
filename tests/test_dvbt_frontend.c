@@ -144,8 +144,51 @@ static void check_signal(unsigned gi, unsigned rate, double cfo)
     free(samples);
 }
 
+static void check_carrier_layout(void)
+{
+    /* Lookup must work before explicit model initialization. At the last
+     * active carrier the continual pilot takes precedence over data. */
+    assert(rbdvbt_dvbt_2k_carrier_role(UINT32_MAX, 1704) ==
+           RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT);
+    const uint32_t symbols[] = {0, 1, 2, 3, 67, 68, 271, 272,
+                               UINT32_MAX - 3, UINT32_MAX - 2,
+                               UINT32_MAX - 1, UINT32_MAX};
+    for (size_t s = 0; s < sizeof(symbols)/sizeof(symbols[0]); ++s) {
+        uint32_t symbol = symbols[s];
+        unsigned data = 0, tps = 0, pilots = 0;
+        for (uint32_t k = 0; k < RBDVBT_DVBT_2K_ACTIVE_CARRIERS; ++k) {
+            rbdvbt_dvbt_carrier_role_t role = rbdvbt_dvbt_2k_carrier_role(symbol, k);
+            assert(role == rbdvbt_dvbt_2k_carrier_role(symbol % 4u, k));
+            if (role == RBDVBT_DVBT_CARRIER_DATA) {
+                uint32_t mapped = UINT32_MAX;
+                assert(rbdvbt_dvbt_2k_data_carrier(symbol, data, &mapped) == 0);
+                assert(mapped == k);
+                ++data;
+            } else if (role == RBDVBT_DVBT_CARRIER_TPS) {
+                ++tps;
+            } else {
+                assert(role == RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT ||
+                       role == RBDVBT_DVBT_CARRIER_SCATTERED_PILOT);
+                ++pilots;
+            }
+        }
+        assert(data == 1512 && tps == 17 && pilots == 176);
+        assert(rbdvbt_dvbt_2k_carrier_role(symbol, 34) == RBDVBT_DVBT_CARRIER_TPS);
+        assert(rbdvbt_dvbt_2k_carrier_role(symbol, 0) ==
+               (symbol % 4u == 0 ? RBDVBT_DVBT_CARRIER_SCATTERED_PILOT :
+                                  RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT));
+        assert(rbdvbt_dvbt_2k_carrier_role(symbol, 1705) == RBDVBT_DVBT_CARRIER_UNUSED);
+        assert(rbdvbt_dvbt_2k_carrier_role(symbol, UINT32_MAX) == RBDVBT_DVBT_CARRIER_UNUSED);
+        uint32_t untouched = UINT32_MAX;
+        assert(rbdvbt_dvbt_2k_data_carrier(symbol, 1512, &untouched) == -1);
+        assert(untouched == UINT32_MAX);
+        assert(rbdvbt_dvbt_2k_data_carrier(symbol, 0, NULL) == -1);
+    }
+}
+
 int main(void)
 {
+    check_carrier_layout();
     rbdvbt_dvbt_2k_model_init();
     check_signal(FFT/32,40000,0.0);      /* 35 kHz BW */
     check_signal(FFT/16,45714,17.125);   /* 40 kHz BW, different GI */
