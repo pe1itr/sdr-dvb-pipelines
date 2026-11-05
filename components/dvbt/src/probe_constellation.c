@@ -7666,6 +7666,13 @@ static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
     int best_bin = 0;
     int best_conj = 0;
     int best_phase = 0;
+    /* Rotation and FFT depend only on the input symbol and CFO, not on the
+     * alignment hypothesis. Keep this cache local to the scan so a new input
+     * block or CFO can never reuse stale spectra. Live scans use four symbols
+     * (32 KiB), offline scans at most 24. On allocation failure, recompute as
+     * before; reception does not require the optimization. */
+    complexf_t (*spectra)[RBDVBT_DVBT_2K_FFT_SIZE] =
+        calloc(scan_symbols, sizeof(*spectra));
 
     for (int conjugate = conjugate_first; conjugate <= conjugate_last; ++conjugate) {
         for (int symbol_phase = phase_first; symbol_phase <= phase_last; ++symbol_phase) {
@@ -7675,6 +7682,7 @@ static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
 
                 for (uint32_t s = 0; s < scan_symbols; ++s) {
                     size_t base = (size_t)start + (size_t)s * symbol_len + gi_len;
+                    const complexf_t *symbol_spectrum = shifted;
                     double phase_intercept = 0.0;
                     double phase_slope = 0.0;
                     double pilot_lock = 0.0;
@@ -7684,17 +7692,27 @@ static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
                         break;
                     }
 
-                    for (uint32_t k = 0; k < RBDVBT_DVBT_2K_FFT_SIZE; ++k) {
-                        double t = (double)(base + k) / (double)cfg->sample_rate_hz;
-                        complexf_t v = c_rotate(samples[base + k], -2.0 * M_PI * cfo_hz * t);
-                        fft_in[k][0] = v.re;
-                        fft_in[k][1] = v.im;
+                    if (spectra == NULL ||
+                        (conjugate == conjugate_first &&
+                         symbol_phase == phase_first && bin_shift == bin_first)) {
+                        for (uint32_t k = 0; k < RBDVBT_DVBT_2K_FFT_SIZE; ++k) {
+                            double t = (double)(base + k) / (double)cfg->sample_rate_hz;
+                            complexf_t v = c_rotate(samples[base + k], -2.0 * M_PI * cfo_hz * t);
+                            fft_in[k][0] = v.re;
+                            fft_in[k][1] = v.im;
+                        }
+
+                        fftwf_execute(plan);
+                        fftshift_copy(fft_out, shifted, RBDVBT_DVBT_2K_FFT_SIZE);
+                        if (spectra != NULL) {
+                            memcpy(spectra[s], shifted, sizeof(*spectra));
+                        }
+                    }
+                    if (spectra != NULL) {
+                        symbol_spectrum = spectra[s];
                     }
 
-                    fftwf_execute(plan);
-                    fftshift_copy(fft_out, shifted, RBDVBT_DVBT_2K_FFT_SIZE);
-
-                    if (estimate_dvbt2k_pilot_phase(shifted,
+                    if (estimate_dvbt2k_pilot_phase(symbol_spectrum,
                                                     s + (uint32_t)symbol_phase,
                                                     bin_shift,
                                                     conjugate,
@@ -7721,6 +7739,7 @@ static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
         }
     }
 
+    free(spectra);
     if (best_lock < 0.0) {
         return -1;
     }
@@ -8106,6 +8125,8 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
                 z = shifted[bin];
             }
             z = c_rotate(z, -(phase_intercept + phase_slope * x));
+            /* Reuse this exact rotation after computing the normalizer. */
+            rx_sio_soft[di] = z;
             power_sum += c_abs2(z);
             data_count++;
         }
@@ -8117,7 +8138,6 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
         for (uint32_t di = 0; di < RBDVBT_DVBT_2K_DATA_CELLS; ++di) {
             uint32_t logical_k;
             int bin;
-            double x;
             complexf_t z;
 
             if (rbdvbt_dvbt_2k_data_carrier(model_symbol, di, &logical_k) != 0) {
@@ -8127,14 +8147,9 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             if (bin < 0 || bin >= (int)RBDVBT_DVBT_2K_FFT_SIZE) {
                 continue;
             }
-            x = (double)((int)logical_k - 852);
-            if (best_conjugate) {
-                z = shifted[bin];
-                z.im = -z.im;
-            } else {
-                z = shifted[bin];
-            }
-            z = c_rotate(z, -(phase_intercept + phase_slope * x));
+            z = rx_sio_soft[di];
+            /* Non-finite cells must still leave a zero soft-symbol erasure. */
+            rx_sio_soft[di] = (complexf_t){0.0f, 0.0f};
             if (normalizer > 0.0) {
                 z.re = (float)(z.re / normalizer);
                 z.im = (float)(z.im / normalizer);

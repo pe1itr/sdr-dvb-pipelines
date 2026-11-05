@@ -39,6 +39,188 @@ puncturing, errors, chunk continuity and reset behavior;
 continued delivery. Run `make test` for host integration and replay a known
 signal for changes to acquisition, demodulation or FEC.
 
+## Rotation/FFT reuse in the decoder
+
+The decoder now computes each rotated FFT once per pilot-alignment scan and
+reuses that spectrum across bin, conjugation and symbol-phase hypotheses. The
+cache belongs to that one scan, is freed on both success and failure, and never
+survives a change of input or CFO. If allocation fails, the scan uses the original
+uncached calculation. The live four-symbol cache needs 32 KiB (384 KiB for the
+maximum 24-symbol offline scan). The formulas, scoring and tie ordering remain
+unchanged.
+
+Payload demapping also reuses the exact rotation already computed for power
+normalization, using the existing per-symbol workspace. Non-finite cells still
+produce zero soft-symbol erasures. This change does not apply the block sin/cos
+approximation or the buffer-reuse experiment discussed below.
+
+[`test_dvbt_frontend.c`](../../tests/test_dvbt_frontend.c), included in
+`make test-dvbt`, verifies exact alignment/score equality against the uncached
+allocation-failure path, the reduction in FFT calls, guard intervals 1/32, 1/16
+and 1/8, changing input/CFO, partial and empty scans, tie ordering, and cache
+cleanup. The existing FEC and PSI tests remain part of the same target.
+
+The full 35/40 kHz test files were replayed at their original 250,000 samples/s,
+twice per decoder version in alternating order. These are existing simulated
+propagation files, each 40.01 seconds long. Median decoder CPU times:
+
+| Input | Baseline CPU s | Integrated CPU s | Reduction |
+| --- | ---: | ---: | ---: |
+| 35 kHz FEC 2/3 (`oliYYC`) | 3.208 | 2.751 | 14.2% |
+| 40 kHz FEC 1/2 (`OAeYaF`) | 3.001 | 2.580 | 14.0% |
+| 40 kHz FEC 1/2 (`jubzGI`) | 4.883 | 3.948 | 19.2% |
+
+Every narrowband run consumed all 10,002,500 samples with zero IQ overruns and
+zero FEC queue drops. Baseline and integrated decoder produced identical TS
+hashes and error counts per file: 47,000 / 94,564 / 35,344 TS bytes and
+564 / 277 / 508 uncorrectable RS blocks respectively. The nonzero error counts
+belong to the impaired inputs and are unchanged by this optimization.
+
+The final-code replays on the ten-second 250/333 kHz references saved 18.1% and
+11.3% decoder CPU respectively; the controlled noise/fading/drift case saved
+14.0%. All 24 final-code comparison runs had matching TS hashes/error counts
+within each case, complete input consumption and no IQ/FEC queue drops.
+[Final integration measurements](benchmarks/step1-2026-11-05.json) retain the
+input hashes, source/build identity and individual runs. These results concern
+decoder CPU on this x86_64 host, not total application CPU or an ARM guarantee.
+`make all` and `make test-dvbt` pass. An optional sanitizer build could not link
+because the system's ASan runtime library is missing; no sanitizer result is
+claimed.
+
+For a live-rate comparison of the narrow files with the pre-change revision
+(adjust the local recording paths if necessary):
+
+```sh
+make all test-dvbt
+python3 - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path('components/dvbt/benchmarks/step1-2026-11-05.json').read_text())
+Path('/tmp/dvbt-inputs.json').write_text(json.dumps(report['fixtures'][:3]))
+PY
+python3 tools/dvbt_frontend_experiment.py build /tmp/dvbt-step1 --baseline-ref 1069f21 --variants baseline,current
+python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-step1 /tmp/dvbt-inputs.json --repeat 2 --variants baseline,current
+```
+
+`current` reads the working-tree source; `baseline` reads the specified Git
+revision. Both link the same current backend objects, which were unchanged by
+this optimization. The manifest specifies each file's actual input sample rate;
+in particular, the 35/40 kHz test files use **250,000 samples/s**, not their RF
+bandwidth, for live pacing.
+
+## Live-rate frontend investigation (2026-11-05)
+
+The following records the earlier research phase, before integration above. The
+[experiment tool](../../tools/dvbt_frontend_experiment.py) builds isolated copies
+of this component, linked to the normal embedded backend objects. The
+[measurements](benchmarks/frontend-2026-11-05.json) retain the 46 individual runs,
+input hashes, build identity, limitations and per-phase summaries.
+
+All recordings were supplied through `build/iq_file_to_stdout` at their original
+**1,010,526 complex samples/s**. Each ten-second recording took approximately ten
+seconds to replay. CPU below means decoder user + system CPU time, including its
+threads, excluding the feeder, GTK and video player. This measures processing
+headroom at live speed, not faster-than-live throughput or whole-application CPU.
+Host: Ryzen 7 5800H, Linux x86_64, normal `-O3` build, baseline `1069f21`.
+
+### 1. Avoid repeated rotation calculations
+
+Two alternatives were measured. `rotations` factors the sin/cos calculations into
+blocks of 64 samples and reuses the first payload rotation during demapping.
+`cached` keeps the original arithmetic and instead reuses identical rotated FFT
+results across acquisition hypotheses, together with the same payload reuse.
+Hypothesis ordering and scoring remain unchanged. The live four-symbol FFT cache
+occupies 32 KiB.
+
+The preferred candidate is **`cached`**: it preserves the arithmetic and gave a
+clear CPU reduction in each tested signal. Medians from its own paired baseline
+phase are shown below; the clean recordings have three repetitions per variant,
+and the impaired recording has two.
+
+| Input (QPSK 2K, GI 1/32) | Baseline CPU s / 10 s | Cached CPU s / 10 s | Reduction |
+| --- | ---: | ---: | ---: |
+| 250 kHz, FEC 1/2 | 3.357 | 2.733 | 18.6% |
+| 333 kHz, FEC 2/3 | 2.905 | 2.574 | 11.4% |
+| 250 kHz, added noise/fading/drift | 2.703 | 2.327 | 13.9% |
+
+For example, the first row is about 33.6% versus 27.3% of one CPU core over the
+replay interval, not an 18.6 percentage-point reduction in system CPU usage.
+The block-rotation alternative saved 15.7%, 11.3% and 11.6% respectively in its
+matched comparisons. It changes floating-point rounding and is less attractive
+than eliminating identical work.
+
+For each input, all tested variants produced identical TS lengths and SHA256
+hashes. The clean inputs produced 1,140 and 2,206 packets with zero uncorrectable
+RS blocks. The impaired input produced 928 packets and 259 uncorrectable RS
+blocks for every variant: partial reception, with no measured quality change.
+It adds noise at 14 dB relative to the original average signal power, two 350 ms
+amplitude fades to 0.1 and 3 Hz/s frequency drift. The generator is deterministic
+and reproduced the original test fixture byte for byte, with no clipping.
+
+The 22 cached/clean and impaired runs consumed all 10,105,260 samples each,
+with zero cumulative IQ overruns and zero FEC queue drops. The earlier 24-run
+phase predates the cumulative counter; its 18 candidate logs confirm complete
+input consumption, while its six original baseline logs were overwritten by the
+later phase. Those six retain saved CPU/TS results, but input-count verification
+is unavailable. Missing counters are explicitly `null` in the saved results.
+
+### 2. Reuse buffers and avoid copies
+
+The `buffers` prototype reuses the OFDM input and prefix-merge buffers and borrows
+the existing resampler output instead of allocating and copying it. It preserves
+the asynchronous FEC queue's ownership. Measured CPU reductions were only 0.32%
+and 0.18% on the clean inputs, and -0.02% on the impaired input. These differences
+do not establish a useful improvement; do not prioritize integration for CPU
+savings on this evidence. Combining buffers with block rotations only gave a
+small additional difference, without establishing a separate benefit.
+
+A separate FEC-job allocation profile measured 29 allocation/copy operations
+plus frees at **1.65 ms total per ten-second recording**, below 0.1% of decoder
+CPU time. A FEC buffer pool is therefore not justified by this CPU profile.
+Peak-RSS measurements are retained but can include inherited process high-water
+marks; they do not substantiate a memory-saving claim.
+
+### Reproduction and limits
+
+Use existing local recordings, or update the paths in the saved `fixtures`
+entries. Recordings are not distributed with this repository and the old
+`dvbt-rx` checkout is not a build dependency. From the repository root:
+
+```sh
+make all
+python3 - <<'PY'
+import json
+from pathlib import Path
+report = json.loads(Path('components/dvbt/benchmarks/frontend-2026-11-05.json').read_text())
+Path('/tmp/dvbt-inputs.json').write_text(json.dumps(report['fixtures'][:2]))
+PY
+python3 tools/dvbt_frontend_experiment.py build /tmp/dvbt-front --baseline-ref 1069f21 --variants baseline,rotations,buffers,combined,cached,alloc-profile
+python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-inputs.json --repeat 3 --variants baseline,rotations,buffers,combined,cached
+python3 tools/dvbt_frontend_experiment.py impair /tmp/dvbt-front /tmp/dvbt-inputs.json
+python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-front/controlled.json --repeat 2 --variants baseline,rotations,buffers,combined,cached
+```
+
+`impair` requires NumPy. Run variants sequentially without competing benchmarks.
+Results are saved as `MANIFEST-results.json`, with TS and logs under
+`MANIFEST-logs/`. Rerunning the same manifest overwrites that manifest's outputs;
+use a new manifest name to retain a separate phase. Optional `offset_s` and
+`duration_s` select recording segments. `--variants alloc-profile` measures FEC
+allocation overhead separately; diagnostic logging makes it unsuitable as a
+normal timing candidate.
+
+An attempted 18-second real-fade segment produced no TS and lost input samples
+even in the baseline. It is excluded from performance/quality comparisons.
+Investigation also found that the existing per-read overrun delta can miss
+overruns while OFDM is busy between reads. The experiment therefore logs the
+cumulative ring-buffer counter at shutdown; production logging is unchanged.
+
+`make test-dvbt` passes. This research covers short recordings on one x86_64 host,
+QPSK 2K, GI 1/32 and FEC 1/2 or 2/3; it does not prove unchanged sensitivity at all
+signal thresholds or a sustained whole-application saving. The integration above
+adds cache ownership/fallback tests and further live-rate comparisons. Longer
+SDR reception on the intended hardware remains useful validation. The separate
+scratch-buffer prototype is not production-ready code and has not been adopted.
+
 ## Origin and retained changes
 
 Original author: **Rob Hardenberg / PE1ITR**. See [LICENSE](LICENSE).
