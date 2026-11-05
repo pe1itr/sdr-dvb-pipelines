@@ -32,6 +32,7 @@ LIBRARIES = (
     ("zvbi-0.2", "libzvbi.h", "teletext"),
 )
 OPTIONAL_PROGRAMS = (
+    ("ffmpeg", "Full HD SRT output (requires libx264, AAC and SRT support)"),
     ("vlc", "external VLC renderer"),
     ("cvlc", "command-line VLC renderer"),
     ("ffplay", "external FFplay renderer"),
@@ -109,6 +110,7 @@ def positive_int(value):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="check only; do not build")
+    parser.add_argument("--build-dir", default="build", help="output directory relative to the repository")
     parser.add_argument("-j", "--jobs", type=positive_int, default=1,
                         help="parallel make jobs (default: 1)")
     args = parser.parse_args(argv)
@@ -196,6 +198,7 @@ def main(argv=None):
         return 0
     # Pass the checked settings explicitly so make uses the same compilers/flags.
     command = ["make", "-C", str(ROOT), f"-j{args.jobs}", "all"]
+    command.append(f"BUILD_DIR={args.build_dir}")
     command += [f"{name}={value}" for name, value in settings.items()]
     print("Building: make all", flush=True)
     return subprocess.call(command, cwd=ROOT)

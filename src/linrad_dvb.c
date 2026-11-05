@@ -30,6 +30,7 @@
 #include "ts_info_view.h"
 #include "program_view.h"
 #include "usb_receiver.h"
+#include "srt_output.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
        SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_FILE = 12 };
@@ -99,8 +100,8 @@ static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "
 static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
-enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP };
-static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts", "embedded", "udp"};
+enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP, RENDER_SRT };
+static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts", "embedded", "udp", "srt"};
 static gboolean internal_player(App *a) { return a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP; }
 static gboolean udp_output(App *a) {
     return a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
@@ -131,6 +132,31 @@ static int integer_setting(App *a, const char *section, const char *key, int low
     long n = strtol(s, &end, 10);
     if (errno || end == s || *end || n < low || n > high) fatal("Config [%s] %s: invalid value %s", section, key, s);
     g_free(s); return n;
+}
+
+static void select_rtlsdr_serial(App *a, const char *serial) {
+    if (!*serial) fatal("RTL-SDR serial must not be empty");
+    for (const char *p = serial; *p; ++p)
+        if (!g_ascii_isalnum(*p) && *p != '-' && *p != '_' && *p != '.')
+            fatal("RTL-SDR serial must contain only letters, digits, '.', '_' or '-'");
+    char *saved = setting(a, "rtlsdr", "args");
+    char **parts = g_strsplit(saved, ",", -1);
+    GString *selection = g_string_new("driver=rtlsdr");
+    for (unsigned i = 0; parts[i]; ++i) {
+        char *arg = g_strstrip(parts[i]);
+        char *equals = strchr(arg, '=');
+        char *key = equals ? g_strndup(arg, equals-arg) : g_strdup(arg);
+        g_strstrip(key);
+        /* Old SoapyRTLSDR uses rtl=, newer versions use index=. Both take
+         * precedence over a serial inside the driver, so discard stale indices. */
+        if (*arg && strcmp(key, "driver") && strcmp(key, "serial") && strcmp(key, "rtl") && strcmp(key, "index"))
+            g_string_append_printf(selection, ",%s", arg);
+        g_free(key);
+    }
+    g_string_append_printf(selection, ",serial=%s", serial);
+    g_key_file_set_string(a->config, "rtlsdr", "args", selection->str);
+    g_string_free(selection, TRUE); g_strfreev(parts); g_free(saved);
+    a->source = SOURCE_RTLSDR;
 }
 
 /* Converter LO changes RF labels; receiver offset selects a channel inside
@@ -369,7 +395,29 @@ static void build_pipeline(App *a) {
         }
     }
     char *vlc_input = g_strdup("fd://0");
-    if (a->renderer == RENDER_CUSTOM) {
+    if (a->renderer == RENDER_SRT) {
+        char *url = setting(a, "srt", "url");
+        GError *error = NULL;
+        if (!srt_output_validate_url(url, &error)) fatal("%s", error->message);
+        s = &a->stages[a->stage_count++];
+        s->args = g_ptr_array_new_with_free_func(g_free);
+        char *self = g_file_read_link("/proc/self/exe", NULL);
+        if (!self) fatal("Cannot locate the built-in SRT supervisor");
+        add(s, self); g_free(self); add(s, "--srt-worker");
+        add(s, "--url"); add(s, url); g_free(url);
+        char *ffmpeg = setting(a, "paths", "ffmpeg");
+        char *resolved = strchr(ffmpeg, '/') ? g_canonicalize_filename(ffmpeg, a->directory) : g_strdup(ffmpeg);
+        add(s, "--ffmpeg"); add(s, resolved); g_free(resolved); g_free(ffmpeg);
+        add_number(s, "--loss-ms", integer_setting(a, "srt", "loss_timeout_ms", 100, 60000));
+        add_number(s, "--retry-ms", integer_setting(a, "srt", "retry_interval_ms", 100, 60000));
+        add_number(s, "--fps", integer_setting(a, "srt", "fps", 1, 60));
+        add_number(s, "--bitrate-kbps", integer_setting(a, "srt", "video_bitrate_kbps", 100, 50000));
+        char *preset = setting(a, "srt", "x264_preset");
+        if (!srt_output_valid_preset(preset)) fatal("Invalid [srt] x264_preset: %s", preset);
+        add(s, "--preset"); add(s, preset); g_free(preset);
+        add_number(s, "--video-threads", integer_setting(a, "srt", "video_threads", 0, 64));
+        add_number(s, "--filter-threads", integer_setting(a, "srt", "filter_threads", 0, 64));
+    } else if (a->renderer == RENDER_CUSTOM) {
         s = new_stage(a, "custom_renderer");
         options(a, s, "renderer", "args", "");
         /* The renderer chooses its own stdin syntax via {input}; no shell. */
@@ -1032,8 +1080,11 @@ static void save_settings(App *a) {
     GError *error = NULL;
     gsize length;
     char *contents = g_key_file_to_data(a->config, &length, &error);
-    gboolean saved = contents && g_file_set_contents_full(a->config_path, contents, length,
-        G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE, 0600, &error);
+    /* Atomic replacement also available with Ubuntu 20.04's GLib 2.64. */
+    GFile *file = g_file_new_for_path(a->config_path);
+    gboolean saved = contents && g_file_replace_contents(file, contents, length,
+        NULL, FALSE, G_FILE_CREATE_PRIVATE, NULL, NULL, &error);
+    g_object_unref(file);
     char *message = saved ? g_strdup_printf("Settings saved: %s", a->config_path) :
         g_strdup_printf("Save failed: %s", error ? error->message : "unknown error");
     status(a, message);
@@ -1548,6 +1599,13 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    const char *srt_keys[] = {"url", "loss_timeout_ms", "retry_interval_ms", "fps", "video_bitrate_kbps", "x264_preset", "video_threads", "filter_threads"};
+    const char *srt_values[] = {"", "2000", "2000", "25", "4000", "veryfast", "0", "0"};
+    for (unsigned i = 0; i < G_N_ELEMENTS(srt_keys); ++i)
+        if (!g_key_file_has_key(a->config, "srt", srt_keys[i], NULL))
+            g_key_file_set_string(a->config, "srt", srt_keys[i], srt_values[i]);
+    if (!g_key_file_has_key(a->config, "paths", "ffmpeg", NULL))
+        g_key_file_set_string(a->config, "paths", "ffmpeg", "ffmpeg");
     const char *lean_keys[]={"backend","ldpc_mode","helpers","latency","acquisition"};
     const char *lean_values[]={"embedded","soft","1","auto","auto"};
     for (unsigned i=0;i<G_N_ELEMENTS(lean_keys);++i)
@@ -2157,6 +2215,17 @@ static void create_tci(App *a, const char *error) {
 
 static void renderer_selection_changed(GtkWidget *widget, gpointer data) {
     App *a=data;
+    if (gtk_combo_box_get_active(GTK_COMBO_BOX(a->renderer_box)) == RENDER_SRT) {
+        char *url = setting(a, "srt", "url"); GError *error = NULL;
+        gboolean valid = srt_output_validate_url(url, &error); g_free(url);
+        if (!valid) {
+            g_signal_handlers_block_by_func(widget, renderer_selection_changed, a);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(widget), a->renderer);
+            g_signal_handlers_unblock_by_func(widget, renderer_selection_changed, a);
+            gtk_label_set_text(GTK_LABEL(a->renderer_error), "Configure [srt] url in the INI file first.");
+            g_clear_error(&error); return;
+        }
+    }
     selection_changed(widget, data);
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
@@ -2258,7 +2327,7 @@ static void create_mode_renderer(App *a) {
     g_signal_connect(a->s2_acquisition_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS output", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Output", 0,
-        (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)"},
+        (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)", "SRT Full HD (configure [srt] in INI)"},
         G_N_ELEMENTS(renderers), a->renderer);
     a->renderer_program = entry_field(a->renderer_panel, "Program / path", 1, a, "paths", "custom_renderer");
     a->renderer_args = entry_field(a->renderer_panel, "Arguments", 2, a, "renderer", "args");
@@ -2526,17 +2595,21 @@ static void load_session(App *a) {
 }
 
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--srt-worker"))
+        return srt_output_main(argc-1, argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr"))
         return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
-    char *source = NULL, *constellation = NULL, *renderer = NULL;
+    char *source = NULL, *constellation = NULL, *renderer = NULL, *srt_url = NULL, *rtlsdr_serial = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
     gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE;
     int sr = -1;
     GOptionEntry entries[] = {
-        {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
+        {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, srt, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
+        {"srt-output",0,0,G_OPTION_ARG_STRING,&srt_url,"Select gated 1920x1080 H.264/AAC SRT caller output","URL"},
+        {"rtlsdr-serial",0,0,G_OPTION_ARG_STRING,&rtlsdr_serial,"Select RTL-SDR by USB serial number (implies --source rtlsdr)","SERIAL"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2 or file", "SOURCE"},
@@ -2548,7 +2621,8 @@ int main(int argc, char **argv) {
         {"no-scatterfix", 0, 0, G_OPTION_ARG_NONE, &no_scatter, "Disable the saved ScatterFix setting", NULL},
         {"scatterfix", 0, 0, G_OPTION_ARG_NONE, &scatter, "Enable ScatterFix", NULL},
         {"print-pipeline", 0, 0, G_OPTION_ARG_NONE, &print, "Show the pipeline without starting processes", NULL},
-        {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Run without a GUI; stop with Ctrl+C", NULL}, {NULL}
+        {"run", 0, 0, G_OPTION_ARG_NONE, &run, "Run without a GUI; stop with Ctrl+C", NULL},
+        {"headless", 0, 0, G_OPTION_ARG_NONE, &run, "Alias for --run (no display required)", NULL}, {NULL}
     };
     GOptionContext *context = g_option_context_new("- Linrad DVB receiver with embedded DVB-S/S2/T decoders");
     g_option_context_set_description(context,
@@ -2572,12 +2646,24 @@ int main(int argc, char **argv) {
     if (!g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS, &error)) fatal("%s: %s", a.config_path, error->message);
     source_defaults(&a);
     load_session(&a);
+    if (srt_url && renderer && strcmp(renderer, "srt")) fatal("--srt-output conflicts with --renderer %s", renderer);
     if (renderer) {
         a.renderer = choice(renderer, renderers, G_N_ELEMENTS(renderers), "renderer");
         g_key_file_set_string(a.config, "session", "renderer", renderer);
         g_free(renderer);
     }
+    if (srt_url) {
+        a.renderer = RENDER_SRT;
+        g_key_file_set_string(a.config, "session", "renderer", "srt");
+        g_key_file_set_string(a.config, "srt", "url", srt_url);
+        g_free(srt_url);
+    }
     if (source) a.source = choice(source, sources, G_N_ELEMENTS(sources), "input");
+    if (rtlsdr_serial) {
+        if (iq_file || (source && a.source != SOURCE_RTLSDR)) fatal("--rtlsdr-serial requires RTL-SDR input");
+        select_rtlsdr_serial(&a, rtlsdr_serial);
+        g_free(rtlsdr_serial);
+    }
     if (iq_file && !select_iq_file(&a,iq_file,&error)) fatal("%s",error->message);
     if (standard) {
         int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standard");

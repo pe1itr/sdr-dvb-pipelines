@@ -70,7 +70,12 @@ static json_object *read_json(const char *path, GError **error) {
     struct json_tokener *tok=json_tokener_new_ex(32);
     json_tokener_set_flags(tok,JSON_TOKENER_STRICT);
     json_object *obj=json_tokener_parse_ex(tok,data,(int)length);
+#if JSON_C_VERSION_NUM >= 0x000e00
     size_t end=json_tokener_get_parse_end(tok);
+#else
+    /* json-c 0.13 on Ubuntu 20.04 exposes the offset in the public tokener. */
+    size_t end=(size_t)tok->char_offset;
+#endif
     while (end<length && g_ascii_isspace(data[end])) ++end;
     if (json_tokener_get_error(tok)!=json_tokener_success || end!=length ||
         !obj || !json_object_is_type(obj,json_type_object)) {

@@ -97,6 +97,11 @@ class BuildHelperTests(unittest.TestCase):
                     helper.main(["-j", value])
                 self.assertEqual(error.exception.code, 2)
 
+    def test_custom_build_directory_is_passed_to_make(self):
+        status, _, make = self.run_helper(("--build-dir", "build-odroid-n2"))
+        self.assertEqual(status, 0)
+        self.assertIn("BUILD_DIR=build-odroid-n2", make.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

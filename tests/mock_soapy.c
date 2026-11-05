@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Errors.h>
+#include <SoapySDR/Version.h>
 #include <assert.h>
 #include <signal.h>
 #include <stdint.h>
@@ -48,11 +49,20 @@ int SoapySDRDevice_setGainElement(SoapySDRDevice *d, int dir, size_t ch, const c
     fprintf(stderr,"MOCK gain %s %.0f\n",name,v); gain=v; return 0;
 }
 double SoapySDRDevice_getGainElement(const SoapySDRDevice *d, int dir, size_t ch, const char *name) { return gain; }
+#if SOAPY_SDR_API_VERSION >= 0x00080000
 SoapySDRStream *SoapySDRDevice_setupStream(SoapySDRDevice *d, int dir, const char *format,
+#else
+int SoapySDRDevice_setupStream(SoapySDRDevice *d, SoapySDRStream **out, int dir, const char *format,
+#endif
         const size_t *channels, size_t n, const SoapySDRKwargs *args) {
     native_s16=!strcmp(getenv("MOCK_MODEL"),"Airspy");
     assert(!strcmp(format,native_s16 ? "CS16" : "CF32") && n==1 && *channels==0);
+#if SOAPY_SDR_API_VERSION >= 0x00080000
     return (SoapySDRStream *)&handle;
+#else
+    *out = (SoapySDRStream *)&handle;
+    return 0;
+#endif
 }
 int SoapySDRDevice_activateStream(SoapySDRDevice *d, SoapySDRStream *s, int flags, long long time, size_t n) {
     fprintf(stderr,"MOCK streaming\n"); return 0;

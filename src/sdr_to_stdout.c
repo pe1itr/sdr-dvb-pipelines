@@ -2,6 +2,7 @@
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Errors.h>
+#include <SoapySDR/Version.h>
 #include <uhd.h>
 #include "iq_output.h"
 #include "iq_convert.h"
@@ -23,6 +24,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#if SOAPY_SDR_API_VERSION < 0x00080000
+/* SoapySDR 0.7 returns malloc-owned arrays/strings on Linux. */
+#define SoapySDR_free free
+#endif
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
@@ -246,7 +251,13 @@ int main(int argc, char **argv) {
             snprintf(buffers, sizeof(buffers), "%.0f", fmax(15, ceil(rate*.5/8192)));
             SoapySDRKwargs_set(&stream_args, "buffers", buffers);
         }
-        stream = SoapySDRDevice_setupStream(dev, SOAPY_SDR_RX, float_stream ? SOAPY_SDR_CF32 : (u8 && !airspyr2 ? SOAPY_SDR_CS8 : SOAPY_SDR_CS16), &channel, 1, &stream_args);
+        const char *stream_format = float_stream ? SOAPY_SDR_CF32 : (u8 && !airspyr2 ? SOAPY_SDR_CS8 : SOAPY_SDR_CS16);
+#if SOAPY_SDR_API_VERSION >= 0x00080000
+        stream = SoapySDRDevice_setupStream(dev, SOAPY_SDR_RX, stream_format, &channel, 1, &stream_args);
+#else
+        int stream_result = SoapySDRDevice_setupStream(dev, &stream, SOAPY_SDR_RX, stream_format, &channel, 1, &stream_args);
+        if (stream_result != 0) stream = NULL;
+#endif
         SoapySDRKwargs_clear(&stream_args);
         if (!stream) { fprintf(stderr, "setupStream: %s\n", SoapySDRDevice_lastError()); goto done; }
     } else {

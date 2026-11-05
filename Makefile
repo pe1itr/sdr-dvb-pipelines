@@ -85,8 +85,8 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
-GUI_SOURCES += src/program_view.c
-GUI_HEADERS += src/program_view.h
+GUI_SOURCES += src/program_view.c src/srt_output.c
+GUI_HEADERS += src/program_view.h src/srt_output.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/components/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
@@ -300,5 +300,12 @@ test: test-bch
 .PHONY: test-build-helper
 test-build-helper:
 	python3 tests/test_build_helper.py
+	python3 tests/test_odroid_build.py
 
 test: test-build-helper
+
+.PHONY: test-srt
+test-srt: all
+	python3 tests/test_srt_output.py
+
+test: test-srt

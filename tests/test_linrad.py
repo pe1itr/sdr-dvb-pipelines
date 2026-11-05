@@ -207,6 +207,32 @@ class ReceiverTests(unittest.TestCase):
                 self.assertEqual(p.returncode, 2, p.stderr)
 
 
+class RtlSerialTests(unittest.TestCase):
+    def test_serial_overrides_saved_indices_and_preserves_other_options(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = configparser.ConfigParser(interpolation=None)
+            cfg.read(EXAMPLE)
+            cfg["rtlsdr"]["args"] = "driver=rtlsdr, rtl=0, index=2, serial=1001, bufflen=8192"
+            path = Path(tmp, "receiver.ini")
+            with path.open("w") as out:
+                cfg.write(out)
+            for serial in ("1001", "1002", "1003", "001002"):
+                result = subprocess.run([UI, "--config", path, "--print-pipeline", "--rtlsdr-serial", serial],
+                                        capture_output=True, text=True, timeout=3)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                args = shlex.split(result.stdout.splitlines()[0])
+                self.assertEqual(args[args.index("--source") + 1], "rtlsdr")
+                self.assertEqual(args[args.index("--args") + 1], "driver=rtlsdr,bufflen=8192,serial=" + serial)
+            self.assertIn("serial=1001", path.read_text())  # CLI does not overwrite the saved file.
+
+    def test_serial_rejects_conflicting_source_and_malformed_value(self):
+        for extra in (("--source", "hackrf", "--rtlsdr-serial", "1002"),
+                      ("--iq-file", "unused.iq", "--rtlsdr-serial", "1002"),
+                      ("--rtlsdr-serial", ""), ("--rtlsdr-serial", "1002,rtl=0")):
+            result = subprocess.run([UI, "--config", EXAMPLE, "--print-pipeline", *extra], capture_output=True, timeout=3)
+            self.assertNotEqual(result.returncode, 0)
+
+
 class PipelineTests(unittest.TestCase):
     def preview(self, standard, sr, fec, gi="1/32", scatter=False, config=None):
         args = [UI, "--config", str(config or EXAMPLE), "--print-pipeline", "--source", "linrad", "--standard", standard, "--sr", str(sr), "--fec", fec, "--gi", gi]
