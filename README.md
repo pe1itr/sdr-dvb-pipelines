@@ -238,7 +238,8 @@ schermbreedte en 80% van de beschikbare hoogte.
 Bovenaan staan de menu's
 **Input**, **Mode**, **Renderer**, **TCI** en **About**. About toont uitleg over de
 bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
-projectlinks voor LeanDVB, LDPC en de acquisitiepatch van Ondřej OK1CDJ. Het
+projectlinks voor LeanDVB, LDPC, de acquisitiepatch van Ondřej OK1CDJ en
+OnAir (de basis van de DVB-T2-decoder). Het
 venster is scrollbaar zodat ook op kleinere schermen alle informatie bereikbaar is.
 De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staan
 links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
@@ -2049,15 +2050,29 @@ python3 -m pip install numpy
 
 ## License
 
-This repository is licensed under the MIT License. See the `LICENSE` file for the full text.
+The project's own helper scripts and application code use the MIT License,
+except where a component or file states otherwise. See [LICENSE](LICENSE).
 
 Copyright (c) 2026 Rob Hardenberg / PE1ITR
 
-This applies to the helper scripts and repository content in this project.
+Bundled components retain their own licenses and credits:
+
+| Component | Credit | License and provenance |
+| --- | --- | --- |
+| LeanSDR / LeanDVB | pabr@pabr.org; acquisition corrections by Ondřej OK1CDJ ([issue #41](https://github.com/pabr/leansdr/issues/41)) | [GPL-3.0-or-later](third_party/leansdr/LICENSE.txt), [ORIGIN](third_party/leansdr/ORIGIN) |
+| DVB-S2 LDPC helper | Ahmet Inan (xdsopl); external decoder adaptation by pabr@pabr.org | [0BSD](third_party/ldpc/LICENSE), [ORIGIN](third_party/ldpc/ORIGIN) |
+| DVB-T / rbdvbt | Rob Hardenberg / PE1ITR | [Attribution Required Software License](components/dvbt/LICENSE), [component history](components/dvbt/README.md) |
+| DVB-T2 / OnAir | [adswill and contributors](https://github.com/adswill/OnAir); integration and local optimizations maintained here | [GPL-3.0](components/dvbt2/LICENSE), [UPSTREAM.json](components/dvbt2/UPSTREAM.json), [component documentation](components/dvbt2/README.md) |
+| TSscatterFix | Rob Hardenberg / PE1ITR | [MIT](components/tsscatterfix/LICENSE), [component history](components/tsscatterfix/README.md) |
+
+The root MIT notice does not relicense these components or the combined executable.
+`make package` copies all five component license texts into `build/`.
 
 External / upstream software used by this project, including LeanDVB / LeanSDR, VLC, Linrad, TSDuck, SoapySDR, rtl-sdr, and HackRF tools, remains subject to its own license terms.
 
-Many thanks to the authors and maintainers of these excellent tools, and especially to the LeanDVB / LeanSDR and Linrad authors, for making this kind of experimentation possible.
+Many thanks to these authors and maintainers, and to the contributors to GTK / GLib,
+FFmpeg, FFTW, libzvbi, ALSA, libsamplerate, json-c, UHD, LimeSuite and the SoapySDR
+drivers and device libraries, including SDRplay and Airspy support.
 
 
 ### SDRplay RSP1A/RSP1B en Airspy HF+ Dual Port (VHF)

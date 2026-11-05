@@ -2047,6 +2047,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "./build/linrad_dvb --config linrad-dvb.ini --run\n"
         "./build/linrad_dvb --decoder-worker=leansdr --help\n"
         "./build/linrad_dvb --decoder-worker=dvbt --help\n"
+        "./build/linrad_dvb --decoder-worker=dvbt2 --help\n"
         "./build/ldpc_tool --help\n"
         "./build/ldpc_tool --version",NULL);
     about_label(box,"Use --print-pipeline to inspect the configured commands without starting reception. "
@@ -2057,13 +2058,20 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "LDPC: Ahmet Inan (xdsopl), with the external decoder adaptation by pabr@pabr.org (0BSD). "
         "DVB-S2 acquisition corrections: Ondřej OK1CDJ, LeanDVB issue #41. "
         "rbdvbt and TSscatterFix: Rob Hardenberg, PE1ITR.",NULL);
+    about_label(box,"DVB-T2: based on the OnAir receiver by adswill and contributors, "
+        "including its C++ receiver core and Rust FEC code (GPL-3.0). "
+        "Integration and local optimizations are maintained in this project.",NULL);
     about_link(box,"LeanSDR / LeanDVB · pabr","https://github.com/pabr/leansdr");
     about_link(box,"LDPC · Ahmet Inan (xdsopl)","https://github.com/xdsopl/LDPC");
     about_link(box,"LDPC helper adaptation · pabr","https://github.com/pabr/xdsopl-LDPC-pabr");
     about_link(box,"Acquisition patch · Ondřej OK1CDJ (issue #41)","https://github.com/pabr/leansdr/issues/41");
+    about_link(box,"OnAir · DVB-T2 receiver","https://github.com/adswill/OnAir");
     about_label(box,"Also built on Linrad, GTK / GLib, libVLC, FFmpeg, FFTW, libzvbi, "
-        "ALSA, libsamplerate, SoapySDR and UHD. Thanks to their authors and contributors.",NULL);
-    about_label(box,"Source revisions, local changes and license texts are included under third_party/. "
+        "ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
+        "Thanks also to the SoapySDR driver and device-library authors, including "
+        "HackRF, RFSPACE, RTL-SDR, SDRplay and Airspy support.",NULL);
+    about_label(box,"Source provenance, local changes and license texts are included under "
+        "third_party/ and components/ (ORIGIN, component READMEs and DVB-T2 UPSTREAM.json). "
         "make package copies the bundled decoder/recovery licenses into build/.","about-meta");
     /* Focusing a credit link would scroll past the introduction on opening. */
     gtk_widget_grab_focus(gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE));
