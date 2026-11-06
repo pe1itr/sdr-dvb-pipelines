@@ -209,7 +209,7 @@ static gboolean exercise_dab(gpointer data) {
     // A saved code on another ensemble must not hide this new transmitter.
     char *log_path=reception_log_path(a);
     g_assert_true(reception_log_append(log_path,"2026-11-06T12:00:00Z",206352000,
-        "Other ensemble","","DAB","1904","file","","1536000","auto","","",NULL));
+        "Other ensemble","","DAB","1904","file","","1536000","auto","","","","",NULL));
     dab_view_refresh_tii(&a->dab);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,1))),==,"New");
     gtk_button_clicked(GTK_BUTTON(tii_cell_at(a,5,1)));
@@ -219,7 +219,7 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,2))),==,"New");
     // Reopening reads saved history, including a pre-existing spaced TII code.
     g_assert_true(reception_log_append(log_path,"2026-11-06T12:00:00Z",206352000,
-        "Test ensemble","","DAB","46 15","file","","1536000","auto","","",NULL));
+        "Test ensemble","","DAB","46 15","file","","1536000","auto","","","","",NULL));
     gtk_dialog_response(GTK_DIALOG(a->dab.tii_dialog),GTK_RESPONSE_CLOSE);
     gtk_button_clicked(GTK_BUTTON(a->dab.tii_button));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,2))),==,"✓ Logged");

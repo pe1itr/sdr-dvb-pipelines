@@ -7,10 +7,12 @@
 #include <string.h>
 #include <math.h>
 #include <gio/gio.h>
+#include "maidenhead.h"
 
 enum { LOG_TIME, LOG_FREQUENCY, LOG_SERVICE, LOG_PROVIDER, LOG_MODE, LOG_TII, LOG_SOURCE,
-       LOG_SYMBOL_RATE, LOG_BANDWIDTH, LOG_FEC, LOG_ATV_POINTS, LOG_ATV_DIRECTION, LOG_COLUMNS };
-static const char reception_log_header[]="timestamp_utc,frequency_hz,service_name,provider_name,mode,tii,source,symbol_rate_baud,bandwidth_hz,fec,atv_points,atv_direction\r\n";
+       LOG_SYMBOL_RATE, LOG_BANDWIDTH, LOG_FEC, LOG_ATV_POINTS, LOG_ATV_DIRECTION, LOG_MY_CALLSIGN, LOG_MY_LOCATOR, LOG_COLUMNS };
+static const char reception_log_legacy_header[]="timestamp_utc,frequency_hz,service_name,provider_name,mode,tii,source,symbol_rate_baud,bandwidth_hz,fec,atv_points,atv_direction\r\n";
+static const char reception_log_header[]="timestamp_utc,frequency_hz,service_name,provider_name,mode,tii,source,symbol_rate_baud,bandwidth_hz,fec,atv_points,atv_direction,my_callsign,my_locator\r\n";
 
 static gboolean reception_atv_valid(const char *points, const char *direction, GError **error) {
     gboolean valid=!*direction || !strcmp(direction,"ONE-WAY") || !strcmp(direction,"TWO-WAY");
@@ -38,59 +40,6 @@ static void reception_log_field(GString *row, const char *value) {
     g_string_append_c(row, '"');
 }
 
-static gboolean reception_log_append(const char *path, const char *timestamp,
-        double frequency, const char *service, const char *provider,
-        const char *mode, const char *tii, const char *source,
-        const char *symbol_rate, const char *bandwidth, const char *fec,
-        const char *points, const char *direction, GError **error) {
-    if (!reception_atv_valid(points,direction,error)) return FALSE;
-    FILE *file=g_fopen(path,"ab+");
-    if (!file) {
-        g_set_error(error,G_FILE_ERROR,g_file_error_from_errno(errno),"%s: %s",path,g_strerror(errno));
-        return FALSE;
-    }
-    gboolean ok=FALSE;
-    GString *row=g_string_new(NULL);
-    if (fseek(file,0,SEEK_END)) goto io_error;
-    long size=ftell(file);
-    if (size<0) goto io_error;
-    if (size) {
-        char existing[sizeof(reception_log_header)]={0};
-        if (fseek(file,0,SEEK_SET)) goto io_error;
-        if (fread(existing,1,sizeof(reception_log_header)-1,file)!=sizeof(reception_log_header)-1 || strcmp(existing,reception_log_header)) {
-            g_set_error_literal(error,G_FILE_ERROR,G_FILE_ERROR_INVAL,"Existing file is not a reception log; choose another file.");
-            goto done;
-        }
-        if (fseek(file,-1,SEEK_END)) goto io_error;
-        if (fgetc(file)!='\n') {
-            g_set_error_literal(error,G_FILE_ERROR,G_FILE_ERROR_INVAL,"Reception log has an incomplete last row; repair it or choose another file.");
-            goto done;
-        }
-    } else g_string_append(row,reception_log_header);
-    if (fseek(file,0,SEEK_END)) goto io_error;
-    reception_log_field(row,timestamp);
-    char hz[G_ASCII_DTOSTR_BUF_SIZE];
-    g_ascii_formatd(hz,sizeof(hz),"%.0f",frequency);
-    g_string_append_printf(row,",%s,",hz);
-    const char *fields[]={service,provider,mode,tii,source,symbol_rate,bandwidth,fec,points,direction};
-    for (unsigned i=0;i<G_N_ELEMENTS(fields);++i) {
-        reception_log_field(row,fields[i]);
-        g_string_append(row,i+1==G_N_ELEMENTS(fields) ? "\r\n" : ",");
-    }
-    if (fwrite(row->str,1,row->len,file)!=row->len || fflush(file)) goto io_error;
-    ok=TRUE;
-    goto done;
-io_error:
-    g_set_error(error,G_FILE_ERROR,g_file_error_from_errno(errno),"Cannot write %s: %s",path,g_strerror(errno));
-done:
-    if (fclose(file) && ok) {
-        g_set_error(error,G_FILE_ERROR,g_file_error_from_errno(errno),"Cannot close %s: %s",path,g_strerror(errno));
-        ok=FALSE;
-    }
-    g_string_free(row,TRUE);
-    return ok;
-}
-
 /* Read our CSV including quoted commas, doubled quotes and embedded newlines.
  * Refuse malformed files instead of silently omitting reception records. */
 static GPtrArray *reception_log_load(const char *path, char **etag, GError **error) {
@@ -107,13 +56,16 @@ static GPtrArray *reception_log_load(const char *path, char **etag, GError **err
         g_propagate_error(error,read_error); g_ptr_array_unref(rows); return NULL;
     }
     if (!size) { g_free(contents); return rows; }
+    gboolean legacy=g_str_has_prefix(contents,reception_log_legacy_header);
+    const char *header=legacy ? reception_log_legacy_header : reception_log_header;
+    unsigned columns=legacy ? LOG_MY_CALLSIGN : LOG_COLUMNS;
     if (strlen(contents)!=size || !g_utf8_validate(contents,size,NULL) ||
-        !g_str_has_prefix(contents,reception_log_header)) goto invalid;
-    const char *p=contents+strlen(reception_log_header);
+        !g_str_has_prefix(contents,header)) goto invalid;
+    const char *p=contents+strlen(header);
     while (*p) {
         char **row=g_new0(char *,LOG_COLUMNS+1);
         g_ptr_array_add(rows,row);
-        for (unsigned i=0;i<LOG_COLUMNS;++i) {
+        for (unsigned i=0;i<columns;++i) {
             GString *value=g_string_new(NULL);
             if (*p=='"') {
                 ++p;
@@ -129,12 +81,13 @@ static GPtrArray *reception_log_load(const char *path, char **etag, GError **err
                     g_string_append_c(value,*p++);
             }
             row[i]=g_string_free(value,FALSE);
-            if (i+1<LOG_COLUMNS) { if (*p++!=',') goto invalid; }
+            if (i+1<columns) { if (*p++!=',') goto invalid; }
             else {
                 if (*p=='\r') ++p;
                 if (*p++!='\n') goto invalid;
             }
         }
+        for (unsigned i=columns;i<LOG_COLUMNS;++i) row[i]=g_strdup("");
     }
     g_free(contents); return rows;
 invalid:
@@ -146,9 +99,60 @@ static GPtrArray *reception_log_read(const char *path, GError **error) {
     return reception_log_load(path,NULL,error);
 }
 
+/* Replace atomically, including upgrading old logs without losing their rows. */
+static gboolean reception_log_write(const char *path, GPtrArray *rows, const char *etag, GError **error) {
+    GString *contents=g_string_new(reception_log_header);
+    for (unsigned i=0;i<rows->len;++i) {
+        char **row=g_ptr_array_index(rows,i);
+        for (unsigned j=0;j<LOG_COLUMNS;++j) {
+            reception_log_field(contents,row[j]);
+            g_string_append(contents,j+1==LOG_COLUMNS ? "\r\n" : ",");
+        }
+    }
+    GFile *file=g_file_new_for_path(path);
+    gboolean ok=g_file_replace_contents(file,contents->str,contents->len,etag,FALSE,
+        G_FILE_CREATE_PRIVATE,NULL,NULL,error);
+    g_object_unref(file); g_string_free(contents,TRUE);
+    return ok;
+}
+
+static gboolean reception_station_valid(const char *callsign, const char *locator, GError **error) {
+    for (const char *p=callsign;*p;++p) {
+        if (!g_ascii_isalnum(*p) && *p!='/' && *p!='-') {
+            g_set_error_literal(error,G_FILE_ERROR,G_FILE_ERROR_INVAL,
+                "My Callsign may contain letters, digits, / and -, or be empty.");
+            return FALSE;
+        }
+    }
+    gboolean valid=!*locator || maidenhead_center(locator,NULL,NULL);
+    if (!valid) g_set_error_literal(error,G_FILE_ERROR,G_FILE_ERROR_INVAL,
+        "My Locator must be a 2, 4, 6 or 8 character Maidenhead locator (for example JO21QK), or empty.");
+    return valid;
+}
+
+static gboolean reception_log_append(const char *path, const char *timestamp,
+        double frequency, const char *service, const char *provider,
+        const char *mode, const char *tii, const char *source,
+        const char *symbol_rate, const char *bandwidth, const char *fec,
+        const char *points, const char *direction, const char *callsign, const char *locator, GError **error) {
+    if (!reception_atv_valid(points,direction,error) || !reception_station_valid(callsign,locator,error)) return FALSE;
+    char *etag=NULL;
+    GPtrArray *rows=reception_log_load(path,&etag,error);
+    if (!rows) { g_free(etag); return FALSE; }
+    char hz[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(hz,sizeof(hz),"%.0f",frequency);
+    const char *row[]={timestamp,hz,service,provider,mode,tii,source,symbol_rate,bandwidth,fec,
+        points,direction,callsign,locator,NULL};
+    g_ptr_array_add(rows,g_strdupv((char **)row));
+    gboolean ok=reception_log_write(path,rows,etag,error);
+    g_ptr_array_unref(rows); g_free(etag);
+    return ok;
+}
+
 static gboolean reception_log_replace(const char *path, unsigned index, char **original,
         char **replacement, GError **error) {
-    if (!reception_atv_valid(replacement[LOG_ATV_POINTS],replacement[LOG_ATV_DIRECTION],error)) return FALSE;
+    if (!reception_atv_valid(replacement[LOG_ATV_POINTS],replacement[LOG_ATV_DIRECTION],error) ||
+        !reception_station_valid(replacement[LOG_MY_CALLSIGN],replacement[LOG_MY_LOCATOR],error)) return FALSE;
     char *etag=NULL;
     GPtrArray *rows=reception_log_load(path,&etag,error);
     if (!rows) { g_free(etag); return FALSE; }
@@ -162,18 +166,10 @@ static gboolean reception_log_replace(const char *path, unsigned index, char **o
             "This reception has changed on disk. Cancel, refresh the logbook and reopen the entry.");
         g_ptr_array_unref(rows); g_free(etag); return FALSE;
     }
-    GString *contents=g_string_new(reception_log_header);
-    for (unsigned i=0;i<rows->len;++i) {
-        char **row=i==index ? replacement : g_ptr_array_index(rows,i);
-        for (unsigned j=0;j<LOG_COLUMNS;++j) {
-            reception_log_field(contents,row[j]);
-            g_string_append(contents,j+1==LOG_COLUMNS ? "\r\n" : ",");
-        }
-    }
-    GFile *file=g_file_new_for_path(path);
-    gboolean ok=g_file_replace_contents(file,contents->str,contents->len,etag,FALSE,
-        G_FILE_CREATE_PRIVATE,NULL,NULL,error);
-    g_object_unref(file); g_string_free(contents,TRUE); g_ptr_array_unref(rows); g_free(etag);
+    g_strfreev(g_ptr_array_index(rows,index));
+    g_ptr_array_index(rows,index)=g_strdupv(replacement);
+    gboolean ok=reception_log_write(path,rows,etag,error);
+    g_ptr_array_unref(rows); g_free(etag);
     return ok;
 }
 
@@ -201,7 +197,8 @@ static char *reception_log_adif(GPtrArray *rows, GError **error) {
     GString *out=g_string_new("Linrad DVB reception log\r\n<ADIF_VER:5>3.1.8<PROGRAMID:9>LINRADDVB\r\n<EOH>\r\n");
     for (unsigned i=0;i<rows->len;++i) {
         char **row=g_ptr_array_index(rows,i), *end=NULL;
-        if (!reception_atv_valid(row[LOG_ATV_POINTS],row[LOG_ATV_DIRECTION],error)) {
+        if (!reception_atv_valid(row[LOG_ATV_POINTS],row[LOG_ATV_DIRECTION],error) ||
+            !reception_station_valid(row[LOG_MY_CALLSIGN],row[LOG_MY_LOCATOR],error)) {
             g_string_free(out,TRUE); return NULL;
         }
         GDateTime *time=g_date_time_new_from_iso8601(row[LOG_TIME],NULL);
@@ -221,6 +218,8 @@ static char *reception_log_adif(GPtrArray *rows, GError **error) {
         reception_adif_field(out,"FREQ",mhz);
         reception_adif_field(out,"FREQ_RX",mhz);
         reception_adif_field(out,"SWL","Y");
+        reception_adif_field(out,"STATION_CALLSIGN",row[LOG_MY_CALLSIGN]);
+        reception_adif_field(out,"MY_GRIDSQUARE",row[LOG_MY_LOCATOR]);
         /* The exact digital standard is retained separately. Never invent
          * a callsign from a broadcast service name or an unknown submode. */
         if (!strcmp(row[LOG_MODE],"DVB-S") || !strcmp(row[LOG_MODE],"DVB-S2") ||

@@ -767,19 +767,78 @@ static void exercise_menu_clicks(App *a) {
     g_assert_null(a->reception_dialog);
     a->running=running; power_refresh(a);
     g_assert_true(gtk_menu_button_get_popover(GTK_MENU_BUTTON(a->log_menu))==GTK_POPOVER(a->log_popover));
-    GtkWidget *log_items[]={a->application_log_item,a->logbook_item};
-    const char *log_titles[]={"Application log","RX log"};
+    GtkWidget *log_items[]={a->application_log_item,a->logbook_item,a->my_station_item,a->bearing_item};
+    const char *log_titles[]={"Application log","RX log","My Station","Bearing"};
     for (unsigned i=0;i<G_N_ELEMENTS(log_items);++i) {
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),TRUE);
         g_assert_true(gtk_widget_get_visible(a->log_popover));
         gtk_button_clicked(GTK_BUTTON(log_items[i]));
-        GtkWidget *dialog=i ? a->logbook_dialog : a->diagnostics_dialog;
+        GtkWidget *dialog=i==3 ? a->bearing_dialog : i==2 ? a->my_station_dialog : i==1 ? a->logbook_dialog : a->diagnostics_dialog;
         g_assert_true(gtk_widget_get_visible(dialog));
         g_assert_cmpstr(gtk_window_get_title(GTK_WINDOW(dialog)),==,log_titles[i]);
         gtk_dialog_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE);
         g_assert_false(gtk_widget_get_visible(dialog));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),FALSE);
     }
+    /* A missing station should explain where to set it, without a stale result. */
+    show_bearing(NULL,a);
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"JO22QK");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"—");
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->bearing_message)),"My Station"));
+    char *previous_call=g_key_file_get_string(a->config,"logging","my_callsign",NULL);
+    show_my_station(NULL,a);
+    gtk_entry_set_text(GTK_ENTRY(a->my_callsign)," pe1itr/p ");
+    gtk_entry_set_text(GTK_ENTRY(a->my_locator),"INVALID");
+    gtk_dialog_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_true(gtk_widget_get_visible(a->my_station_dialog));
+    g_assert_true(*gtk_label_get_text(GTK_LABEL(a->my_station_error))!=0);
+    gtk_entry_set_text(GTK_ENTRY(a->my_locator)," jo21qk ");
+    char *config_path=a->config_path;
+    a->config_path=g_build_filename(config_path,"cannot-write.ini",NULL);
+    gtk_dialog_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_true(gtk_widget_get_visible(a->my_station_dialog));
+    char *failed_call=g_key_file_get_string(a->config,"logging","my_callsign",NULL);
+    g_assert_cmpstr(failed_call,==,previous_call); g_free(failed_call); g_free(previous_call);
+    g_free(a->config_path); a->config_path=config_path;
+    gtk_dialog_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_false(gtk_widget_get_visible(a->my_station_dialog));
+    /* Saving My Station refreshes an already-open Bearing window. */
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_from)),==,"JO21QK");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"111 km");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_direction)),==,"0°");
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target)," jo20qk ");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"111 km");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_direction)),==,"180°");
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"JO22QK49");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_direction)),==,"0°");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"113 km");
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"JO21QK");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"0 km");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_direction)),==,"—");
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"INVALID");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"—");
+    g_assert_true(*gtk_label_get_text(GTK_LABEL(a->bearing_message))!=0);
+    gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"JO22QK");
+    gtk_dialog_response(GTK_DIALOG(a->bearing_dialog),GTK_RESPONSE_CLOSE);
+    show_bearing(NULL,a);
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->bearing_target)),==,"JO22QK");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->bearing_distance)),==,"111 km");
+    gtk_dialog_response(GTK_DIALOG(a->bearing_dialog),GTK_RESPONSE_APPLY);
+    g_assert_true(gtk_widget_get_visible(a->bearing_dialog));
+    gtk_dialog_response(GTK_DIALOG(a->bearing_dialog),GTK_RESPONSE_CLOSE);
+    GKeyFile *station_saved=g_key_file_new();
+    g_assert_true(g_key_file_load_from_file(station_saved,a->config_path,0,NULL));
+    char *saved_call=g_key_file_get_string(station_saved,"logging","my_callsign",NULL);
+    char *saved_locator=g_key_file_get_string(station_saved,"logging","my_locator",NULL);
+    g_assert_cmpstr(saved_call,==,"PE1ITR/P"); g_assert_cmpstr(saved_locator,==,"JO21QK");
+    g_free(saved_call); g_free(saved_locator); g_key_file_unref(station_saved);
+    show_my_station(NULL,a);
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->my_callsign)),==,"PE1ITR/P");
+    gtk_entry_set_text(GTK_ENTRY(a->my_callsign),"CANCELLED");
+    gtk_dialog_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_CANCEL);
+    show_my_station(NULL,a);
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->my_callsign)),==,"PE1ITR/P");
+    gtk_dialog_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_CANCEL);
     for (unsigned i = 0; i < G_N_ELEMENTS(dialogs) + 1; ++i) {
         GtkWidget *button = g_list_nth_data(buttons, i);
         for (int lower_edge = 0; lower_edge < 2; ++lower_edge) {
@@ -1239,6 +1298,8 @@ static void exercise_programs(App *a, const TsInfoSnapshot *snapshot) {
 static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoSnapshot *snapshot) {
     App test=*a;
     test.config=g_key_file_new();
+    g_key_file_set_string(test.config,"logging","my_callsign","PE1ITR/P");
+    g_key_file_set_string(test.config,"logging","my_locator","JO21QK");
     test.running=TRUE; test.stopping=FALSE; test.source=2; test.standard=3;
     test.sr=8000000;
     test.decoder_view.status_time=g_get_monotonic_time();
@@ -1255,6 +1316,8 @@ static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoS
     g_assert_nonnull(test.reception_dialog);
     ReceptionEntry *entry=g_object_get_data(G_OBJECT(test.reception_dialog),"reception-entry");
     g_assert_cmpstr(entry->mode,==,"DVB-T2");
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(entry->fields[LOG_MY_CALLSIGN])),==,"PE1ITR/P");
+    g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(entry->fields[LOG_MY_LOCATOR])),==,"JO21QK");
     g_assert_cmpstr(entry->symbol_rate,==,"");
     g_assert_cmpstr(entry->bandwidth,==,"8000000");
     g_assert_cmpstr(entry->fec,==,"3/5");
@@ -1273,14 +1336,16 @@ static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoS
     gtk_entry_set_text(GTK_ENTRY(entry->provider),"Provider, one");
     gtk_entry_set_text(GTK_ENTRY(entry->points),"1234");
     gtk_combo_box_set_active(GTK_COMBO_BOX(entry->direction),1);
-    /* Later tuning must not change the captured frequency or mode. */
+    /* Later settings must not change the captured station, frequency or mode. */
+    g_key_file_set_string(test.config,"logging","my_callsign","PA0NEW");
+    g_key_file_set_string(test.config,"logging","my_locator","JO22AA");
     g_key_file_set_double(test.config,"b210","frequency",144000000);
     test.standard=0;
     gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_ACCEPT);
     g_assert_null(test.reception_dialog);
     GError *error=NULL;
     g_assert_true(reception_log_append(path,"2026-11-06T12:34:56.000000Z",227360000,
-        "DAB service","Provider\nTwo","DAB+","12:03; 21:07","rtlsdr","","1536000","","","",&error));
+        "DAB service","Provider\nTwo","DAB+","12:03; 21:07","rtlsdr","","1536000","","","","","",&error));
     g_assert_no_error(error);
 
     show_logbook(NULL,&test);
@@ -1330,7 +1395,7 @@ static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoS
 
     char *invalid=g_build_filename(a->directory,"unrelated.csv",NULL);
     g_assert_true(g_file_set_contents(invalid,"unrelated data\n",-1,NULL));
-    g_assert_false(reception_log_append(invalid,"time",1,"s","p","DVB-T","","file","","8000000","auto","","",&error));
+    g_assert_false(reception_log_append(invalid,"time",1,"s","p","DVB-T","","file","","8000000","auto","","","","",&error));
     g_assert_error(error,G_FILE_ERROR,G_FILE_ERROR_INVAL); g_clear_error(&error);
     char *contents=NULL;
     g_assert_true(g_file_get_contents(invalid,&contents,NULL,NULL));

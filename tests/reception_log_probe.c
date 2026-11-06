@@ -18,6 +18,13 @@ int main(int argc, char **argv) {
         if (error) { g_printerr("%s\n",error->message); g_error_free(error); }
         return ok ? 0 : 1;
     }
+    if (argc==5 && !strcmp(argv[1],"--append")) {
+        GError *error=NULL;
+        gboolean ok=reception_log_append(argv[2],"2026-11-06T12:00:00Z",437000000,
+            "New service","Provider","DVB-S2","","b210","125000","","1/2","","",argv[3],argv[4],&error);
+        if (error) { g_printerr("%s\n",error->message); g_error_free(error); }
+        return ok ? 0 : 1;
+    }
     if (argc!=3) return 2;
     GError *error=NULL;
     GPtrArray *rows=reception_log_read(argv[1],&error);

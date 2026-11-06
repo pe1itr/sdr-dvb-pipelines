@@ -93,7 +93,7 @@ GUI_SOURCES += src/program_view.c src/srt_output.c src/dab_view.c
 GUI_HEADERS += src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
 GUI_HEADERS += src/decoder_margin.h
 GUI_HEADERS += src/signal_meter.h
-GUI_HEADERS += src/reception_log.h
+GUI_HEADERS += src/reception_log.h src/maidenhead.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/dvbt2_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/components/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
@@ -157,6 +157,14 @@ test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke $(BUILD_DIR)/video_s
 test-reception-log:
 	python3 tests/test_reception_log.py
 test: test-reception-log
+
+$(BUILD_DIR)/bearing_test: tests/bearing_test.c src/maidenhead.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GTK_CFLAGS) $< -o $@ $(LDFLAGS) $(GTK_LIBS) -lm $(LDLIBS)
+
+.PHONY: test-bearing
+test-bearing: $(BUILD_DIR)/bearing_test
+	$(BUILD_DIR)/bearing_test
+test: test-bearing
 
 clean:
 	rm -rf $(BUILD_DIR)

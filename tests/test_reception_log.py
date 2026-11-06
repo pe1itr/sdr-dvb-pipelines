@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 HEADER = ["timestamp_utc", "frequency_hz", "service_name", "provider_name", "mode", "tii", "source",
-          "symbol_rate_baud", "bandwidth_hz", "fec", "atv_points", "atv_direction"]
+          "symbol_rate_baud", "bandwidth_hz", "fec", "atv_points", "atv_direction", "my_callsign", "my_locator"]
 
 
 def read_adif(path):
@@ -118,6 +118,49 @@ class ReceptionLogTests(unittest.TestCase):
         self.assertIn("SR (baud): 125000; BW (Hz): ; FEC: 1/2", row["COMMENT"])
         self.assertNotIn("APP_LINRADDVB_SYMBOL_RATE_BAUD", row)
 
+    def test_station_append_and_export(self):
+        for call, locator in [("PE1ITR/P", "JO21QK"), ("PA0NEW", "JO22AA12"), ("", "")]:
+            subprocess.run([self.probe, "--append", self.log, call, locator], check=True)
+        self.run_export()
+        first, second, empty = read_adif(self.out)
+        self.assertEqual(first["STATION_CALLSIGN"], "PE1ITR/P")
+        self.assertEqual(first["MY_GRIDSQUARE"], "JO21QK")
+        self.assertEqual(second["STATION_CALLSIGN"], "PA0NEW")
+        self.assertEqual(second["MY_GRIDSQUARE"], "JO22AA12")
+        self.assertNotIn("CALL", first)
+        self.assertNotIn("GRIDSQUARE", first)
+        self.assertNotIn("STATION_CALLSIGN", empty)
+        self.assertNotIn("MY_GRIDSQUARE", empty)
+
+    def test_legacy_log_upgrade_preserves_records(self):
+        original = ["2026-11-06T12:00:00Z", "437000000", 'Old, "TV" é', "P\nTwo",
+                    "DVB-S", "", "b210", "125000", "", "1/2", "", ""]
+        with self.log.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(HEADER[:-2])
+            writer.writerow(original)
+        before = self.log.read_bytes()
+        self.run_export()
+        self.assertNotIn("STATION_CALLSIGN", read_adif(self.out)[0])
+        self.assertEqual(self.log.read_bytes(), before)
+        subprocess.run([self.probe, "--append", self.log, "PE1ITR", "JO21QK"], check=True)
+        with self.log.open(newline="", encoding="utf-8") as f:
+            header, old, new = list(csv.reader(f))
+        self.assertEqual(header, HEADER)
+        self.assertEqual(old, original + ["", ""])
+        self.assertEqual(new[-2:], ["PE1ITR", "JO21QK"])
+        self.run_export()
+        self.assertEqual(len(read_adif(self.out)), 2)
+
+    def test_invalid_station_does_not_modify_log(self):
+        self.write([["2026-11-06T12:00:00Z", "437000000", "S", "P", "DVB-S", "", "b210"]])
+        before = self.log.read_bytes()
+        for call, locator in [("PE1 ITR", "JO21QK"), ("PE1ITR", "ZZ21QK"),
+                              ("PE1ITR", "JO2"), ("PE1ITR", "JO21ZZ"), ("é", "JO21")]:
+            result = subprocess.run([self.probe, "--append", self.log, call, locator], capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(self.log.read_bytes(), before)
+
     def test_invalid_csv_or_values_do_not_replace_export(self):
         self.out.write_text("previous export")
         for frequency, timestamp in [("NaN", "2026-11-06T12:00:00Z"),
@@ -153,7 +196,7 @@ class ReceptionLogTests(unittest.TestCase):
             writer = csv.writer(f)
             writer.writerow(HEADER)
             writer.writerow(rows[1][:2] + ['Updated, "TV" é', "Provider\nTwo"] + rows[1][4:] +
-                            ["", "8000000", "2/3", "321", "ONE-WAY"])
+                            ["", "8000000", "2/3", "321", "ONE-WAY", "PE1ITR", "JO21QK"])
         failed = subprocess.run([self.probe, "--stale-edit", self.log, "1", replacement], capture_output=True)
         self.assertEqual(failed.returncode, 1)
         self.assertEqual(self.log.read_bytes(), original)
@@ -167,6 +210,7 @@ class ReceptionLogTests(unittest.TestCase):
         self.assertEqual(edited[1]["atv_points"], "321")
         self.run_export()
         self.assertEqual(read_adif(self.out)[1]["APP_VERON_ATV_POINTS"], "321")
+        self.assertEqual(read_adif(self.out)[1]["STATION_CALLSIGN"], "PE1ITR")
 
 
 if __name__ == "__main__":

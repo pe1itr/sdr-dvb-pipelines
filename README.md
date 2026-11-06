@@ -76,6 +76,21 @@ aligns code, confidence, hits, detection status and log history in columns.
 mark a transmitter as logged. **Country** in Service info uses the received
 ensemble ECC and EId country bits; its tooltip shows both identifiers.
 
+Open **Log → My Station** to enter **My Callsign** and **My Locator**, then click
+**Save**. These settings are remembered across restarts and copied into new
+receptions (including DAB TII entries). Both fields are optional; locators may
+contain 2, 4, 6 or 8 characters. Each saved reception keeps its own station data,
+even if you later change My Station. Older CSV logs remain readable and are
+upgraded on the next save, leaving unknown station fields empty. Use the RX log
+editor to fill those fields for older receptions when needed.
+
+Open **Log → Bearing** and enter a destination Maidenhead locator to calculate
+antenna direction from the saved **My Locator**. Results update as you type:
+distance rounded to whole kilometres and initial bearing rounded to whole
+degrees (0–359°, clockwise from true north: 0° north, 90° east). The short-path
+calculation uses locator centres and a spherical Earth, so distances are approximate.
+Locators of 2, 4, 6 or 8 characters are accepted, including lowercase input.
+
 Open **Log → RX log** in the top menu to view and sort saved receptions, including
 while the receiver is stopped. Double-click a row or choose **Edit selected** to
 correct reception data and complete the optional ATV points/direction fields.
@@ -86,7 +101,8 @@ This follows the selected/all export workflow in [MSHV](https://lz2hv.org/node/1
 **Log → Application log** opens the pipeline/debug log (also available with Alt+L).
 
 ADIF exports mark receptions as `SWL=Y`, use UTC `QSO_DATE`/`TIME_ON` and MHz
-`FREQ`/`FREQ_RX`. DVB uses `MODE=ATV`; the precise DVB standard, service, provider,
+`FREQ`/`FREQ_RX`. My Callsign exports as `STATION_CALLSIGN`, and My Locator as
+`MY_GRIDSQUARE`, using the values saved in each reception. DVB uses `MODE=ATV`; the precise DVB standard, service, provider,
 TII, source and full timestamp are retained in `APP_LINRADDVB_*` fields.
 No callsign is inferred from a service name. Loggers requiring `CALL` may reject
 broadcast reception records. ADI requires ASCII: readable names are transliterated,

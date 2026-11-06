@@ -74,6 +74,9 @@ typedef struct {
     GtkWidget *log_menu, *log_popover, *application_log_item;
     GtkWidget *logbook_item, *logbook_dialog, *logbook_view, *logbook_message;
     GtkListStore *logbook_store;
+    GtkWidget *my_station_item, *my_station_dialog, *my_callsign, *my_locator, *my_station_error;
+    GtkWidget *bearing_item, *bearing_dialog, *bearing_from, *bearing_target;
+    GtkWidget *bearing_distance, *bearing_direction, *bearing_message;
     gboolean recording, record_pending;
     char record_log_line[1024];
     char receiver_offset_error[512];
@@ -1392,7 +1395,7 @@ static void dab_log_reception(const DabReception *entry,gpointer data) {
     char *stamp=g_date_time_format(when,"%Y-%m-%dT%H:%M:%SZ");
     char hz[G_ASCII_DTOSTR_BUF_SIZE];g_ascii_formatd(hz,sizeof(hz),"%.0f",entry->frequency);
     char *row[LOG_COLUMNS+1]={stamp,hz,(char *)entry->ensemble,"","DAB",(char *)entry->tii,
-        (char *)sources[a->source],"","1536000","auto","","",NULL};
+        (char *)sources[a->source],"","1536000","auto","","","","",NULL};
     show_reception_editor(a,row,-1);g_free(stamp);g_date_time_unref(when);
 }
 
@@ -1420,6 +1423,10 @@ static void reception_response(GtkDialog *dialog, gint response, gpointer data) 
                 row[j]=g_strdup(directions[MAX(0,direction)]);
             } else row[j]=g_strdup(gtk_entry_get_text(GTK_ENTRY(entry->fields[j])));
         }
+        for (int j=LOG_MY_CALLSIGN;j<=LOG_MY_LOCATOR;++j) {
+            char *upper=g_ascii_strup(row[j],-1); g_strstrip(upper);
+            g_free(row[j]); row[j]=upper;
+        }
         GError *error=NULL;
         GDateTime *time=g_date_time_new_from_iso8601(row[LOG_TIME],NULL);
         gboolean valid=time && g_ascii_strtod(row[LOG_FREQUENCY],NULL)>0 && *row[LOG_MODE];
@@ -1439,7 +1446,8 @@ static void reception_response(GtkDialog *dialog, gint response, gpointer data) 
             saved=reception_log_replace(entry->path,entry->edit_index,entry->original,row,&error);
         else saved=reception_log_append(entry->path,row[LOG_TIME],g_ascii_strtod(row[LOG_FREQUENCY],NULL),
             row[LOG_SERVICE],row[LOG_PROVIDER],row[LOG_MODE],row[LOG_TII],row[LOG_SOURCE],
-            row[LOG_SYMBOL_RATE],row[LOG_BANDWIDTH],row[LOG_FEC],row[LOG_ATV_POINTS],row[LOG_ATV_DIRECTION],&error);
+            row[LOG_SYMBOL_RATE],row[LOG_BANDWIDTH],row[LOG_FEC],row[LOG_ATV_POINTS],row[LOG_ATV_DIRECTION],
+            row[LOG_MY_CALLSIGN],row[LOG_MY_LOCATOR],&error);
         for (int j=0;j<LOG_COLUMNS;++j) g_free(row[j]);
         if (!saved) {
             gtk_label_set_text(GTK_LABEL(entry->error),error->message);
@@ -1457,6 +1465,15 @@ static void show_reception_editor(App *a, char **row, int edit_index) {
     if (a->reception_dialog) { gtk_window_present(GTK_WINDOW(a->reception_dialog)); return; }
     ReceptionEntry *entry=g_new0(ReceptionEntry,1);
     entry->app=a; entry->original=g_strdupv(row); entry->edit_index=edit_index;
+    if (edit_index<0) {
+        const char *keys[]={"my_callsign","my_locator"};
+        for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) {
+            char *value=g_key_file_get_string(a->config,"logging",keys[i],NULL);
+            g_free(entry->original[LOG_MY_CALLSIGN+i]);
+            entry->original[LOG_MY_CALLSIGN+i]=value ? value : g_strdup("");
+        }
+    }
+    row=entry->original;
     entry->mode=entry->original[LOG_MODE]; entry->path=reception_log_path(a);
     g_strlcpy(entry->symbol_rate,row[LOG_SYMBOL_RATE],sizeof(entry->symbol_rate));
     g_strlcpy(entry->bandwidth,row[LOG_BANDWIDTH],sizeof(entry->bandwidth));
@@ -1471,7 +1488,7 @@ static void show_reception_editor(App *a, char **row, int edit_index) {
     gtk_container_set_border_width(GTK_CONTAINER(grid),12);
     gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),grid);
     const char *labels[]={"Time (UTC)","Frequency (MHz)","Service name","Provider name","Mode","TII","Source",
-        "Symbol rate (baud)","Bandwidth (Hz)","FEC","ATV points (optional)","ATV direction (optional)"};
+        "Symbol rate (baud)","Bandwidth (Hz)","FEC","ATV points (optional)","ATV direction (optional)","My Callsign","My Locator"};
     for (int i=0;i<LOG_COLUMNS;++i) {
         GtkWidget *field;
         if (i==LOG_FREQUENCY) {
@@ -1549,7 +1566,7 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
     GDateTime *now=g_date_time_new_now_utc();
     char *timestamp=g_date_time_format(now,"%Y-%m-%dT%H:%M:%S.%fZ");
     char *row[LOG_COLUMNS+1]={timestamp,frequency,service,provider,(char *)standards[a->standard],"",(char *)source,
-        a->standard<2 ? rate : "",a->standard>=2 ? rate : "",(char *)fec,"","",NULL};
+        a->standard<2 ? rate : "",a->standard>=2 ? rate : "",(char *)fec,"","","","",NULL};
     show_reception_editor(a,row,-1);
     g_free(timestamp); g_date_time_unref(now);
 }
@@ -1676,7 +1693,7 @@ static void show_logbook(GtkWidget *widget, gpointer data) {
         a->logbook_view=gtk_tree_view_new_with_model(GTK_TREE_MODEL(a->logbook_store));
         g_object_unref(a->logbook_store); /* owned by the view */
         const char *columns[]={"Time (UTC)","Frequency (Hz)","Service name","Provider name","Mode","TII","Source",
-            "SR (baud)","BW (Hz)","FEC","ATV points","ATV direction"};
+            "SR (baud)","BW (Hz)","FEC","ATV points","ATV direction","My Callsign","My Locator"};
         for (int i=0;i<LOG_COLUMNS;++i) {
             GtkCellRenderer *cell=gtk_cell_renderer_text_new();
             GtkTreeViewColumn *column=gtk_tree_view_column_new_with_attributes(columns[i],cell,"text",i,NULL);
@@ -2827,10 +2844,172 @@ static void show_diagnostics(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->diagnostics_dialog));
 }
 
+static void bearing_refresh(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    if (!a->bearing_dialog) return;
+    char *configured=g_key_file_get_string(a->config,"logging","my_locator",NULL);
+    char *from=g_ascii_strup(configured ? configured : "",-1);
+    char *to=g_ascii_strup(gtk_entry_get_text(GTK_ENTRY(a->bearing_target)),-1);
+    g_free(configured); g_strstrip(from); g_strstrip(to);
+    gtk_label_set_text(GTK_LABEL(a->bearing_from),*from ? from : "Not set");
+    gtk_label_set_text(GTK_LABEL(a->bearing_distance),"—");
+    gtk_label_set_text(GTK_LABEL(a->bearing_direction),"—");
+    const char *message="";
+    double distance, direction;
+    if (!maidenhead_center(from,NULL,NULL))
+        message="Set a valid My Locator in Log → My Station first.";
+    else if (!*to)
+        message="Enter the destination Maidenhead locator.";
+    else if (!maidenhead_bearing(from,to,&distance,&direction))
+        message="Enter a valid 2, 4, 6 or 8 character locator (for example JO22AA).";
+    else {
+        char *km=g_strdup_printf("%.0f km",distance);
+        gtk_label_set_text(GTK_LABEL(a->bearing_distance),km); g_free(km);
+        if (isfinite(direction)) {
+            /* Modulo after rounding keeps almost-north bearings at 0°, not 360°. */
+            char *degrees=g_strdup_printf("%d°",((int)lround(direction))%360);
+            gtk_label_set_text(GTK_LABEL(a->bearing_direction),degrees); g_free(degrees);
+        } else message=distance<1e-6 ? "Same location: no bearing to calculate." :
+            "Opposite points on Earth: no unique bearing.";
+    }
+    gtk_label_set_text(GTK_LABEL(a->bearing_message),message);
+    g_free(from); g_free(to);
+}
+
+static void bearing_response(GtkDialog *dialog, gint response, gpointer data) {
+    if (response==GTK_RESPONSE_APPLY) { bearing_refresh(NULL,data); return; }
+    gtk_widget_hide(GTK_WIDGET(dialog));
+}
+
+static void show_bearing(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    if (!a->bearing_dialog) {
+        a->bearing_dialog=gtk_dialog_new_with_buttons("Bearing",GTK_WINDOW(a->window),
+            GTK_DIALOG_DESTROY_WITH_PARENT,"Calculate",GTK_RESPONSE_APPLY,"Close",GTK_RESPONSE_CLOSE,NULL);
+        GtkWidget *grid=gtk_grid_new();
+        gtk_grid_set_row_spacing(GTK_GRID(grid),10); gtk_grid_set_column_spacing(GTK_GRID(grid),18);
+        gtk_container_set_border_width(GTK_CONTAINER(grid),16);
+        gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(a->bearing_dialog))),grid);
+        a->bearing_from=gtk_label_new(""); a->bearing_target=gtk_entry_new();
+        a->bearing_distance=gtk_label_new("—"); a->bearing_direction=gtk_label_new("—");
+        GtkWidget *fields[]={a->bearing_from,a->bearing_target,a->bearing_distance,a->bearing_direction};
+        const char *labels[]={"My Locator","Destination locator","Distance","Bearing"};
+        for (unsigned i=0;i<G_N_ELEMENTS(fields);++i) {
+            GtkWidget *label=gtk_label_new(labels[i]); gtk_widget_set_halign(label,GTK_ALIGN_START);
+            gtk_grid_attach(GTK_GRID(grid),label,0,i,1,1);
+            gtk_grid_attach(GTK_GRID(grid),fields[i],1,i,1,1);
+            if (i!=1) {
+                gtk_label_set_xalign(GTK_LABEL(fields[i]),0);
+                gtk_label_set_selectable(GTK_LABEL(fields[i]),TRUE);
+            }
+        }
+        gtk_entry_set_placeholder_text(GTK_ENTRY(a->bearing_target),"JO22AA");
+        gtk_entry_set_activates_default(GTK_ENTRY(a->bearing_target),TRUE);
+        GtkWidget *hint=gtk_label_new("Short path · true north (0° N, 90° E)\nApproximate distance between locator centres.");
+        gtk_label_set_xalign(GTK_LABEL(hint),0);
+        gtk_grid_attach(GTK_GRID(grid),hint,0,4,2,1);
+        a->bearing_message=gtk_label_new("");
+        gtk_label_set_xalign(GTK_LABEL(a->bearing_message),0);
+        gtk_label_set_line_wrap(GTK_LABEL(a->bearing_message),TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(a->bearing_message),50);
+        gtk_grid_attach(GTK_GRID(grid),a->bearing_message,0,5,2,1);
+        gtk_dialog_set_default_response(GTK_DIALOG(a->bearing_dialog),GTK_RESPONSE_APPLY);
+        g_signal_connect(a->bearing_target,"changed",G_CALLBACK(bearing_refresh),a);
+        g_signal_connect(a->bearing_dialog,"response",G_CALLBACK(bearing_response),a);
+        g_signal_connect(a->bearing_dialog,"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+    }
+    bearing_refresh(NULL,a);
+    gtk_widget_show_all(a->bearing_dialog);
+    gtk_window_present(GTK_WINDOW(a->bearing_dialog));
+    gtk_widget_grab_focus(a->bearing_target);
+}
+
+static void my_station_response(GtkDialog *dialog, gint response, gpointer data) {
+    App *a=data;
+    if (response==GTK_RESPONSE_ACCEPT) {
+        char *callsign=g_ascii_strup(gtk_entry_get_text(GTK_ENTRY(a->my_callsign)),-1);
+        char *locator=g_ascii_strup(gtk_entry_get_text(GTK_ENTRY(a->my_locator)),-1);
+        g_strstrip(callsign); g_strstrip(locator);
+        GError *error=NULL;
+        gboolean saved=FALSE;
+        if (reception_station_valid(callsign,locator,&error)) {
+            /* Only update the active settings after the file was saved. */
+            GKeyFile *copy=g_key_file_new();
+            char *contents=g_key_file_to_data(a->config,NULL,NULL);
+            g_key_file_load_from_data(copy,contents,-1,G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS,NULL);
+            g_free(contents);
+            g_key_file_set_string(copy,"logging","my_callsign",callsign);
+            g_key_file_set_string(copy,"logging","my_locator",locator);
+            gsize length;
+            contents=g_key_file_to_data(copy,&length,&error);
+            GFile *file=g_file_new_for_path(a->config_path);
+            saved=contents && g_file_replace_contents(file,contents,length,NULL,FALSE,
+                G_FILE_CREATE_PRIVATE,NULL,NULL,&error);
+            g_object_unref(file); g_free(contents); g_key_file_unref(copy);
+            if (saved) {
+                g_key_file_set_string(a->config,"logging","my_callsign",callsign);
+                g_key_file_set_string(a->config,"logging","my_locator",locator);
+                status(a,"My Station saved");
+                bearing_refresh(NULL,a);
+            }
+        }
+        g_free(callsign); g_free(locator);
+        if (!saved) {
+            gtk_label_set_text(GTK_LABEL(a->my_station_error),error ? error->message : "Cannot save My Station.");
+            g_clear_error(&error); return;
+        }
+    }
+    gtk_widget_hide(GTK_WIDGET(dialog));
+}
+
+static void show_my_station(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    if (a->my_station_dialog && gtk_widget_get_visible(a->my_station_dialog)) {
+        gtk_window_present(GTK_WINDOW(a->my_station_dialog)); return;
+    }
+    if (!a->my_station_dialog) {
+        a->my_station_dialog=gtk_dialog_new_with_buttons("My Station",GTK_WINDOW(a->window),
+            GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,
+            "Save",GTK_RESPONSE_ACCEPT,NULL);
+        GtkWidget *grid=gtk_grid_new();
+        gtk_grid_set_row_spacing(GTK_GRID(grid),8); gtk_grid_set_column_spacing(GTK_GRID(grid),12);
+        gtk_container_set_border_width(GTK_CONTAINER(grid),12);
+        gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(a->my_station_dialog))),grid);
+        a->my_callsign=gtk_entry_new(); a->my_locator=gtk_entry_new();
+        GtkWidget *fields[]={a->my_callsign,a->my_locator};
+        const char *labels[]={"My Callsign","My Locator"};
+        for (unsigned i=0;i<G_N_ELEMENTS(fields);++i) {
+            GtkWidget *label=gtk_label_new(labels[i]); gtk_widget_set_halign(label,GTK_ALIGN_START);
+            gtk_grid_attach(GTK_GRID(grid),label,0,i,1,1);
+            gtk_grid_attach(GTK_GRID(grid),fields[i],1,i,1,1);
+            gtk_entry_set_activates_default(GTK_ENTRY(fields[i]),TRUE);
+        }
+        gtk_entry_set_placeholder_text(GTK_ENTRY(a->my_callsign),"PE1ITR");
+        gtk_entry_set_placeholder_text(GTK_ENTRY(a->my_locator),"JO21QK");
+        a->my_station_error=gtk_label_new("");
+        gtk_label_set_line_wrap(GTK_LABEL(a->my_station_error),TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(a->my_station_error),55);
+        gtk_grid_attach(GTK_GRID(grid),a->my_station_error,0,2,2,1);
+        gtk_dialog_set_default_response(GTK_DIALOG(a->my_station_dialog),GTK_RESPONSE_ACCEPT);
+        g_signal_connect(a->my_station_dialog,"response",G_CALLBACK(my_station_response),a);
+        g_signal_connect(a->my_station_dialog,"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+    }
+    char *callsign=g_key_file_get_string(a->config,"logging","my_callsign",NULL);
+    char *locator=g_key_file_get_string(a->config,"logging","my_locator",NULL);
+    gtk_entry_set_text(GTK_ENTRY(a->my_callsign),callsign ? callsign : "");
+    gtk_entry_set_text(GTK_ENTRY(a->my_locator),locator ? locator : "");
+    gtk_label_set_text(GTK_LABEL(a->my_station_error),"");
+    g_free(callsign); g_free(locator);
+    gtk_widget_show_all(a->my_station_dialog);
+    gtk_window_present(GTK_WINDOW(a->my_station_dialog));
+}
+
 static void log_menu_selected(GtkWidget *widget, gpointer data) {
     App *a=data;
     gtk_popover_popdown(GTK_POPOVER(a->log_popover));
     if (widget==a->application_log_item) show_diagnostics(widget,a);
+    else if (widget==a->my_station_item) show_my_station(widget,a);
+    else if (widget==a->bearing_item) show_bearing(widget,a);
     else show_logbook(widget,a);
 }
 
@@ -3202,7 +3381,7 @@ static void gui(App *a) {
     a->log_menu=gtk_menu_button_new();
     gtk_button_set_label(GTK_BUTTON(a->log_menu),"Log");
     gtk_box_pack_start(GTK_BOX(menu),a->log_menu,FALSE,FALSE,0);
-    gtk_widget_set_tooltip_text(a->log_menu,"Application log and RX log");
+    gtk_widget_set_tooltip_text(a->log_menu,"Application log, RX log, My Station and Bearing");
     a->log_popover=gtk_popover_new(a->log_menu);
     GtkWidget *log_options=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
     gtk_container_set_border_width(GTK_CONTAINER(log_options),6);
@@ -3217,6 +3396,16 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(log_options),a->logbook_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->logbook_item,"View receptions and export selected rows or the entire log in ADIF");
     g_signal_connect(a->logbook_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    a->my_station_item=gtk_model_button_new();
+    g_object_set(a->my_station_item,"text","My Station",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->my_station_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->my_station_item,"Set My Callsign and My Locator for new reception logs");
+    g_signal_connect(a->my_station_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    a->bearing_item=gtk_model_button_new();
+    g_object_set(a->bearing_item,"text","Bearing",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->bearing_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->bearing_item,"Distance and antenna bearing from My Locator");
+    g_signal_connect(a->bearing_item,"clicked",G_CALLBACK(log_menu_selected),a);
     gtk_widget_show_all(log_options);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(a->log_menu),a->log_popover);
     gtk_box_pack_start(GTK_BOX(menu), about_item, FALSE, FALSE, 0);
