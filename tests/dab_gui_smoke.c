@@ -105,16 +105,9 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_cmpuint(a->decoder_view.status.locks,==,15);
     g_assert_cmpfloat(a->decoder_view.status.snr_db,==,15.5);
     g_assert_cmpuint(a->decoder_view.points.count,==,2);
-    g_assert_true(gtk_widget_get_visible(a->decoder_view.dab_metrics_grid));
-    const char *metrics[]={"125","500","2","8","3","4","5","6500"};
-    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,metrics[i]);
-    a->decoder_view.status_time-=3*G_USEC_PER_SEC;
-    dab_view_tick(&a->dab,TRUE);
-    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,"—");
-    a->decoder_view.status_time=g_get_monotonic_time();
-    dab_view_tick(&a->dab,TRUE);
+    // Diagnostic values remain available in the snapshot without extra UI rows.
+    g_assert_cmpfloat(dab_view_number(&a->dab,"iq_queue_ms"),==,125);
+    g_assert_cmpfloat(dab_view_number(&a->dab,"dx_decode_ms"),==,6500);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(g_object_get_data(G_OBJECT(a->decoder_view.service),"caption"))),==,"Ensemble");
     const char *screenshot=g_getenv("LINRAD_DAB_SCREENSHOT");
     if (screenshot) {
@@ -170,8 +163,6 @@ static gboolean exercise_dab(gpointer data) {
     dab_view_tick(&a->dab,TRUE);
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"—");
-    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,"—");
     g_assert_true(g_file_set_contents(state,json,-1,NULL));g_free(state);
     dab_view_tick(&a->dab,TRUE);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,1))),==,"✓ Logged");
@@ -191,7 +182,6 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_true(gtk_widget_get_visible(a->video_frame));
     g_assert_false(gtk_widget_get_visible(a->dab.tii_dialog));
     decoder_view_tick(&a->decoder_view,FALSE,"DVB-S");
-    g_assert_false(gtk_widget_get_visible(a->decoder_view.dab_metrics_grid));
     g_assert_false(gtk_widget_get_visible(a->decoder_view.country));
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),FALSE);

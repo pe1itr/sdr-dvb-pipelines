@@ -3,6 +3,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 #define NFFT 16384
 #define HISTORY (IQ_FILTER_TAPS-1)
 #define BLOCK (NFFT-HISTORY)
@@ -26,11 +29,6 @@ int iq_bandfilter_set(IQBandFilter *f, double bandwidth) {
     if (!iq_bandfilter_valid(f->rate, bandwidth)) return -1;
     if (bandwidth == f->bandwidth) return 0;
     if (bandwidth > 0) {
-        if (!f->forward) {
-            f->forward = fftwf_plan_dft_1d(NFFT, f->time, f->freq, FFTW_FORWARD, FFTW_ESTIMATE);
-            f->inverse = fftwf_plan_dft_1d(NFFT, f->freq, f->time, FFTW_BACKWARD, FFTW_ESTIMATE);
-            if (!f->forward || !f->inverse) return -1;
-        }
         memset(f->time, 0, NFFT*sizeof(*f->time));
         double sum = 0, cutoff = bandwidth/(2*f->rate);
         /* Compute one half then mirror exactly: H(w)=A(w)*exp(-j*w*4096).
@@ -58,24 +56,90 @@ IQBandFilter *iq_bandfilter_create(double rate, double bandwidth) {
     f->time = fftwf_alloc_complex(NFFT); f->freq = fftwf_alloc_complex(NFFT);
     f->response = fftwf_alloc_complex(NFFT); f->history = fftwf_alloc_complex(HISTORY);
     if (!f->time || !f->freq || !f->response || !f->history) goto fail;
+    /* Plan once before reception, even when initially bypassed: live enabling
+     * must not block the SDR read loop for FFT planning. ESTIMATE can select a
+     * much slower transform at this size. FFTW retains measured wisdom in the
+     * process, so retuning reuses it. Planning only overwrites scratch arrays. */
+    f->forward = fftwf_plan_dft_1d(NFFT, f->time, f->freq, FFTW_FORWARD, FFTW_MEASURE);
+    f->inverse = fftwf_plan_dft_1d(NFFT, f->freq, f->time, FFTW_BACKWARD, FFTW_MEASURE);
+    if (!f->forward || !f->inverse) goto fail;
     memset(f->history, 0, HISTORY*sizeof(*f->history));
     if (iq_bandfilter_set(f, bandwidth)) goto fail;
     return f;
 fail:
     iq_bandfilter_destroy(f); return NULL;
 }
+/* Convert whole runs rather than branch on the format for every I/Q value.
+ * The wire formats remain little-endian s16 and unsigned, offset-binary u8.
+ * SSE2 is baseline on x86-64; other targets keep the scalar conversion. */
+static void unpack(float *out, const uint8_t *in, size_t count, int u8, int floats) {
+    if (floats) { memcpy(out,in,count*sizeof(float)); return; }
+    size_t i=0;
+#if defined(__SSE2__)
+    const __m128i zero=_mm_setzero_si128();
+    for (;i+8<=count;i+=8) {
+        __m128i v;
+        if (u8) {
+            v=_mm_loadl_epi64((const __m128i *)(in+i));
+            v=_mm_sub_epi16(_mm_unpacklo_epi8(v,zero),_mm_set1_epi16(128));
+        } else v=_mm_loadu_si128((const __m128i *)(in+2*i));
+        __m128i sign=_mm_srai_epi16(v,15);
+        _mm_storeu_ps(out+i,_mm_cvtepi32_ps(_mm_unpacklo_epi16(v,sign)));
+        _mm_storeu_ps(out+i+4,_mm_cvtepi32_ps(_mm_unpackhi_epi16(v,sign)));
+    }
+#endif
+    for (;i<count;++i) {
+        int v=u8 ? (int)in[i]-128 : (int)(in[2*i] | (unsigned)in[2*i+1]<<8);
+        if (!u8 && v>=32768) v-=65536;
+        out[i]=(float)v;
+    }
+}
+static void pack(uint8_t *out, const float *in, size_t count, int u8, int floats) {
+    if (floats) {
+        float *values=(float *)out;
+        for (size_t i=0;i<count;++i) values[i]=in[i]/NFFT;
+        return;
+    }
+    size_t i=0;
+#if defined(__SSE2__)
+    const __m128 scale=_mm_set1_ps(1.0f/NFFT);
+    const __m128 low=_mm_set1_ps(u8 ? -128 : -32768), high=_mm_set1_ps(u8 ? 127 : 32767);
+    for (;i+8<=count;i+=8) {
+        __m128 a=_mm_mul_ps(_mm_loadu_ps(in+i),scale);
+        __m128 b=_mm_mul_ps(_mm_loadu_ps(in+i+4),scale);
+        /* Operand order also preserves fminf/fmaxf's handling of NaN.
+         * cvtps uses the active rounding mode, as lrintf does. */
+        a=_mm_max_ps(_mm_min_ps(a,high),low);
+        b=_mm_max_ps(_mm_min_ps(b,high),low);
+        __m128i v=_mm_packs_epi32(_mm_cvtps_epi32(a),_mm_cvtps_epi32(b));
+        if (u8) {
+            v=_mm_add_epi16(v,_mm_set1_epi16(128));
+            v=_mm_packus_epi16(v,v);
+            _mm_storel_epi64((__m128i *)(out+i),v);
+        } else _mm_storeu_si128((__m128i *)(out+2*i),v);
+    }
+#endif
+    for (;i<count;++i) {
+        float v=in[i]/NFFT;
+        int value=(int)lrintf(fmaxf(u8 ? -128 : -32768, fminf(u8 ? 127 : 32767,v)));
+        if (u8) out[i]=(uint8_t)(value+128);
+        else {out[2*i]=(uint16_t)value & 255;out[2*i+1]=(uint16_t)value >> 8;}
+    }
+}
 static void process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8, int floats) {
     size_t stride = floats ? 2*sizeof(float) : u8 ? 2 : 4;
+    if (!f->bandwidth) {
+        /* Bypass is bit-exact but must retain raw history for a live enable.
+         * Only the final HISTORY samples matter, even for large input blocks. */
+        size_t keep=samples<HISTORY ? samples : HISTORY;
+        memmove(f->history,f->history+keep,(HISTORY-keep)*sizeof(*f->history));
+        if (keep) unpack((float *)(f->history+HISTORY-keep),iq+(samples-keep)*stride,2*keep,u8,floats);
+        return;
+    }
     while (samples) {
         size_t n = samples < BLOCK ? samples : BLOCK;
         memcpy(f->time, f->history, HISTORY*sizeof(*f->time));
-        for (size_t i = 0; i < n; ++i) for (size_t axis = 0; axis < 2; ++axis) {
-            if (floats) { f->time[HISTORY+i][axis]=((float *)iq)[2*i+axis]; continue; }
-            size_t at = i*stride + axis*(u8 ? 1 : 2);
-            int v = u8 ? (int)iq[at]-128 : (int)(iq[at] | (unsigned)iq[at+1]<<8);
-            if (!u8 && v >= 32768) v -= 65536;
-            f->time[HISTORY+i][axis] = (float)v;
-        }
+        unpack((float *)(f->time+HISTORY),iq,2*n,u8,floats);
         memcpy(f->history, f->time+n, HISTORY*sizeof(*f->history));
         if (f->bandwidth > 0) {
             memset(f->time+HISTORY+n, 0, (BLOCK-n)*sizeof(*f->time));
@@ -86,14 +150,7 @@ static void process(IQBandFilter *f, uint8_t *iq, size_t samples, int u8, int fl
                 f->freq[i][1] = re*f->response[i][1]+im*f->response[i][0];
             }
             fftwf_execute(f->inverse);
-            for (size_t i = 0; i < n; ++i) for (size_t axis = 0; axis < 2; ++axis) {
-                float v = f->time[HISTORY+i][axis]/NFFT;
-                if (floats) { ((float *)iq)[2*i+axis]=v; continue; }
-                int value = (int)lrintf(fmaxf(u8 ? -128 : -32768, fminf(u8 ? 127 : 32767, v)));
-                size_t at = i*stride + axis*(u8 ? 1 : 2);
-                if (u8) iq[at] = (uint8_t)(value+128);
-                else { iq[at] = (uint16_t)value & 255; iq[at+1] = (uint16_t)value >> 8; }
-            }
+            pack(iq,(const float *)(f->time+HISTORY),2*n,u8,floats);
         }
         iq += n*stride; samples -= n;
     }

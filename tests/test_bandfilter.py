@@ -95,5 +95,42 @@ class BandfilterTests(unittest.TestCase):
         raw = bytes([128, 128])*20000
         self.assertEqual(self.run_filter(raw, 40000, u8=True), raw)
 
+    def test_20msps_strong_adjacent_signal(self):
+        # DAB, broadcast DVB-T2 and narrowband DVB: the unwanted carrier is
+        # 29 dB stronger, while their sum stays inside the ADC range.
+        rate = 20000000
+        n = np.arange(131072)
+        for width in (150000, 1778112, 8000000):
+            for sign in (-1, 1):
+                with self.subTest(width=width, sign=sign):
+                    wanted = 1000*np.exp(2j*np.pi*(width*.2)*n/rate)
+                    blocker = 28000*np.exp(2j*np.pi*(sign*width*.65)*n/rate)
+                    z = wanted + blocker
+                    iq = np.rint(np.column_stack((z.real,z.imag))).astype('<i2')
+                    raw = self.run_filter(iq.tobytes(),width,rate=rate,block=65536)
+                    out = np.frombuffer(raw,'<i2').reshape(-1,2).astype(float)
+                    actual = (out[:,0]+1j*out[:,1])[10000:]
+                    expected = wanted[10000-4096:len(n)-4096]
+                    self.assertLess(np.sqrt(np.mean(abs(actual-expected)**2)), 2)
+
+    def test_enable_after_bypass_retains_history(self):
+        # Enabling must use samples received during bypass, even when an input
+        # block is larger than the FIR history or ends in a SIMD tail.
+        rng = np.random.default_rng(983)
+        for u8 in (False, True):
+            iq = rng.integers(0,256,800000,dtype=np.uint8).tobytes()
+            for block in (127, 8193, 65536):
+                with self.subTest(u8=u8,block=block):
+                    full = self.run_filter(iq,1778112,rate=20000000,block=block,u8=u8)
+                    switched = self.run_filter(iq,0,rate=20000000,block=block,u8=u8,
+                                               change=(70000,1778112))
+                    start = ((70000+block-1)//block)*block*(2 if u8 else 4)
+                    self.assertEqual(switched[:start],iq[:start])
+                    dtype = 'u1' if u8 else '<i2'
+                    a = np.frombuffer(full[start:],dtype).astype(float)
+                    b = np.frombuffer(switched[start:],dtype).astype(float)
+                    # FFTW may pick a different, equally accurate measured plan.
+                    self.assertLessEqual(np.max(abs(a-b)), 1)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

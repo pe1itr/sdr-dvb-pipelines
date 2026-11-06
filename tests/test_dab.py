@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import time
 import struct
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -240,6 +241,67 @@ class DabTests(unittest.TestCase):
                           f"{locks} later FIC locks, {int(audio_frames)} audio frames, zero IQ drops")
                 finally:
                     if p.poll() is None:p.kill();p.communicate()
+
+    @unittest.skipUnless(os.environ.get("DAB_REALTIME_TEST") == "1" and
+                         (FIXTURES / "live-tii-phase-11c-4s.s16le.iq").is_file(),
+                         "set DAB_REALTIME_TEST=1 and DAB_FIXTURE_DIR for filtered reception")
+    def test_paced_20mhz_with_source_bandfilter(self):
+        import numpy as np
+        from scipy.signal import resample_poly
+        original=np.fromfile(FIXTURES/"live-tii-phase-11c-4s.s16le.iq",dtype="<i2").reshape(-1,2)
+        wide=resample_poly(original.astype(np.float32),625,64,axis=0)
+        data=np.clip(wide,-32768,32767).astype("<i2").tobytes();del wide
+        duration=3*len(data)/(4*20000000)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory=Path(tmp);recording=directory/"20mhz.iq"
+            with recording.open("wb") as f:
+                for _ in range(3): f.write(data)
+            source=subprocess.Popen([ROOT/"build/iq_file_to_stdout","--in",recording,
+                "--sample-rate","20000000","--filter-bandwidth","1778112"],
+                stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            worker=None
+            try:
+                worker=subprocess.Popen([ROOT/"build/dab_worker","--state-dir",tmp,"--channel","11C",
+                    "--sample-rate","20000000","--no-audio"],stdin=source.stdout,
+                    stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                source.stdout.close();source.stdout=None
+                deadline=time.monotonic()+duration+15
+                origin=None;max_lag=0;locks=0
+                while source.poll() is None:
+                    self.assertLess(time.monotonic(),deadline,"Filtered source stalled")
+                    try:
+                        state=json.loads((directory/"state.json").read_text())
+                        now=time.monotonic();samples=state["input_samples"]
+                        if samples and origin is None: origin=(now,samples)
+                        if origin:
+                            max_lag=max(max_lag,now-origin[0]-(samples-origin[1])/2048000)
+                            if now-origin[0]>4 and state["synced"]: locks+=1
+                    except (FileNotFoundError,json.JSONDecodeError): pass
+                    time.sleep(.1)
+                _,source_errors=source.communicate(timeout=3)
+                _,worker_errors=worker.communicate(timeout=45)
+                self.assertEqual(source.returncode,0,source_errors.decode())
+                self.assertEqual(worker.returncode,0,worker_errors.decode())
+                # The file helper can slow its clock under load. Check its own
+                # elapsed time as well as decoder lag to catch that regression.
+                match=re.search(rb"end of file: \d+ samples, ([0-9.]+) s elapsed",source_errors)
+                self.assertIsNotNone(match,source_errors.decode())
+                elapsed=float(match[1])
+                self.assertLess(elapsed,duration+.5,"Filter cannot keep up with live IQ")
+                self.assertLess(max_lag,.5)
+                state=json.loads((directory/"state.json").read_text())
+                self.assertGreater(locks,10)
+                self.assertGreater(state["audio_frames"],50)
+                self.assertEqual(state["dropped_iq"],0)
+                self.assertEqual(state["dropped_dx"],0)
+                self.assertGreaterEqual(state["captures"],1)
+                print(f"\n20 MS/s with 1.778112 MHz source filter: {elapsed:.3f}s for {duration:.3f}s IQ, "
+                      f"max lag {max_lag:.3f}s, {state['audio_frames']:.0f} audio frames, zero IQ/DX drops")
+            finally:
+                for process in (source,worker):
+                    if process is not None:
+                        if process.poll() is None: process.kill()
+                        process.communicate()
 
     @unittest.skipUnless((FIXTURES / "live-tii-false-main-7c-8s.s16le.iq").is_file(), "set DAB_FIXTURE_DIR for recorded IQ")
     def test_false_main_is_never_a_loggable_detection(self):

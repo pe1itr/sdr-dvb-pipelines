@@ -9,7 +9,6 @@ typedef struct {
     GtkWidget *snr, *pilot, *cfo, *rms, *peak, *buffer, *margin;
     GtkWidget *modulation, *fec, *guard, *packets, *written, *rs_ok, *rs_errors, *cc_errors;
     GtkWidget *video_codec, *audio_codec, *country;
-    GtkWidget *dab_metrics_grid, *dab_metrics[8];
     int fd, port;
     gint64 status_time, points_time, buffer_time;
     gboolean active;

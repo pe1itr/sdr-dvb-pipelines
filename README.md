@@ -110,6 +110,25 @@ DVB-T2 currently supports **8 MHz broadcast channels**, starting at 10 Msps IQ
 input. MISO, inter-frame interleaving and type-2/sub-sliced PLPs are not supported.
 See the [DVB-T2 component](components/dvbt2/README.md) for the supported scope.
 
+## IQ channel filter
+
+The optional BW filter suppresses signals outside the selected channel before
+the decoder. DAB and DVB share the same 8193-tap filter, with a fixed delay of
+4096 samples and no sample-rate change. FFT plans are measured once before
+reception, including when initially bypassed, so live enabling does not pause
+the SDR for planning. On x86-64, SSE2 converts and rounds batches of samples;
+other architectures retain scalar conversion. Filter coefficients and bandwidth
+are unchanged. Bypass remains bit-exact and retains history for live enabling.
+
+On the Ryzen 7 5800H, a 1.778112 MHz filter at 20 MS/s took a median **0.236 s
+per second of IQ**, down from **1.044 s** (three runs, random s16 input, 65536-sample
+blocks). Initial planning took about 0.7 s. These are standalone filter timings;
+SDR/USB, decoding and display costs are additional. See the
+[benchmark results](benchmarks/bandfilter-2026-11-06.json) and
+[reproducible benchmark](dev/bench_bandfilter.c). A different FFT plan may change
+rounding by one integer sample count; response, delay and strong-adjacent-signal
+rejection are checked by `make test-bandfilter test-iq-shift`.
+
 ## DAB reception
 
 Select **Mode → DAB**, then a Band III channel. The display shows, for example,
@@ -136,7 +155,9 @@ beneath the image. **M** mutes audio. No substitute station image is fabricated
 when no slideshow is broadcast. DAB uses its own audio output; the DVB MPEG-TS
 renderer and TSscatterFix do not apply.
 
-Additional DAB Service info rows show radio **IQ queue / IQ peak** in milliseconds
+DAB diagnostics remain available for analysis in the worker’s
+`state.json` (`/tmp/linrad-dab-*/state.json` during reception), without extra
+rows in the main window. These include **IQ queue / IQ peak** in milliseconds
 (2000 ms capacity), **Audio queue / Audio peak** in encoded frames (64-frame
 capacity), **Audio drops**, **ALSA underruns**, **DX drops** and the last **DX time**
 in milliseconds. Peaks and loss counters reset on channel change, and persist
@@ -145,7 +166,8 @@ complete pending identification captures replaced under load. ALSA underruns
 count playback EPIPE errors before recovery, including possible resume-after-mute
 events; they are unavailable with audio output disabled. Queue values exclude
 work in progress, source/USB buffers and the sound device's playback buffer.
-Missing or stale measurements display a dash. Hover over a value for details.
+Unavailable measurements are omitted or null; check the file modification time
+before treating a snapshot as live.
 The **Capture** percentage remains the progress of the eight-second identification
 recording for short signal openings/scatter, not a queue-fill measurement.
 Its length and analysis frequency are unchanged; compare DX time with the

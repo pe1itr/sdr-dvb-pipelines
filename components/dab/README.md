@@ -143,3 +143,6 @@ DAB_REALTIME_TEST=1 DAB_FIXTURE_DIR=/path/to/fixtures python3 tests/test_dab.py
 
 Unlike a short offline decode, this also checks that input never falls more
 than the source queue's half-second capacity behind the live clock.
+It also exercises the production IQ file source with the common 1.778112 MHz
+BW filter enabled at 20 MS/s. That regression checks source elapsed time,
+decoder lag, audio and IQ/DX drops through the first eight-second analysis.

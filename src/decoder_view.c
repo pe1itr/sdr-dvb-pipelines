@@ -170,29 +170,6 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     v->country=name_field(grid,11,"Country");
     gtk_widget_set_no_show_all(v->country,TRUE);
     gtk_widget_set_no_show_all(g_object_get_data(G_OBJECT(v->country),"caption"),TRUE);
-    v->dab_metrics_grid=gtk_grid_new();
-    gtk_widget_set_name(v->dab_metrics_grid,"decoder-grid");
-    gtk_widget_set_halign(v->dab_metrics_grid,GTK_ALIGN_START);
-    gtk_widget_set_no_show_all(v->dab_metrics_grid,TRUE);
-    gtk_box_pack_start(GTK_BOX(box),v->dab_metrics_grid,FALSE,FALSE,0);
-    const char *names[]={"IQ queue","IQ peak","Audio queue","Audio peak","Audio drops","ALSA underruns","DX drops","DX time"};
-    const char *units[]={"ms","ms","frames","frames","","","","ms"};
-    const char *tips[]={
-        "Radio IQ awaiting decoding, after resampling; capacity 2000 ms. Excludes SDR/source buffering and work in progress.",
-        "Highest radio IQ queue fill since channel change, including brief peaks between display updates.",
-        "Encoded audio frames awaiting AAC decoding/playback; capacity 64 frames. This is not total playback latency.",
-        "Highest encoded audio queue fill since channel change.",
-        "Encoded audio frames discarded because the audio queue was full; total since channel change.",
-        "ALSA playback underruns (EPIPE), counted before recovery; total since channel change. May include resuming after mute. Unavailable when playback is disabled.",
-        "Complete pending 8-second identification captures replaced by a newer capture while analysis was busy; total since channel change.",
-        "Wall time of the last completed FIC/TII identification analysis. Compare with the 8000 ms capture interval; blank until the first result."};
-    for (unsigned i=0;i<G_N_ELEMENTS(v->dab_metrics);++i) {
-        v->dab_metrics[i]=field(v->dab_metrics_grid,(i%2)*3,i/2,names[i],units[i],TRUE);
-        gtk_widget_set_tooltip_text(v->dab_metrics[i],tips[i]);
-    }
-    GList *children=gtk_container_get_children(GTK_CONTAINER(v->dab_metrics_grid));
-    for (GList *p=children;p;p=p->next) gtk_widget_show(p->data);
-    g_list_free(children);
     return row;
 }
 
@@ -301,7 +278,6 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     DecoderStatus *s=&v->status;
     gboolean satellite=!strcmp(mode,"DVB-S") || !strcmp(mode,"DVB-S2");
     gboolean dab=!strcmp(mode,"DAB");
-    gtk_widget_set_visible(v->dab_metrics_grid,dab);
     gtk_widget_set_visible(v->country,dab);
     gtk_widget_set_visible(g_object_get_data(G_OBJECT(v->country),"caption"),dab);
     gboolean t2=!strcmp(mode,"DVB-T2");

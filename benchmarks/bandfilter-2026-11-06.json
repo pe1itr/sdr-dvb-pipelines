@@ -1,0 +1,141 @@
+{
+  "baseline_commit": "e7c2374",
+  "machine": "x86_64",
+  "cpu": "AMD Ryzen 7 5800H",
+  "compiler_flags": "-O2",
+  "scope": "Standalone filter, random s16 IQ in 65536-sample blocks; excludes SDR/USB, decoder and GUI. Live receiver remained active.",
+  "runs": [
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001101,
+      "processing_seconds": 1.582036,
+      "seconds_per_signal_second": 0.527345,
+      "version": "before",
+      "repeat": 0
+    },
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.742444,
+      "processing_seconds": 0.380552,
+      "seconds_per_signal_second": 0.126851,
+      "version": "after",
+      "repeat": 0
+    },
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001162,
+      "processing_seconds": 1.634715,
+      "seconds_per_signal_second": 0.544905,
+      "version": "before",
+      "repeat": 1
+    },
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.738693,
+      "processing_seconds": 0.340524,
+      "seconds_per_signal_second": 0.113508,
+      "version": "after",
+      "repeat": 1
+    },
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001095,
+      "processing_seconds": 1.567571,
+      "seconds_per_signal_second": 0.522524,
+      "version": "before",
+      "repeat": 2
+    },
+    {
+      "rate": 10000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.770085,
+      "processing_seconds": 0.355758,
+      "seconds_per_signal_second": 0.118586,
+      "version": "after",
+      "repeat": 2
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001117,
+      "processing_seconds": 3.133437,
+      "seconds_per_signal_second": 1.044479,
+      "version": "before",
+      "repeat": 0
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.729908,
+      "processing_seconds": 0.700563,
+      "seconds_per_signal_second": 0.233521,
+      "version": "after",
+      "repeat": 0
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001083,
+      "processing_seconds": 3.155548,
+      "seconds_per_signal_second": 1.051849,
+      "version": "before",
+      "repeat": 1
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.717941,
+      "processing_seconds": 0.70877,
+      "seconds_per_signal_second": 0.236257,
+      "version": "after",
+      "repeat": 1
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.001137,
+      "processing_seconds": 3.103564,
+      "seconds_per_signal_second": 1.034521,
+      "version": "before",
+      "repeat": 2
+    },
+    {
+      "rate": 20000000,
+      "bandwidth": 1778112,
+      "format": "s16",
+      "signal_seconds": 3,
+      "setup_seconds": 0.709903,
+      "processing_seconds": 0.746849,
+      "seconds_per_signal_second": 0.24895,
+      "version": "after",
+      "repeat": 2
+    }
+  ]
+}
