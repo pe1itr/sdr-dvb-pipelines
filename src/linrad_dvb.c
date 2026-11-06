@@ -33,6 +33,7 @@
 #include "program_view.h"
 #include "usb_receiver.h"
 #include "srt_output.h"
+#include "reception_log.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
        SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_FILE = 12 };
@@ -63,7 +64,10 @@ typedef struct {
     int stage_count;
     GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *constellation_box;
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
-    GtkWidget *record_button;
+    GtkWidget *record_button, *reception_button, *reception_dialog;
+    GtkWidget *log_menu, *log_popover, *application_log_item;
+    GtkWidget *logbook_item, *logbook_dialog, *logbook_view, *logbook_message;
+    GtkListStore *logbook_store;
     gboolean recording, record_pending;
     char record_log_line[1024];
     char receiver_offset_error[512];
@@ -620,6 +624,7 @@ static void scatter_refresh(App *a) {
 static void power_refresh(App *a) {
     scatter_refresh(a);
     record_refresh(a);
+    if (a->reception_button) gtk_widget_set_sensitive(a->reception_button,a->running && !a->stopping);
     if (!a->power_button) return;
     GtkStyleContext *style = gtk_widget_get_style_context(a->power_button);
     const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error"};
@@ -1176,6 +1181,323 @@ static void show_renderer(GtkWidget *widget, gpointer data);
 static void show_about(GtkWidget *widget, gpointer data);
 static void show_tci(GtkWidget *widget, gpointer data);
 static void show_diagnostics(GtkWidget *widget, gpointer data);
+
+typedef struct {
+    App *app;
+    GtkWidget *service, *provider, *frequency, *points, *direction, *error;
+    GtkWidget *fields[LOG_COLUMNS];
+    char *path, **original;
+    const char *mode;
+    char symbol_rate[32], bandwidth[32], fec[32];
+    int edit_index; /* original file position, independent of table sorting */
+} ReceptionEntry;
+
+static char *reception_log_path(App *a) {
+    char *configured=g_key_file_get_string(a->config,"logging","file",NULL);
+    char *path=g_canonicalize_filename(configured && *configured ? configured : "reception-log.csv",a->directory);
+    g_free(configured); return path;
+}
+static void logbook_refresh(App *a);
+
+static void reception_entry_free(gpointer data) {
+    ReceptionEntry *entry=data;
+    entry->app->reception_dialog=NULL;
+    g_strfreev(entry->original); g_free(entry->path); g_free(entry);
+}
+
+static void reception_response(GtkDialog *dialog, gint response, gpointer data) {
+    ReceptionEntry *entry=data;
+    if (response==GTK_RESPONSE_ACCEPT) {
+        gtk_spin_button_update(GTK_SPIN_BUTTON(entry->frequency));
+        char *row[LOG_COLUMNS+1]={0};
+        const char *directions[]={"","ONE-WAY","TWO-WAY"};
+        for (int j=0;j<LOG_COLUMNS;++j) {
+            if (j==LOG_FREQUENCY) {
+                char hz[G_ASCII_DTOSTR_BUF_SIZE];
+                g_ascii_formatd(hz,sizeof(hz),"%.0f",gtk_spin_button_get_value(GTK_SPIN_BUTTON(entry->frequency))*1e6);
+                row[j]=g_strdup(hz);
+            } else if (j==LOG_ATV_DIRECTION) {
+                int direction=gtk_combo_box_get_active(GTK_COMBO_BOX(entry->direction));
+                row[j]=g_strdup(directions[MAX(0,direction)]);
+            } else row[j]=g_strdup(gtk_entry_get_text(GTK_ENTRY(entry->fields[j])));
+        }
+        GError *error=NULL;
+        GDateTime *time=g_date_time_new_from_iso8601(row[LOG_TIME],NULL);
+        gboolean valid=time && g_ascii_strtod(row[LOG_FREQUENCY],NULL)>0 && *row[LOG_MODE];
+        for (int j=LOG_SYMBOL_RATE;j<=LOG_BANDWIDTH;++j) if (*row[j]) {
+            for (char *p=row[j];*p;++p) if (!g_ascii_isdigit(*p)) valid=FALSE;
+            if (!isfinite(g_ascii_strtod(row[j],NULL)) || g_ascii_strtod(row[j],NULL)<=0) valid=FALSE;
+        }
+        if (time) {
+            GDateTime *utc=g_date_time_to_utc(time);
+            g_free(row[LOG_TIME]); row[LOG_TIME]=g_date_time_format(utc,"%Y-%m-%dT%H:%M:%S.%fZ");
+            g_date_time_unref(utc); g_date_time_unref(time);
+        }
+        gboolean saved=FALSE;
+        if (!valid) g_set_error_literal(&error,G_FILE_ERROR,G_FILE_ERROR_INVAL,
+            "Enter an ISO timestamp with timezone, a positive frequency and a digital mode. SR/BW must be positive whole numbers or empty.");
+        else if (entry->edit_index>=0)
+            saved=reception_log_replace(entry->path,entry->edit_index,entry->original,row,&error);
+        else saved=reception_log_append(entry->path,row[LOG_TIME],g_ascii_strtod(row[LOG_FREQUENCY],NULL),
+            row[LOG_SERVICE],row[LOG_PROVIDER],row[LOG_MODE],row[LOG_TII],row[LOG_SOURCE],
+            row[LOG_SYMBOL_RATE],row[LOG_BANDWIDTH],row[LOG_FEC],row[LOG_ATV_POINTS],row[LOG_ATV_DIRECTION],&error);
+        for (int j=0;j<LOG_COLUMNS;++j) g_free(row[j]);
+        if (!saved) {
+            gtk_label_set_text(GTK_LABEL(entry->error),error->message);
+            g_clear_error(&error); return;
+        }
+        char *message=g_strdup_printf("Reception %s: %s",entry->edit_index>=0 ? "updated" : "logged",entry->path);
+        status(entry->app,message); g_free(message);
+        logbook_refresh(entry->app);
+    }
+    gtk_widget_destroy(GTK_WIDGET(dialog));
+}
+
+static void show_reception_editor(App *a, char **row, int edit_index) {
+    if (a->reception_dialog) { gtk_window_present(GTK_WINDOW(a->reception_dialog)); return; }
+    ReceptionEntry *entry=g_new0(ReceptionEntry,1);
+    entry->app=a; entry->original=g_strdupv(row); entry->edit_index=edit_index;
+    entry->mode=entry->original[LOG_MODE]; entry->path=reception_log_path(a);
+    g_strlcpy(entry->symbol_rate,row[LOG_SYMBOL_RATE],sizeof(entry->symbol_rate));
+    g_strlcpy(entry->bandwidth,row[LOG_BANDWIDTH],sizeof(entry->bandwidth));
+    g_strlcpy(entry->fec,row[LOG_FEC],sizeof(entry->fec));
+    GtkWidget *dialog=gtk_dialog_new_with_buttons(edit_index>=0 ? "Edit reception" : "Log reception",GTK_WINDOW(a->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,
+        edit_index>=0 ? "Save changes" : "Save reception",GTK_RESPONSE_ACCEPT,NULL);
+    a->reception_dialog=dialog;
+    g_object_set_data_full(G_OBJECT(dialog),"reception-entry",entry,reception_entry_free);
+    GtkWidget *grid=gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid),6); gtk_grid_set_column_spacing(GTK_GRID(grid),12);
+    gtk_container_set_border_width(GTK_CONTAINER(grid),12);
+    gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),grid);
+    const char *labels[]={"Time (UTC)","Frequency (MHz)","Service name","Provider name","Mode","TII","Source",
+        "Symbol rate (baud)","Bandwidth (Hz)","FEC","ATV points (optional)","ATV direction (optional)"};
+    for (int i=0;i<LOG_COLUMNS;++i) {
+        GtkWidget *field;
+        if (i==LOG_FREQUENCY) {
+            field=gtk_spin_button_new_with_range(0,1000000,.000001);
+            gtk_spin_button_set_digits(GTK_SPIN_BUTTON(field),6);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(field),g_ascii_strtod(row[i],NULL)/1e6);
+        } else if (i==LOG_ATV_DIRECTION) {
+            field=gtk_combo_box_text_new();
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(field),"Not specified");
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(field),"ONE-WAY");
+            gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(field),"TWO-WAY");
+            gtk_combo_box_set_active(GTK_COMBO_BOX(field),!strcmp(row[i],"ONE-WAY") ? 1 : !strcmp(row[i],"TWO-WAY") ? 2 : 0);
+        } else {
+            field=gtk_entry_new(); gtk_entry_set_text(GTK_ENTRY(field),row[i]);
+            if (i==LOG_SOURCE) gtk_editable_set_editable(GTK_EDITABLE(field),FALSE);
+        }
+        entry->fields[i]=field;
+        GtkWidget *label=gtk_label_new(labels[i]);
+        gtk_widget_set_halign(label,GTK_ALIGN_START);
+        gtk_grid_attach(GTK_GRID(grid),label,0,i,1,1);
+        gtk_widget_set_hexpand(field,TRUE); gtk_grid_attach(GTK_GRID(grid),field,1,i,1,1);
+    }
+    entry->service=entry->fields[LOG_SERVICE]; entry->provider=entry->fields[LOG_PROVIDER];
+    entry->frequency=entry->fields[LOG_FREQUENCY]; entry->points=entry->fields[LOG_ATV_POINTS];
+    entry->direction=entry->fields[LOG_ATV_DIRECTION];
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry->points),"Leave empty for ordinary reception");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(entry->fields[LOG_TII]),"DAB only, when known");
+    const char *hint=!strcmp(row[LOG_SOURCE],"file") ? "IQ replay: time is the logging time, not the original reception time." :
+        !strcmp(row[LOG_SOURCE],"linrad") ? "Check the frequency against Linrad. Service and provider together identify the station." :
+        "Service and provider together identify the station. Complete missing names before saving.";
+    GtkWidget *help=gtk_label_new(hint);
+    gtk_label_set_line_wrap(GTK_LABEL(help),TRUE); gtk_label_set_max_width_chars(GTK_LABEL(help),70);
+    gtk_grid_attach(GTK_GRID(grid),help,0,LOG_COLUMNS,2,1);
+    entry->error=gtk_label_new("");
+    gtk_label_set_line_wrap(GTK_LABEL(entry->error),TRUE); gtk_label_set_max_width_chars(GTK_LABEL(entry->error),70);
+    gtk_grid_attach(GTK_GRID(grid),entry->error,0,LOG_COLUMNS+1,2,1);
+    g_signal_connect(dialog,"response",G_CALLBACK(reception_response),entry);
+    gtk_widget_show_all(dialog);
+}
+
+static void show_reception_log(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    if (a->reception_dialog) { gtk_window_present(GTK_WINDOW(a->reception_dialog)); return; }
+    if (!a->running || a->stopping) return;
+    char service[128]="", provider[128]="", rate[32], frequency[G_ASCII_DTOSTR_BUF_SIZE];
+    /* Capture the selected service, tuning and decoder parameters at the click. */
+    if (a->scatter_backend) {
+        TsInfoSnapshot snapshot={0};
+        ts_info_backend_snapshot(a->scatter_backend->information,&snapshot);
+        for (unsigned i=0;i<snapshot.count;++i) if (snapshot.services[i].id==snapshot.selected) {
+            g_strlcpy(service,snapshot.services[i].name,sizeof(service));
+            g_strlcpy(provider,snapshot.services[i].provider,sizeof(provider)); break;
+        }
+        ts_info_snapshot_clear(&snapshot);
+    } else if (a->decoder_view.status_time &&
+               g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
+               (a->decoder_view.status.locks & DECODER_SERVICE)) {
+        g_strlcpy(service,a->decoder_view.status.service,sizeof(service));
+        g_strlcpy(provider,a->decoder_view.status.provider,sizeof(provider));
+    }
+    const char *source=sources[a->source];
+    double hz=g_key_file_get_double(a->config,source,"frequency",NULL)+receiver_offset(a);
+    if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
+    g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
+    const char *fec=a->standard==3 ? "auto" : fecs[a->fec];
+    if (a->decoder_view.status_time && g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
+        (a->decoder_view.status.locks & (DECODER_FEC | DECODER_TS)) && a->decoder_view.status.fec[0])
+        fec=a->decoder_view.status.fec;
+    GDateTime *now=g_date_time_new_now_utc();
+    char *timestamp=g_date_time_format(now,"%Y-%m-%dT%H:%M:%S.%fZ");
+    char *row[LOG_COLUMNS+1]={timestamp,frequency,service,provider,(char *)standards[a->standard],"",(char *)source,
+        a->standard<2 ? rate : "",a->standard>=2 ? rate : "",(char *)fec,"","",NULL};
+    show_reception_editor(a,row,-1);
+    g_free(timestamp); g_date_time_unref(now);
+}
+
+static void logbook_refresh(App *a) {
+    if (!a->logbook_dialog) return;
+    char *path=reception_log_path(a);
+    GError *error=NULL;
+    GPtrArray *rows=reception_log_read(path,&error);
+    gtk_list_store_clear(a->logbook_store);
+    if (rows) {
+        for (unsigned i=0;i<rows->len;++i) {
+            char **row=g_ptr_array_index(rows,i);
+            GtkTreeIter iter;
+            gtk_list_store_append(a->logbook_store,&iter);
+            for (int j=0;j<LOG_COLUMNS;++j)
+                gtk_list_store_set(a->logbook_store,&iter,j,row[j],-1);
+            gtk_list_store_set(a->logbook_store,&iter,LOG_COLUMNS,g_ascii_strtod(row[LOG_FREQUENCY],NULL),
+                LOG_COLUMNS+1,i,-1);
+        }
+    }
+    char *message=rows ? g_strdup_printf("%u receptions · %s",rows->len,path) : g_strdup(error->message);
+    gtk_label_set_text(GTK_LABEL(a->logbook_message),message);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(a->logbook_dialog),1,rows && rows->len);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(a->logbook_dialog),2,rows && rows->len);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(a->logbook_dialog),4,rows && rows->len);
+    g_free(message); g_clear_error(&error); g_free(path);
+    if (rows) g_ptr_array_unref(rows);
+}
+
+static GPtrArray *logbook_rows(App *a, gboolean selected) {
+    GPtrArray *rows=g_ptr_array_new_with_free_func((GDestroyNotify)g_strfreev);
+    GtkTreeModel *model=GTK_TREE_MODEL(a->logbook_store);
+    GtkTreeSelection *selection=gtk_tree_view_get_selection(GTK_TREE_VIEW(a->logbook_view));
+    GtkTreeIter iter;
+    gboolean valid=gtk_tree_model_get_iter_first(model,&iter);
+    while (valid) {
+        if (!selected || gtk_tree_selection_iter_is_selected(selection,&iter)) {
+            char **row=g_new0(char *,LOG_COLUMNS+1);
+            for (int j=0;j<LOG_COLUMNS;++j) gtk_tree_model_get(model,&iter,j,&row[j],-1);
+            g_ptr_array_add(rows,row);
+        }
+        valid=gtk_tree_model_iter_next(model,&iter);
+    }
+    return rows;
+}
+
+static void logbook_edit(App *a) {
+    GtkTreeModel *model=GTK_TREE_MODEL(a->logbook_store);
+    GtkTreeSelection *selection=gtk_tree_view_get_selection(GTK_TREE_VIEW(a->logbook_view));
+    GList *paths=gtk_tree_selection_get_selected_rows(selection,NULL);
+    if (g_list_length(paths)!=1) {
+        gtk_label_set_text(GTK_LABEL(a->logbook_message),"Select exactly one reception to edit.");
+    } else {
+        GtkTreeIter iter;
+        if (gtk_tree_model_get_iter(model,&iter,paths->data)) {
+            char *row[LOG_COLUMNS+1]={0}; guint index;
+            for (int j=0;j<LOG_COLUMNS;++j) gtk_tree_model_get(model,&iter,j,&row[j],-1);
+            gtk_tree_model_get(model,&iter,LOG_COLUMNS+1,&index,-1);
+            show_reception_editor(a,row,index);
+            for (int j=0;j<LOG_COLUMNS;++j) g_free(row[j]);
+        }
+    }
+    g_list_free_full(paths,(GDestroyNotify)gtk_tree_path_free);
+}
+
+static void logbook_activated(GtkTreeView *view, GtkTreePath *path, GtkTreeViewColumn *column, gpointer data) {
+    (void)column;
+    GtkTreeSelection *selection=gtk_tree_view_get_selection(view);
+    gtk_tree_selection_unselect_all(selection); gtk_tree_selection_select_path(selection,path);
+    logbook_edit(data);
+}
+
+static void logbook_response(GtkDialog *dialog, gint response, gpointer data) {
+    App *a=data;
+    if (response==4) { logbook_edit(a); return; }
+    if (response==3) { logbook_refresh(a); return; }
+    if (response!=1 && response!=2) { gtk_widget_hide(GTK_WIDGET(dialog)); return; }
+    GPtrArray *rows=logbook_rows(a,response==1);
+    if (!rows->len) {
+        gtk_label_set_text(GTK_LABEL(a->logbook_message),"Select one or more reception rows first.");
+        g_ptr_array_unref(rows); return;
+    }
+    GtkWidget *chooser=gtk_file_chooser_dialog_new("Export reception log in ADIF",GTK_WINDOW(dialog),
+        GTK_FILE_CHOOSER_ACTION_SAVE,"Cancel",GTK_RESPONSE_CANCEL,"Export",GTK_RESPONSE_ACCEPT,NULL);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(chooser),TRUE);
+    gtk_file_chooser_set_local_only(GTK_FILE_CHOOSER(chooser),TRUE);
+    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(chooser),a->directory);
+    GDateTime *now=g_date_time_new_now_utc();
+    char *stamp=g_date_time_format(now,"%Y%m%dT%H%M%SZ");
+    char *name=g_strdup_printf("reception-%s-%s.adi",stamp,response==1 ? "selected" : "all");
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(chooser),name);
+    GtkFileFilter *filter=gtk_file_filter_new();
+    gtk_file_filter_set_name(filter,"ADIF (*.adi, *.adif)");
+    gtk_file_filter_add_pattern(filter,"*.adi"); gtk_file_filter_add_pattern(filter,"*.adif");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(chooser),filter);
+    if (gtk_dialog_run(GTK_DIALOG(chooser))==GTK_RESPONSE_ACCEPT) {
+        char *path=gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(chooser)), *log_path=reception_log_path(a);
+        GError *error=NULL;
+        gboolean ok=path && reception_log_export(path,log_path,rows,&error);
+        char *message=ok ? g_strdup_printf("Exported %u receptions: %s",rows->len,path) :
+            g_strdup(error ? error->message : "Choose a local export file.");
+        gtk_label_set_text(GTK_LABEL(a->logbook_message),message);
+        g_free(message); g_clear_error(&error); g_free(path); g_free(log_path);
+    }
+    gtk_widget_destroy(chooser);
+    g_free(name); g_free(stamp); g_date_time_unref(now); g_ptr_array_unref(rows);
+}
+
+static void show_logbook(GtkWidget *widget, gpointer data) {
+    (void)widget; App *a=data;
+    if (!a->logbook_dialog) {
+        a->logbook_dialog=gtk_dialog_new_with_buttons("RX log",GTK_WINDOW(a->window),
+            GTK_DIALOG_DESTROY_WITH_PARENT,"Edit selected",4,"Refresh",3,"Export selected ADIF",1,
+            "Export all ADIF",2,"Close",GTK_RESPONSE_CLOSE,NULL);
+        gtk_window_set_default_size(GTK_WINDOW(a->logbook_dialog),900,450);
+        GtkWidget *box=gtk_dialog_get_content_area(GTK_DIALOG(a->logbook_dialog));
+        gtk_container_set_border_width(GTK_CONTAINER(box),10);
+        GType types[LOG_COLUMNS+2];
+        for (int i=0;i<LOG_COLUMNS;++i) types[i]=G_TYPE_STRING;
+        types[LOG_COLUMNS]=G_TYPE_DOUBLE;
+        types[LOG_COLUMNS+1]=G_TYPE_UINT;
+        a->logbook_store=gtk_list_store_newv(LOG_COLUMNS+2,types);
+        a->logbook_view=gtk_tree_view_new_with_model(GTK_TREE_MODEL(a->logbook_store));
+        g_object_unref(a->logbook_store); /* owned by the view */
+        const char *columns[]={"Time (UTC)","Frequency (Hz)","Service name","Provider name","Mode","TII","Source",
+            "SR (baud)","BW (Hz)","FEC","ATV points","ATV direction"};
+        for (int i=0;i<LOG_COLUMNS;++i) {
+            GtkCellRenderer *cell=gtk_cell_renderer_text_new();
+            GtkTreeViewColumn *column=gtk_tree_view_column_new_with_attributes(columns[i],cell,"text",i,NULL);
+            gtk_tree_view_column_set_resizable(column,TRUE);
+            gtk_tree_view_column_set_sort_column_id(column,i==LOG_FREQUENCY ? LOG_COLUMNS : i);
+            gtk_tree_view_append_column(GTK_TREE_VIEW(a->logbook_view),column);
+        }
+        gtk_tree_selection_set_mode(gtk_tree_view_get_selection(GTK_TREE_VIEW(a->logbook_view)),GTK_SELECTION_MULTIPLE);
+        g_signal_connect(a->logbook_view,"row-activated",G_CALLBACK(logbook_activated),a);
+        gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(a->logbook_store),LOG_TIME,GTK_SORT_DESCENDING);
+        GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
+        gtk_widget_set_vexpand(scroll,TRUE); gtk_widget_set_hexpand(scroll,TRUE);
+        gtk_container_add(GTK_CONTAINER(scroll),a->logbook_view);
+        gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
+        a->logbook_message=gtk_label_new("");
+        gtk_label_set_xalign(GTK_LABEL(a->logbook_message),0);
+        gtk_label_set_selectable(GTK_LABEL(a->logbook_message),TRUE);
+        gtk_label_set_line_wrap(GTK_LABEL(a->logbook_message),TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(a->logbook_message),100);
+        gtk_box_pack_start(GTK_BOX(box),a->logbook_message,FALSE,FALSE,8);
+        g_signal_connect(a->logbook_dialog,"response",G_CALLBACK(logbook_response),a);
+        g_signal_connect(a->logbook_dialog,"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+    }
+    logbook_refresh(a);
+    gtk_widget_show_all(a->logbook_dialog);
+    gtk_window_present(GTK_WINDOW(a->logbook_dialog));
+}
 
 static void usb_source_refresh(App *a) {
     const char *section=sources[a->source];
@@ -2017,7 +2339,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);
     const char *shortcuts[][2]={
         {"Key","Description"},
-        {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A","Open Input / Mode / Renderer / TCI / Log / About"},
+        {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A","Open Input / Mode / Renderer / TCI / Application log / About"},
         {"R","Reset TSscatterFix reconstruction"},
         {"M","Mute / unmute speakers (DVB and USB / FM / FM-DATA); TCI audio continues"},
         {"U","USB receiver (3 kHz), speaker and TCI on/off"},
@@ -2231,6 +2553,13 @@ static void show_diagnostics(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->diagnostics_dialog));
 }
 
+static void log_menu_selected(GtkWidget *widget, gpointer data) {
+    App *a=data;
+    gtk_popover_popdown(GTK_POPOVER(a->log_popover));
+    if (widget==a->application_log_item) show_diagnostics(widget,a);
+    else show_logbook(widget,a);
+}
+
 static void diagnostics_response(GtkDialog *dialog, gint response, gpointer data) {
     App *a=data;
     if (response == GTK_RESPONSE_APPLY) {
@@ -2242,7 +2571,7 @@ static void diagnostics_response(GtkDialog *dialog, gint response, gpointer data
 }
 
 static void create_diagnostics(App *a) {
-    a->diagnostics_dialog = gtk_dialog_new_with_buttons("Startup command / Log", GTK_WINDOW(a->window),
+    a->diagnostics_dialog = gtk_dialog_new_with_buttons("Application log", GTK_WINDOW(a->window),
         GTK_DIALOG_DESTROY_WITH_PARENT, "Copy selection", GTK_RESPONSE_APPLY, "Close", GTK_RESPONSE_CLOSE, NULL);
     gtk_window_set_default_size(GTK_WINDOW(a->diagnostics_dialog), 800, 500);
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
@@ -2523,10 +2852,26 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(menu),tci_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(tci_item,"Open TCI · Alt+T");
     g_signal_connect(tci_item,"clicked",G_CALLBACK(show_tci),a);
-    GtkWidget *log_item = gtk_button_new_with_label("Log");
-    gtk_box_pack_start(GTK_BOX(menu), log_item, FALSE, FALSE, 0);
-    gtk_widget_set_tooltip_text(log_item, "Open Startup command / Log · Alt+L");
-    g_signal_connect(log_item, "clicked", G_CALLBACK(show_diagnostics), a);
+    a->log_menu=gtk_menu_button_new();
+    gtk_button_set_label(GTK_BUTTON(a->log_menu),"Log");
+    gtk_box_pack_start(GTK_BOX(menu),a->log_menu,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->log_menu,"Application log and RX log");
+    a->log_popover=gtk_popover_new(a->log_menu);
+    GtkWidget *log_options=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
+    gtk_container_set_border_width(GTK_CONTAINER(log_options),6);
+    gtk_container_add(GTK_CONTAINER(a->log_popover),log_options);
+    a->application_log_item=gtk_model_button_new();
+    g_object_set(a->application_log_item,"text","Application log",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->application_log_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->application_log_item,"Startup command and application messages · Alt+L");
+    g_signal_connect(a->application_log_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    a->logbook_item=gtk_model_button_new();
+    g_object_set(a->logbook_item,"text","RX log",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->logbook_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->logbook_item,"View receptions and export selected rows or the entire log in ADIF");
+    g_signal_connect(a->logbook_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    gtk_widget_show_all(log_options);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(a->log_menu),a->log_popover);
     gtk_box_pack_start(GTK_BOX(menu), about_item, FALSE, FALSE, 0);
     gtk_widget_set_tooltip_text(config_item, "Open Input · Alt+I");
     gtk_widget_set_tooltip_text(mode_item, "Open Mode · Alt+M");
@@ -2611,6 +2956,10 @@ static void gui(App *a) {
     gtk_widget_set_sensitive(a->fm_data_toggle,a->usb_receiver!=NULL);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->fm_data_toggle,FALSE,FALSE,0);
     g_signal_connect(a->fm_data_toggle,"toggled",G_CALLBACK(usb_toggled),a);
+    a->reception_button=gtk_button_new_with_label("Log");
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->reception_button,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->reception_button,"Add the current digital service and provider to the reception log");
+    g_signal_connect(a->reception_button,"clicked",G_CALLBACK(show_reception_log),a);
     gtk_widget_set_hexpand(view, TRUE); gtk_widget_set_vexpand(view, TRUE);
     gtk_grid_attach(GTK_GRID(a->dashboard), view, 0, 0, 1, 1);
     a->lower = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);

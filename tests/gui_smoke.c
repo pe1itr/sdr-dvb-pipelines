@@ -750,8 +750,36 @@ static void exercise_menu_clicks(App *a) {
     GtkWidget *menu = controls->data;
     g_assert_cmpstr(gtk_widget_get_name(menu), ==, "receiver-menu");
     GList *buttons = gtk_container_get_children(GTK_CONTAINER(menu));
-    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog, a->diagnostics_dialog};
-    g_assert_cmpuint(g_list_length(buttons), ==, G_N_ELEMENTS(dialogs) + 1);
+    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog};
+    g_assert_cmpuint(g_list_length(buttons), ==, G_N_ELEMENTS(dialogs) + 2);
+    g_assert_nonnull(g_list_find(buttons,a->log_menu));
+    buttons=g_list_remove(buttons,a->log_menu);
+    GList *spectrum_buttons=gtk_container_get_children(GTK_CONTAINER(a->iq_view.filter_controls));
+    GList *fm_data=g_list_find(spectrum_buttons,a->fm_data_toggle);
+    g_assert_nonnull(fm_data); g_assert_nonnull(fm_data->next);
+    g_assert_true(fm_data->next->data==a->reception_button);
+    g_list_free(spectrum_buttons);
+    gboolean running=a->running;
+    a->running=TRUE; power_refresh(a);
+    gtk_button_clicked(GTK_BUTTON(a->reception_button));
+    g_assert_nonnull(a->reception_dialog);
+    gtk_dialog_response(GTK_DIALOG(a->reception_dialog),GTK_RESPONSE_CANCEL);
+    g_assert_null(a->reception_dialog);
+    a->running=running; power_refresh(a);
+    g_assert_true(gtk_menu_button_get_popover(GTK_MENU_BUTTON(a->log_menu))==GTK_POPOVER(a->log_popover));
+    GtkWidget *log_items[]={a->application_log_item,a->logbook_item};
+    const char *log_titles[]={"Application log","RX log"};
+    for (unsigned i=0;i<G_N_ELEMENTS(log_items);++i) {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),TRUE);
+        g_assert_true(gtk_widget_get_visible(a->log_popover));
+        gtk_button_clicked(GTK_BUTTON(log_items[i]));
+        GtkWidget *dialog=i ? a->logbook_dialog : a->diagnostics_dialog;
+        g_assert_true(gtk_widget_get_visible(dialog));
+        g_assert_cmpstr(gtk_window_get_title(GTK_WINDOW(dialog)),==,log_titles[i]);
+        gtk_dialog_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(dialog));
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),FALSE);
+    }
     for (unsigned i = 0; i < G_N_ELEMENTS(dialogs) + 1; ++i) {
         GtkWidget *button = g_list_nth_data(buttons, i);
         for (int lower_edge = 0; lower_edge < 2; ++lower_edge) {
@@ -1208,6 +1236,108 @@ static void exercise_programs(App *a, const TsInfoSnapshot *snapshot) {
     v->select = select_program; v->data = a;
 }
 
+static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoSnapshot *snapshot) {
+    App test=*a;
+    test.config=g_key_file_new();
+    test.running=TRUE; test.stopping=FALSE; test.source=2; test.standard=3;
+    test.sr=8000000;
+    test.decoder_view.status_time=g_get_monotonic_time();
+    test.decoder_view.status.locks=DECODER_FEC;
+    g_strlcpy(test.decoder_view.status.fec,"3/5",sizeof(test.decoder_view.status.fec));
+    test.reception_dialog=NULL;
+    ScatterBackend scatter={.information=backend};
+    test.scatter_backend=&scatter;
+    g_key_file_set_double(test.config,"b210","frequency",28000000);
+    g_key_file_set_double(test.config,"b210","lo_offset",408000000);
+    g_key_file_set_double(test.config,"b210","receiver_offset",125000);
+    char *path=g_build_filename(a->directory,"reception-log.csv",NULL);
+    show_reception_log(NULL,&test);
+    g_assert_nonnull(test.reception_dialog);
+    ReceptionEntry *entry=g_object_get_data(G_OBJECT(test.reception_dialog),"reception-entry");
+    g_assert_cmpstr(entry->mode,==,"DVB-T2");
+    g_assert_cmpstr(entry->symbol_rate,==,"");
+    g_assert_cmpstr(entry->bandwidth,==,"8000000");
+    g_assert_cmpstr(entry->fec,==,"3/5");
+    g_assert_cmpfloat_with_epsilon(gtk_spin_button_get_value(GTK_SPIN_BUTTON(entry->frequency)),436.125,.0000001);
+    for (unsigned i=0;i<snapshot->count;++i) if (snapshot->services[i].id==snapshot->selected) {
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(entry->service)),==,snapshot->services[i].name);
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(entry->provider)),==,snapshot->services[i].provider);
+    }
+    gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_CANCEL);
+    g_assert_null(test.reception_dialog);
+    g_assert_false(g_file_test(path,G_FILE_TEST_EXISTS));
+
+    show_reception_log(NULL,&test);
+    entry=g_object_get_data(G_OBJECT(test.reception_dialog),"reception-entry");
+    gtk_entry_set_text(GTK_ENTRY(entry->service),"Test, \"TV\" é");
+    gtk_entry_set_text(GTK_ENTRY(entry->provider),"Provider, one");
+    gtk_entry_set_text(GTK_ENTRY(entry->points),"1234");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(entry->direction),1);
+    /* Later tuning must not change the captured frequency or mode. */
+    g_key_file_set_double(test.config,"b210","frequency",144000000);
+    test.standard=0;
+    gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_null(test.reception_dialog);
+    GError *error=NULL;
+    g_assert_true(reception_log_append(path,"2026-11-06T12:34:56.000000Z",227360000,
+        "DAB service","Provider\nTwo","DAB+","12:03; 21:07","rtlsdr","","1536000","","","",&error));
+    g_assert_no_error(error);
+
+    show_logbook(NULL,&test);
+    g_assert_cmpint(gtk_tree_model_iter_n_children(GTK_TREE_MODEL(test.logbook_store),NULL),==,2);
+    gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(test.logbook_store),LOG_COLUMNS,GTK_SORT_ASCENDING);
+    GtkTreeSelection *selection=gtk_tree_view_get_selection(GTK_TREE_VIEW(test.logbook_view));
+    /* Sorted row 1 is file row 0. Edit it while the receiver is stopped. */
+    test.running=FALSE;
+    GtkTreePath *second=gtk_tree_path_new_from_indices(1,-1);
+    gtk_tree_view_row_activated(GTK_TREE_VIEW(test.logbook_view),second,
+        gtk_tree_view_get_column(GTK_TREE_VIEW(test.logbook_view),0));
+    gtk_tree_path_free(second);
+    g_assert_nonnull(test.reception_dialog);
+    entry=g_object_get_data(G_OBJECT(test.reception_dialog),"reception-entry");
+    g_assert_cmpint(entry->edit_index,==,0);
+    gtk_entry_set_text(GTK_ENTRY(entry->points),"4321");
+    gtk_entry_set_text(GTK_ENTRY(entry->fields[LOG_FEC]),"2/3");
+    gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_null(test.reception_dialog);
+    test.running=TRUE;
+    g_assert_cmpint(gtk_tree_model_iter_n_children(GTK_TREE_MODEL(test.logbook_store),NULL),==,2);
+    GtkTreePath *first=gtk_tree_path_new_from_indices(0,-1);
+    gtk_tree_selection_select_path(selection,first); gtk_tree_path_free(first);
+    GPtrArray *selected=logbook_rows(&test,TRUE), *all=logbook_rows(&test,FALSE);
+    g_assert_cmpuint(selected->len,==,1);
+    g_assert_cmpstr(((char **)selected->pdata[0])[LOG_TII],==,"12:03; 21:07");
+    char *export_path=g_build_filename(a->directory,"selected.adi",NULL);
+    g_assert_true(reception_log_export(export_path,path,selected,&error));
+    g_assert_no_error(error); g_free(export_path);
+    export_path=g_build_filename(a->directory,"all.adi",NULL);
+    g_assert_true(reception_log_export(export_path,path,all,&error));
+    g_assert_no_error(error); g_free(export_path);
+    g_assert_false(reception_log_export(path,path,all,&error));
+    g_assert_error(error,G_FILE_ERROR,G_FILE_ERROR_INVAL); g_clear_error(&error);
+    g_ptr_array_unref(selected); g_ptr_array_unref(all);
+    gtk_widget_destroy(test.logbook_dialog);
+    test.logbook_dialog=test.logbook_view=test.logbook_message=NULL; test.logbook_store=NULL;
+
+    /* Failed saves keep the dialog and its entries available. */
+    g_key_file_set_string(test.config,"logging","file","missing-directory/log.csv");
+    show_reception_log(NULL,&test);
+    entry=g_object_get_data(G_OBJECT(test.reception_dialog),"reception-entry");
+    gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_ACCEPT);
+    g_assert_nonnull(test.reception_dialog);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(entry->error)),!=,"");
+    gtk_dialog_response(GTK_DIALOG(test.reception_dialog),GTK_RESPONSE_CANCEL);
+
+    char *invalid=g_build_filename(a->directory,"unrelated.csv",NULL);
+    g_assert_true(g_file_set_contents(invalid,"unrelated data\n",-1,NULL));
+    g_assert_false(reception_log_append(invalid,"time",1,"s","p","DVB-T","","file","","8000000","auto","","",&error));
+    g_assert_error(error,G_FILE_ERROR,G_FILE_ERROR_INVAL); g_clear_error(&error);
+    char *contents=NULL;
+    g_assert_true(g_file_get_contents(invalid,&contents,NULL,NULL));
+    g_assert_cmpstr(contents,==,"unrelated data\n");
+    g_free(contents); g_free(invalid); g_free(path); g_key_file_unref(test.config);
+}
+
 static void exercise_information(App *a) {
     TsInfoView *v=&a->information;
     g_assert_true(v->dialogs[0]!=v->dialogs[1]);
@@ -1233,6 +1363,7 @@ static void exercise_information(App *a) {
         g_usleep(1000);
     } while (g_get_monotonic_time()<deadline);
     g_assert_nonnull(v->snapshot.page);
+    exercise_reception_log(a,backend,&v->snapshot);
     exercise_programs(a, &v->snapshot);
     g_assert_cmpstr(v->snapshot.video_codec,==,"H.264/AVC");
     g_assert_true(v->snapshot.events[0].valid);

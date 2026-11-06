@@ -1,5 +1,6 @@
 """Regression tests; Python is only a test dependency, not used by the receiver/GUI."""
 import configparser
+import csv
 import itertools
 import json
 import os
@@ -987,6 +988,32 @@ class LifecycleTests(PipelineTests):
                     _, err = p.communicate(timeout=12)
                     self.assertEqual(p.returncode, 0, err.decode())
                     self.assertNotIn(b"CRITICAL", err)
+                    with Path(tmp, "reception-log.csv").open(newline="") as log:
+                        rows = list(csv.DictReader(log))
+                    self.assertEqual(len(rows), 2)
+                    self.assertEqual(rows[0]["frequency_hz"], "436125000")
+                    self.assertEqual(rows[0]["mode"], "DVB-T2")
+                    self.assertEqual(rows[0]["service_name"], 'Test, "TV" é')
+                    self.assertEqual(rows[0]["provider_name"], "Provider, one")
+                    self.assertEqual(rows[0]["tii"], "")
+                    self.assertEqual(rows[0]["source"], "b210")
+                    self.assertEqual(rows[0]["symbol_rate_baud"], "")
+                    self.assertEqual(rows[0]["bandwidth_hz"], "8000000")
+                    self.assertEqual(rows[0]["fec"], "2/3")
+                    self.assertRegex(rows[0]["timestamp_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$")
+                    self.assertEqual(rows[1]["tii"], "12:03; 21:07")
+                    self.assertEqual(rows[1]["provider_name"], "Provider\nTwo")
+                    from test_reception_log import read_adif
+                    exported = read_adif(Path(tmp, "all.adi"))
+                    selected = read_adif(Path(tmp, "selected.adi"))
+                    self.assertEqual(len(exported), 2)
+                    self.assertEqual(len(selected), 1)
+                    self.assertEqual(selected[0]["APP_LINRADDVB_TII"], "12:03; 21:07")
+                    self.assertEqual(exported[1]["MODE"], "ATV")
+                    self.assertEqual(exported[1]["APP_LINRADDVB_MODE"], "DVB-T2")
+                    self.assertEqual(exported[1]["APP_VERON_ATV_POINTS"], "4321")
+                    self.assertEqual(exported[1]["APP_VERON_ATV_DIRECTION"], "ONE-WAY")
+                    self.assertIn("BW (Hz): 8000000; FEC: 2/3", exported[1]["COMMENT"])
                     self.assert_stopped(tmp, int(cfg["linrad"]["port"]))
                 finally:
                     self.cleanup_process(p, tmp)

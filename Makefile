@@ -91,6 +91,7 @@ GUI_SOURCES += src/program_view.c src/srt_output.c
 GUI_HEADERS += src/program_view.h src/srt_output.h
 GUI_HEADERS += src/decoder_margin.h
 GUI_HEADERS += src/signal_meter.h
+GUI_HEADERS += src/reception_log.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/dvbt2_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/components/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h
@@ -146,6 +147,11 @@ $(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h 
 test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
 	python3 tests/test_linrad.py
 	python3 tests/test_soapy_inputs.py
+
+.PHONY: test-reception-log
+test-reception-log:
+	python3 tests/test_reception_log.py
+test: test-reception-log
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -44,6 +44,44 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 - TSscatterFix image recovery from incomplete transport streams.
 - IQ and MPEG-TS recording, UDP transport-stream output and headless SRT output.
 - Parallel USB, FM and FM-DATA audio monitoring, TCI and optional PCM UDP output.
+- Manual digital reception log: UTC time, RF frequency, service/provider and mode in CSV.
+
+Click **Log**, directly beside **FM-DATA**, while receiving to capture the current
+digital service. Review the service and provider names (together identifying the
+station), then click **Save reception**. The timestamp and tuning are captured
+when the dialog opens. Nothing is logged automatically. The default file is `reception-log.csv`
+beside the configuration file; override it with `[logging] file=/path/to/log.csv`.
+Existing entries are preserved, and each saved entry is flushed and closed.
+Frequency includes converter LO and digital receiver offset. With Linrad input,
+check the manually configured frequency; it can be corrected in the log dialog.
+IQ replay is marked `source=file`, with the current logging time.
+The CSV also reserves a `tii` field for DAB transmitter identifiers. It is empty
+for DVB; live DAB/TII logging requires the future DAB receiver integration.
+
+Open **Log → RX log** in the top menu to view and sort saved receptions, including
+while the receiver is stopped. Double-click a row or choose **Edit selected** to
+correct reception data and complete the optional ATV points/direction fields.
+Edits replace that record atomically and reject stale edits if it changed on disk.
+Select rows with Ctrl/Shift and use **Export
+selected ADIF**, or **Export all ADIF** to save the entire list as an `.adi` file.
+This follows the selected/all export workflow in [MSHV](https://lz2hv.org/node/10).
+**Log → Application log** opens the pipeline/debug log (also available with Alt+L).
+
+ADIF exports mark receptions as `SWL=Y`, use UTC `QSO_DATE`/`TIME_ON` and MHz
+`FREQ`/`FREQ_RX`. DVB uses `MODE=ATV`; the precise DVB standard, service, provider,
+TII, source and full timestamp are retained in `APP_LINRADDVB_*` fields.
+No callsign is inferred from a service name. Loggers requiring `CALL` may reject
+broadcast reception records. ADI requires ASCII: readable names are transliterated,
+with lossless UTF-8/base64 originals in `*_UTF8_B64` application fields when needed;
+the CSV keeps the original UTF-8. See the [ADIF specification](https://adif.org.uk/318/ADIF_318.htm).
+Symbol rate (DVB-S/S2), bandwidth (DVB-T/T2) and FEC are captured in the logbook
+and included in the ADIF `COMMENT`, rather than additional ADIF fields. FEC uses
+fresh decoder telemetry when locked, otherwise the configured value (`auto` for DVB-T2).
+The optional contest fields export as `APP_VERON_ATV_POINTS` and
+`APP_VERON_ATV_DIRECTION` (`ONE-WAY` / `TWO-WAY`), matching the existing
+contestrobot ATV spreadsheet-to-ADIF converter. Empty fields are omitted.
+This is a reception log; a complete contest submission still needs callsigns,
+locators, reports and exchanges in the contest logging workflow.
 
 Inputs include RTL-SDR, HackRF, USRP B210, RFSpace SDR-IQ, AFEDRI / AFE822x,
 FUNcube Dongle Pro+, LimeSDR Mini v1.x, SDRplay RSP1A/B, Airspy HF+ Dual Port
