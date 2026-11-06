@@ -8,58 +8,6 @@
 namespace dab {
 namespace {
 
-#ifdef HAVE_DAB_RADIO
-class LibDabSdrBackend final : public DecoderBackend {
-public:
-    const char* name() const override { return "libdabsdr"; }
-    bool supports_tii() const override { return true; }
-
-    EnsembleInfo decode_ensemble(
-        const std::vector<std::complex<float>>& samples,
-        std::uint32_t frequency_khz) override
-    {
-        return dab::decode_ensemble(samples, frequency_khz);
-    }
-
-    CandidateFicResult decode_ensemble_at_frame_phase(
-        const std::vector<std::complex<float>>& samples,
-        std::uint32_t frequency_khz, std::size_t frame_phase_sample,
-        std::size_t max_frames, int integer_carrier_offset,
-        bool spectrum_inverted) override
-    {
-        if (integer_carrier_offset != 0 || spectrum_inverted) {
-            CandidateFicResult result;
-            result.attempted = false;
-            result.frame_phase_sample = frame_phase_sample;
-            result.rejection_reason =
-                "libdabsdr_candidate_carrier_or_inversion_unsupported";
-            return result;
-        }
-        return dab::decode_ensemble_at_frame_phase(
-            samples, frequency_khz, frame_phase_sample, max_frames);
-    }
-
-    std::vector<EnsembleSubscan> decode_ensemble_subscans(
-        const std::vector<std::complex<float>>& samples,
-        std::uint32_t frequency_khz, std::size_t window_samples,
-        std::size_t passes) override
-    {
-        if (cancellation_requested()) return {};
-        return dab::decode_ensemble_subscans(
-            samples, frequency_khz, window_samples, passes);
-    }
-
-    TiiInfo decode_tii(const std::vector<std::complex<float>>& samples,
-                       std::uint32_t frequency_khz,
-                       const TiiDecodeSettings& settings) override
-    {
-        return dab::decode_tii(
-            samples, frequency_khz, settings.conservative, settings.min_hits);
-    }
-};
-
-#endif
-
 class LibDxDabSdrBackend final : public DecoderBackend {
 public:
     explicit LibDxDabSdrBackend(bool weighted_phase_plane)
@@ -160,14 +108,12 @@ std::unique_ptr<DecoderBackend> make_decoder_backend(
     const std::string& name)
 {
     const auto selected = normalized(name);
-#ifdef HAVE_DAB_RADIO
-    if (selected == "libdabsdr") return std::make_unique<LibDabSdrBackend>();
-#endif
+
     if (selected == "libdxdabsdr")
         return std::make_unique<LibDxDabSdrBackend>(false);
     throw std::runtime_error(
         "unknown decoder backend '" + name +
-        "'; available backends: libdabsdr, libdxdabsdr");
+        "'; available backends: libdxdabsdr");
 }
 
 } // namespace dab

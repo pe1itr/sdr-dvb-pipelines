@@ -21,7 +21,7 @@ struct DynamicLabel {
 std::string dl_plus_content_type_name(std::uint8_t type);
 
 // Reassembles the bounded XPAD Dynamic Label and DL Plus data groups delivered
-// by libdabsdr. The library has already checked the data-group CRC.
+// by the PAD transport after it checks the data-group CRC.
 class DynamicLabelDecoder {
 public:
     std::optional<DynamicLabel> push_data_group(

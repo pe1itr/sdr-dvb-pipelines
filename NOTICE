@@ -24,7 +24,6 @@ Bundled code retains its own copyright notices and license terms:
 - third_party/leansdr: GPL-3.0-or-later; see LICENSE.txt and ORIGIN there.
 - third_party/ldpc: 0BSD; see LICENSE and ORIGIN there.
 - components/dvbt2: GPL version 3; see LICENSE and UPSTREAM.json there.
-- components/dab/lib: libdabsdr 4.0.1, MIT, Petr Kopecký; see lib/LICENSE.
 - components/tsscatterfix: MIT; see LICENSE there.
 
 The earlier MIT notice for project-owned code is retained in
@@ -35,3 +34,7 @@ license under which they were distributed; the current component is GPLv3.
 See docs/credits.md for component authors and acknowledgements. Third-party
 broadcast content visible in screenshots and linked videos is not covered by
 the software license.
+
+The optional DAB+ AAC codec is the system FAAD2 library (GPL-2.0-or-later).
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+FAAD2 sources and licensing: https://github.com/knik0/faad2

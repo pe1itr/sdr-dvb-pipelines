@@ -195,9 +195,9 @@ The complete application builds on Linux. You need:
 - Development libraries for GTK 3, GLib, json-c, single-precision FFTW3,
   SoapySDR, UHD, ALSA, libsamplerate, libVLC 3, libzvbi and FFmpeg
   (`libavcodec`, `libavformat`, `libavutil`, `libswscale`).
-- For DAB+ audio and slideshow: FDK-AAC development files (`pkg-config fdk-aac`).
-  The MIT libdabsdr 4.0.1 binaries for Linux x86_64/aarch64 are bundled; without
-  these audio dependencies only independent FIC/TII decoding is built.
+- For DAB+ audio and slideshow: FAAD2 development files (`pkg-config faad2`).
+  Our source-built libdxdabsdr handles Mode-I demodulation and EEP-A/B transport;
+  FAAD2 decodes AAC. Without FAAD2/ALSA, FIC/TII decoding remains available.
 - VLC codec plugins for playback and the drivers/firmware for your SDR.
   Native LimeSDR Mini support additionally requires LimeSuite at build time.
 

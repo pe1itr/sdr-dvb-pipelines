@@ -21,7 +21,6 @@ Bundled components retain their own licenses and credits:
 | DVB-T2 / OnAir | [adswill and contributors](https://github.com/adswill/OnAir); integration and local optimizations maintained here | [GPL-3.0](../components/dvbt2/LICENSE), [UPSTREAM.json](../components/dvbt2/UPSTREAM.json), [component documentation](../components/dvbt2/README.md) |
 | DAB DSP and integration | Rob Hardenberg / PE1ITR; developed from his own dab-monitor project | Project GPL-3.0-only; [provenance](../components/dab/ORIGIN) |
 | DAB polyphase resampler and DSP support | OnAir, adswill and contributors; reuses the generic DSP sources bundled with the DVB-T2 component | [GPL-3.0](../components/dvbt2/LICENSE), [UPSTREAM.json](../components/dvbt2/UPSTREAM.json) |
-| libdabsdr 4.0.1 | Petr Kopecký / AbracaDABra | [MIT](../components/dab/lib/LICENSE), [component documentation](../components/dab/README.md) |
 | TSscatterFix | Rob Hardenberg / PE1ITR | [MIT](../components/tsscatterfix/LICENSE), [component history](../components/tsscatterfix/README.md) |
 
 The combined executable is distributed under GPLv3; the component license
@@ -31,14 +30,18 @@ component license texts into `build/`.
 
 External / upstream software used by this project, including LeanDVB / LeanSDR, VLC, Linrad, SoapySDR, rtl-sdr, and HackRF libraries, remains subject to its own license terms.
 
-The DAB+ audio path uses Fraunhofer FDK-AAC for AAC decoding and ALSA for audio
-output. Its sample-rate conversion uses the OnAir resampler above and
+The DAB+ audio path uses the system [FAAD2](https://github.com/knik0/faad2)
+library (GPL-2.0-or-later) for AAC decoding and ALSA for audio output.
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com.
+Our libdxdabsdr implements the DAB demodulation and transport; its versioned
+ETSI references and implementation provenance are recorded in
+[components/dab/ORIGIN](../components/dab/ORIGIN) and next to the algorithms. Its sample-rate conversion uses the OnAir resampler above and
 libsamplerate. These external libraries retain their own notices and licenses.
 The optional NVIDIA video player uses FFplay from FFmpeg with CUDA decoding
 and Vulkan/libplacebo rendering; embedded video playback uses libVLC.
 
 Many thanks to these authors and maintainers, and to the contributors to GTK / GLib,
-FFmpeg, FFTW, libzvbi, FDK-AAC, ALSA, libsamplerate, json-c, UHD, LimeSuite and the SoapySDR
+FFmpeg, FFTW, libzvbi, FAAD2, ALSA, libsamplerate, json-c, UHD, LimeSuite and the SoapySDR
 drivers and device libraries, including SDRplay and Airspy support.
 
 ## Licensing policy

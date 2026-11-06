@@ -2609,17 +2609,17 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "including its C++ receiver core and Rust FEC code (GPL-3.0). "
         "DAB also reuses OnAir's generic polyphase resampler and DSP support. "
         "Integration and local optimizations are maintained in this project.",NULL);
-    about_label(box,"DAB+ radio decoding: libdabsdr 4.0.1 from AbracaDABra, "
-        "Petr Kopecký (MIT). AAC audio decoding: Fraunhofer FDK-AAC. "
+    about_label(box,"DAB+ radio decoding: project libdxdabsdr. AAC audio decoding: FAAD2 (GPL-2.0-or-later). "
+        "Code from FAAD2 is copyright (c) Nero AG, www.nero.com. "
         "Audio output uses ALSA; sample-rate conversion also uses libsamplerate.",NULL);
     about_link(box,"LeanSDR / LeanDVB · pabr","https://github.com/pabr/leansdr");
     about_link(box,"LDPC · Ahmet Inan (xdsopl)","https://github.com/xdsopl/LDPC");
     about_link(box,"LDPC helper adaptation · pabr","https://github.com/pabr/xdsopl-LDPC-pabr");
     about_link(box,"Acquisition patch · Ondřej OK1CDJ (issue #41)","https://github.com/pabr/leansdr/issues/41");
     about_link(box,"OnAir · DVB-T2 receiver and shared DAB resampler","https://github.com/adswill/OnAir");
-    about_link(box,"AbracaDABra · Petr Kopecký · libdabsdr","https://github.com/KejPi/AbracaDABra");
+    about_link(box,"FAAD2 · AAC decoder","https://github.com/knik0/faad2");
     about_label(box,"Also built on Linrad, GTK / GLib, libVLC, FFmpeg, FFTW, libzvbi, "
-        "FDK-AAC, ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
+        "FAAD2, ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
         "Thanks also to the SoapySDR driver and device-library authors, including "
         "HackRF, RFSPACE, RTL-SDR, SDRplay and Airspy support.",NULL);
     about_label(box,"Source provenance, local changes and license texts are included under "

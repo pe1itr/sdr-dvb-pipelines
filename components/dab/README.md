@@ -16,14 +16,28 @@ dynamic-label parser and MOT slideshow reassembler. The host adapters are:
   called by the existing SDR input helper.
 - `channels.h`: ordered Band III blocks 5A through 13F, matching dab-monitor.
 
-The root Makefile builds `build/dab_worker`. With FDK-AAC/ALSA development
-packages and a supported Linux architecture it also copies `libdabsdr.so.4`
-beside the executable. `lib/` contains the MIT-licensed 4.0.1 binaries and
-headers from AbracaDABra, not its GUI or external decoder sources. The
-independent DX decoder builds without that library. The application clearly
-reports when audio is unavailable. The current radio path supports DAB+
-(AAC), as in dab-monitor; classic DAB MPEG Layer II audio is not implemented.
-Windows DAB reception is not enabled by the Windows build helper.
+The root Makefile builds `build/dab_worker` entirely from source. With FAAD2
+and ALSA development packages it enables DAB+ audio. `libdxdabsdr` now handles
+streaming OFDM/DQPSK, EEP-A/B depuncturing, soft Viterbi decoding, time
+deinterleaving, energy dispersal, Reed-Solomon correction, DAB+ superframes
+and PAD transport. The AAC codec itself is the external FAAD2 library.
+The former libdabsdr binary adapter and bundled binaries are removed.
+Without FAAD2/ALSA the independent FIC/TII path remains available.
+
+This first radio implementation supports Mode I, EEP-A/B and unencrypted
+mono/stereo DAB+ services up to 192 kbit/s. Classic DAB MPEG Layer II, UEP,
+surround audio and seamless ensemble reconfiguration are not implemented.
+Reconfiguration pauses audio and rebuilds routing from current FIGs. PAD
+supports DLS/DL+ and the legacy MOT application types 12/13; arbitrary
+FIG 0/13 application-type assignments are not yet supported. Windows DAB
+reception is not enabled by the Windows build helper.
+
+Protocol references are pinned to ETSI EN 300 401 V2.1.1 and TS 102 563 V2.1.1
+(2017-01), with clauses/tables beside the implementation. See [ORIGIN](ORIGIN)
+for source URLs and the distinction between protocol facts, original receiver
+choices and reused project/third-party components. These references document
+provenance; they do not establish a legal clean-room process or improved
+sensitivity. The new continuous radio does not yet use the DX path's 2D fallback.
 
 ## Reception profiles
 
@@ -40,7 +54,7 @@ At 2.048 MS/s the additional channel filter is optional.
 Ordinary DVB narrowband filters must be disabled or wide enough for DAB.
 
 Normal reception uses the independent adaptive FIC decoder and conservative
-TII settings alongside a continuous libdabsdr radio session. Weak/DX adds the
+TII settings alongside a continuous libdxdabsdr radio session. Weak/DX adds the
 original PRS timing/carrier-offset/inversion fallback and bounded accumulation
 of CRC-validated identity fragments. Aircraft scatter additionally enables
 temporal PRS ranking and six overlapping 2.5-second subscans of each 8-second
@@ -112,6 +126,7 @@ LO spectrum and conducted power still require hardware validation.
 ## Tests
 
 ```sh
+make test-dab-core  # DAB unit tests without the GTK/Rust application build
 make test-dab
 make build/dab_gui_smoke
 python3 tests/test_linrad.py LifecycleTests.test_dab_gui_controls
@@ -120,18 +135,23 @@ DAB_FIXTURE_DIR=/path/to/dab-monitor/artifacts/fixtures python3 tests/test_dab.p
 ```
 
 Core tests exercise TII collisions/false IDs, partial identity isolation,
-filter rejection, dynamic labels, MOT and radio callback selection. UHD mocks
+filter rejection, EEP profiles, Viterbi decoding, time deinterleaving, RS
+correction, superframes, PAD CRC/fragment handling, FAAD2 configuration and
+bounded radio queues. UHD mocks
 verify physical ports, the requested synthesizer frequency, tone/amplitude,
 coercion failure and end-of-burst cleanup without opening a device. GTK tests
 exercise mode/channel controls, station commands, TII confirmation/logging,
 reset, stop and retune using a synthetic IQ helper. Optional IQ regressions
 check 9C identity/TII and reject the known false 4615 detection on 7C.
 
-Validation on the initial integration also replayed weak 5B with the channel
-filter (UEId E38655, `5B NM Limburg`) and paced the 11C recording into the radio
-path: 14 stations discovered, SLAM! selected, 96 audio frames decoded, zero
-dropped radio IQ blocks. Audio output was disabled for this replay. These are
-software replay results, not measurements of the current antenna/mixer setup.
+Validation of the new radio replayed the 11C fixture with 14 discovered
+stations and decoded AAC audio. The 12-second paced regressions at 10 and
+20 MS/s decoded more than 200 audio frames each, with zero radio IQ drops;
+the 20 MS/s source-filter replay also passed. Playback was disabled: these
+are software replay results, not antenna/mixer or listening measurements.
+Comparative weak-signal sensitivity and live ensemble changes need further
+validation. An uncorrectable RS column currently rejects the whole superframe;
+individual CRC-failed AUs use a short ramp to silence.
 
 The paced reception regression (requires NumPy/SciPy and the recorded fixtures)
 checks 12 seconds at both 10 and 20 MS/s, including station selection, audio
@@ -146,3 +166,15 @@ than the source queue's half-second capacity behind the live clock.
 It also exercises the production IQ file source with the common 1.778112 MHz
 BW filter enabled at 20 MS/s. That regression checks source elapsed time,
 decoder lag, audio and IQ/DX drops through the first eight-second analysis.
+
+The optional `stream_acquisition` regression reports first CRC-valid FIC,
+ECC/EId and CRC-valid audio AU separately, measured in delivered IQ duration
+(2 ms chunks). Reducing the streaming acquisition buffer from three to two
+frames changed first FIC from 288 to 192 ms on the 9C, 11C and 7D controls,
+with identical valid-frame/AU counts. ECC/EId appeared at 356/950/634 ms and
+the first valid AU at 644/662/634 ms respectively. These are fixture-specific
+results, excluding tuner settling and processing delay. An AU is compressed
+audio, not yet audible PCM; identity depends on received FIG repetition.
+The application still runs its deeper DX analysis on separate longer captures.
+The streaming radio's 192 ms FIC result does not shorten that DX job or prove
+recovery from a 192 ms weak burst. See the research/provenance notes in ORIGIN.

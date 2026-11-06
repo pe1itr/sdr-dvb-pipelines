@@ -174,7 +174,7 @@ struct TiiInfo {
 
 // Effective thresholds for the independent DX TII decoder. The monitor
 // resolves profile defaults and optional configuration overrides before each
-// call; the production libdabsdr adapter uses only conservative/min_hits.
+// call.
 struct TiiDecodeSettings {
     bool conservative = true;
     std::size_t min_hits = 2;
@@ -210,35 +210,5 @@ inline TiiDecodeSettings default_tii_decode_settings(
     }
     return settings;
 }
-
-// Decode the FIC from 2.048 MS/s complex IQ. The implementation uses the
-// separately distributed MIT-licensed AbracaDABra libdabsdr binary.
-EnsembleInfo decode_ensemble(const std::vector<std::complex<float>>& samples,
-                             std::uint32_t frequency_khz);
-
-// Project raw Mode-I samples onto one PRS-confirmed frame phase before using
-// the existing CRC-valid FIC decoder. Each OFDM useful window is selected on
-// that timing raster; its cyclic prefix and the transmission-frame null are
-// rebuilt. No identity is returned unless the normal FIC decoder validates it.
-CandidateFicResult decode_ensemble_at_frame_phase(
-    const std::vector<std::complex<float>>& samples,
-    std::uint32_t frequency_khz, std::size_t frame_phase_sample,
-    std::size_t max_frames);
-
-// Re-run the FIC decoder on evenly distributed, overlapping time windows from
-// one IQ capture. This does not retune or synthesize samples. It can expose a
-// different ensemble when dominance changes during the capture; the decoder's
-// CRC-valid FIC remains the identity gate. Results are unique by UEId.
-std::vector<EnsembleSubscan> decode_ensemble_subscans(
-    const std::vector<std::complex<float>>& samples,
-    std::uint32_t frequency_khz, std::size_t window_samples,
-    std::size_t passes);
-
-// Decode transmitter identification information from a separate dwell on an
-// already FIC-confirmed mux. Confidence is the fraction of TII notifications
-// in which a Main/Sub pair occurred; min_hits controls confirmation.
-TiiInfo decode_tii(const std::vector<std::complex<float>>& samples,
-                   std::uint32_t frequency_khz, bool conservative,
-                   std::size_t min_hits);
 
 } // namespace dab

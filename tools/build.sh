@@ -154,9 +154,9 @@ libavutil|libavutil/avutil.h
 libswscale|libswscale/swscale.h
 zvbi-0.2|libzvbi.h
 LIBRARIES
-    if pkg-config --exists fdk-aac alsa && [[ -f components/dab/lib/linux_$(uname -m)/libdabsdr.so.4.0.1 ]]; then
+    if pkg-config --exists faad2 alsa; then
         report OK 'DAB+: audio and MOT slideshow enabled'
-    else report WARNING 'DAB+: FDK-AAC or libdabsdr unavailable; FIC/TII decoding only'; fi
+    else report WARNING 'DAB+: FAAD2 or ALSA unavailable; FIC/TII decoding only'; fi
     if pkg-config --exists LimeSuite; then report OK 'LimeSuite: native Lime RX enabled'
     else report WARNING 'LimeSuite unavailable; native LimeSDR Mini RX unavailable'; fi
     for program in ffmpeg vlc cvlc ffplay direwolf; do

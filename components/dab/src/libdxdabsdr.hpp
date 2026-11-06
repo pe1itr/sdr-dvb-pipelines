@@ -6,9 +6,31 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace dab::dx {
+
+struct StreamFrame {
+    EnsembleInfo ensemble;
+    std::vector<float> msc; // Four CIFs, positive = bit 0, zero = erasure.
+    bool fic_valid = false;
+    bool discontinuity = false;
+};
+
+// Streaming extension of our independent FIC/TII demodulator. Its state is
+// owned by one receive thread; reset on IQ loss or channel change.
+class StreamDemodulator {
+public:
+    StreamDemodulator();
+    ~StreamDemodulator();
+    void reset();
+    void feed(const std::complex<float>* iq, std::size_t count,
+              const std::function<void(StreamFrame&&)>& output);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 
 struct FicDecodeSettings {
     FicDecodeSettings(bool weighted = true, bool adaptive_phase = false,

@@ -136,7 +136,6 @@ package: all
 	cp $(LEAN_DIR)/LICENSE.txt $(BUILD_DIR)/leansdr-LICENSE.txt
 	cp $(LDPC_DIR)/LICENSE $(BUILD_DIR)/ldpc-LICENSE.txt
 	cp $(DVBT_DIR)/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
-	cp $(DAB_DIR)/lib/LICENSE $(BUILD_DIR)/dabsdr-LICENSE.txt
 	cp $(DVBT2_DIR)/LICENSE $(BUILD_DIR)/dvbt2-LICENSE.txt
 	cp $(SCATTER_DIR)/LICENSE $(BUILD_DIR)/tsscatterfix-LICENSE.txt
 	@echo "Start: ./build/linrad_dvb (config: linrad-dvb.ini)"

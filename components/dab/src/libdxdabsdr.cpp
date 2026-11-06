@@ -498,8 +498,10 @@ const std::array<int, fft_size>& logical_carrier_indices()
 }
 
 // Original implementation of the non-iterative dominant-sub-trellis idea in
-// W.J. van Houtum, "Iterative Decoding for Digital Audio Broadcasting",
-// TU/e, 2012, Sections 6.2--6.4 and 7.3. No
+// W.J. van Houtum, "Two-dimensional block-based reception for differentially
+// encoded OFDM systems", TU/e, 2012, sections 6.2--6.4 and 7.3, eq. 7.18.
+// https://doi.org/10.6100/IR734135 (dab-monitor/docs/734135.pdf).
+// Bibliographic title verified against the locally retained thesis. No
 // source code from the thesis or a third-party receiver was available or
 // copied. Each block contains eight physically adjacent Mode-I carriers and
 // PRS plus the three FIC observations. The known PRS phase makes the initial
@@ -2078,4 +2080,256 @@ TiiInfo decode_tii(const std::vector<std::complex<float>>& samples,
     return result;
 }
 
+} // namespace dab::dx
+
+// Streaming radio extension. Protocol geometry and bit ordering:
+// ETSI EN 300 401 V2.1.1 (2017-01), 14.2, 14.4, 14.5 and 14.6.
+// https://www.etsi.org/deliver/etsi_en/300400_300499/300401/02.01.01_60/en_300401v020101p.pdf
+// Receiver choices (not ETSI requirements): 32-sample early FFT window,
+// bounded reacquisition, fourth-power common-phase estimate, CRC-selected
+// quadrant. These reuse our existing independent FIC receiver primitives.
+namespace dab::dx
+{
+struct StreamDemodulator::Impl
+{
+    std::vector<std::complex<float>> buffer;
+    IdentityAccumulator identity;
+    bool locked = false, inverted = false, discontinuity = true, reconfiguring = false;
+    int carrier = 0, quadrant = 0;
+    double fine = 0;
+    unsigned misses = 0;
+    std::size_t anchor = 0;
+
+    StreamFrame demodulate()
+    {
+        StreamFrame out;
+        out.msc.resize(4 * 55296);
+        std::array<float, 9216> fic{};
+        // Estimate fractional CFO with cyclic prefixes; avoid symbol edges.
+        std::complex<double> cp{};
+        for (unsigned s = 0; s < 76; ++s)
+        {
+            auto start = anchor + null_size + s * symbol_size;
+            for (unsigned i = 64; i < guard - 64; i += 4)
+                cp += std::conj(std::complex<double>(buffer[start + i])) *
+                      std::complex<double>(buffer[start + i + fft_size]);
+        }
+        if (std::abs(cp) > 1e-12)
+            fine = std::arg(cp) * sample_rate / (2 * M_PI * fft_size);
+        const auto prs = anchor + null_size + guard - 32;
+        auto previous = symbol_fft(buffer, prs, fine, carrier, inverted);
+        const auto &map = carrier_map();
+        for (unsigned s = 0; s < 75; ++s)
+        {
+            auto current = symbol_fft(buffer, prs + (s + 1) * symbol_size, fine, carrier, inverted);
+            std::array<std::complex<double>, 1536> d{};
+            std::complex<double> fourth{};
+            double power = 0;
+            for (unsigned k = 0; k < 1536; ++k)
+            {
+                auto bin = (map[k] + 2048) % 2048;
+                double rms = std::sqrt(std::norm(current[bin]) + std::norm(previous[bin]));
+                d[k] = rms > 1e-12 ? current[bin] * std::conj(previous[bin]) / rms
+                                   : std::complex<double>{};
+                double a = std::abs(d[k]);
+                if (a > 1e-12)
+                {
+                    auto u = d[k] / a;
+                    fourth -= u * u * u * u * a;
+                    power += a;
+                }
+            }
+            auto rotation = std::polar(1., -0.25 * std::arg(fourth));
+            float *target = s < 3 ? fic.data() + s * 3072 : out.msc.data() + (s - 3) * 3072;
+            // Normalize once per symbol. Deep fades remain low-confidence;
+            // clipping limits the influence of an impulsive carrier.
+            double scale = power > 1e-12 ? 1536. / power : 0;
+            for (unsigned k = 0; k < 1536; ++k)
+            {
+                auto v = d[k] * rotation * scale;
+                target[k] = std::clamp(float(v.real()), -8.f, 8.f);
+                target[1536 + k] = std::clamp(float(v.imag()), -8.f, 8.f);
+            }
+            previous = current;
+        }
+        auto rotate = [](float *p, unsigned count, int q)
+        {
+            for (unsigned s = 0; s < count; s += 3072)
+                for (unsigned k = 0; k < 1536; ++k)
+                {
+                    float a = p[s + k], b = p[s + 1536 + k];
+                    switch (q)
+                    {
+                    case 1:
+                        p[s + k] = b;
+                        p[s + 1536 + k] = -a;
+                        break;
+                    case 2:
+                        p[s + k] = -a;
+                        p[s + 1536 + k] = -b;
+                        break;
+                    case 3:
+                        p[s + k] = -b;
+                        p[s + 1536 + k] = a;
+                        break;
+                    }
+                }
+        };
+        std::vector<std::array<std::uint8_t, 32>> best;
+        // Prefer established orientation; only search others if FIC fails.
+        for (int attempt = 0; attempt < 4; ++attempt)
+        {
+            int q = (quadrant + attempt) % 4;
+            auto trial = fic;
+            rotate(trial.data(), 9216, q);
+            std::vector<std::array<std::uint8_t, 32>> valid;
+            for (unsigned w = 0; w < 4; ++w)
+                for (auto &fib : decode_codeword(trial.data() + 2304 * w))
+                    if (valid_fib_crc(fib))
+                        valid.push_back(fib);
+            if (valid.size() > best.size())
+            {
+                best = std::move(valid);
+                quadrant = q;
+                break;
+            }
+        }
+        out.fic_valid = !best.empty();
+        for (const auto &fib : best)
+        {
+            // Drop accumulated service maps when a different ensemble appears.
+            for (unsigned pos = 0; pos < 30 && fib[pos] != 255;)
+            {
+                unsigned type = fib[pos] >> 5, len = fib[pos++] & 31;
+                if (!len || pos + len > 30)
+                    break;
+                if (type == 0 && len >= 5 && (fib[pos] & 0xdf) == 0)
+                {
+                    unsigned eid = (fib[pos + 1] << 8) | fib[pos + 2];
+                    if (identity.eid && *identity.eid != eid)
+                    {
+                        identity = {};
+                        discontinuity = true;
+                    }
+                    // Reconfiguration is handled conservatively: stop using old
+                    // routing until a current configuration is announced again.
+                    const bool changing = (fib[pos + 3] & 0xc0) != 0;
+                    if (changing != reconfiguring)
+                    {
+                        identity.subchannels.clear();
+                        identity.services.clear();
+                        discontinuity = true;
+                    }
+                    reconfiguring = changing;
+                }
+                pos += len;
+            }
+            ++identity.fic.valid_fibs;
+            parse_fib(fib, identity);
+        }
+        DecodeResult decoded;
+        update_decode_identity(decoded, identity);
+        out.ensemble = std::move(decoded.ensemble);
+        // EN 300 401 6.4: do not route an announced next configuration
+        // onto current MSC bytes. Resume from freshly collected current FIGs.
+        if (!reconfiguring)
+            out.ensemble.metadata = mux_metadata(identity);
+        rotate(out.msc.data(), out.msc.size(), quadrant);
+        if (out.fic_valid)
+            misses = 0;
+        else
+            ++misses;
+        out.discontinuity = discontinuity;
+        discontinuity = false;
+        return out;
+    }
+};
+StreamDemodulator::StreamDemodulator() : impl_(std::make_unique<Impl>()) {}
+StreamDemodulator::~StreamDemodulator() = default;
+void StreamDemodulator::reset() { impl_ = std::make_unique<Impl>(); }
+void StreamDemodulator::feed(const std::complex<float> *iq, std::size_t count,
+                             const std::function<void(StreamFrame &&)> &output)
+{
+    if (!iq || !count)
+        return;
+    auto &p = *impl_;
+    // Accept arbitrary caller chunks without unbounded accumulation.
+    while (count)
+    {
+        auto n = std::min(count, std::size_t(32768));
+        p.buffer.insert(p.buffer.end(), iq, iq + n);
+        iq += n;
+        count -= n;
+        for (;;)
+        {
+            if (!p.locked)
+            {
+                // Two frames bound the wait for a complete frame at any phase.
+                // This is an acquisition policy, not an ETSI requirement;
+                // validate timing separately from CRC-valid FIC and identity.
+                if (p.buffer.size() < 2 * frame_size)
+                    break;
+                auto detection = detect_mode_i(p.buffer, {});
+                FicDecodeSettings settings(false);
+                settings.two_dimensional_fallback = false;
+                auto candidate = strongest_phase_candidate(p.buffer, detection, settings);
+                if (!candidate)
+                {
+                    p.buffer.erase(p.buffer.begin(), p.buffer.begin() + frame_size);
+                    continue;
+                }
+                p.anchor = candidate->phase;
+                p.carrier = candidate->carrier_offset;
+                p.inverted = candidate->inverted;
+                p.fine = detection.fine_offset_hz;
+                p.locked = true;
+                p.misses = 0;
+                p.discontinuity = true;
+            }
+            if (p.anchor + frame_size + 64 > p.buffer.size())
+                break;
+            // Slowly track sample-clock drift with CP correlation. This is a
+            // local receiver heuristic; it does not alter the transmitted bits.
+            int shift = 0;
+            double best = -1;
+            for (int delta = -8; delta <= 8; ++delta)
+            {
+                if (std::int64_t(p.anchor) + delta < 0)
+                    continue;
+                std::complex<double> sum{};
+                double energy = 0;
+                for (unsigned s = 0; s < 76; s += 4)
+                    for (unsigned i = 16; i < guard - 16; i += 8)
+                    {
+                        auto at = std::size_t(std::int64_t(p.anchor) + delta) + null_size +
+                                  s * symbol_size + i;
+                        auto a = p.buffer[at], b = p.buffer[at + fft_size];
+                        sum += std::conj(std::complex<double>(a)) * std::complex<double>(b);
+                        energy += std::norm(a) + std::norm(b);
+                    }
+                double score = energy > 0 ? std::abs(sum) / energy : 0;
+                if (score > best)
+                {
+                    best = score;
+                    shift = delta;
+                }
+            }
+            p.anchor = std::size_t(std::int64_t(p.anchor) + shift);
+            auto frame = p.demodulate();
+            output(std::move(frame));
+            const auto consumed = p.anchor + frame_size;
+            // Keep a small margin so the next timing estimate can move earlier.
+            const auto discard = consumed - 64;
+            p.buffer.erase(p.buffer.begin(), p.buffer.begin() + discard);
+            p.anchor = 64;
+            if (p.misses >= 8)
+            {
+                p.locked = false;
+                p.discontinuity = true;
+                p.identity = {};
+                p.reconfiguring = false;
+            }
+        }
+    }
+}
 } // namespace dab::dx

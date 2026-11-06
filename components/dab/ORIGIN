@@ -1,12 +1,56 @@
-DAB DSP and radio code: local dab-monitor, revision ec7ced2e9619eab2c55c97ca59aaea9aa2aef4f5.
-Imported 2026-11-06; maintained here as a project component.
-The source repository has no standalone LICENSE; these are the user-owned project sources.
-libdabsdr 4.0.1 binaries and headers: AbracaDABra/lib, MIT, see lib/LICENSE.
-No external reference receiver sources were imported.
+DAB DSP and original FIC/TII, label and MOT code: local dab-monitor,
+revision ec7ced2e9619eab2c55c97ca59aaea9aa2aef4f5.
+Imported 2026-11-06; maintained here as project-owned GPL-3.0-only sources.
+The source repository has no standalone LICENSE.
 
-AbracaDABra source revision: 399306727a12a0eb3875118c42726b34397df01b
-Upstream: https://github.com/KejPi/AbracaDABra
-SHA-256 lib/linux_x86_64/libdabsdr.so.4.0.1:
-  d26bb57ae4740095262a2059e8e6bbcfe5c7d421a113915697f91df1ed15a4a6
-SHA-256 lib/linux_aarch64/libdabsdr.so.4.0.1:
-  6bec09c95890443754c1b6bc594a5050fd98fc268a413812523b37eeacb8a737
+The streaming radio extension, dx_msc and dx_pad were implemented here from
+published protocol specifications and existing project DSP primitives.
+The previous AbracaDABra libdabsdr 4.0.1 adapter, headers and binaries were
+removed from the current tree; earlier Git revisions retain their notices.
+No new receiver source was imported from AbracaDABra or OnAir for this
+extension. Reference receivers were inspected during investigation: this is
+an implementation provenance record, not a claim of legal clean-room isolation.
+The generic OnAir resampler remains reused from components/dvbt2, with its
+original GPL notices and UPSTREAM.json. AAC decoding uses external FAAD2,
+GPL-2.0-or-later: https://github.com/knik0/faad2
+Code from FAAD2 is copyright (c) Nero AG, www.nero.com
+
+Protocol sources (versions deliberately pinned, PDFs not bundled):
+ETSI EN 300 401 V2.1.1 (2017-01)
+https://www.etsi.org/deliver/etsi_en/300400_300499/300401/02.01.01_60/en_300401v020101p.pdf
+- 6.2/6.3/6.4: subchannels, components and reconfiguration.
+- 7.4: PAD contents indicators, data groups, CRC and dynamic labels.
+- 10: energy dispersal; 11.1/11.3.2, tables 13/18/20: convolution and EEP.
+- 12/table 21: time interleaving; 14: Mode-I OFDM, mapping and modulation.
+ETSI TS 102 563 V2.1.1 (2017-01)
+https://www.etsi.org/deliver/etsi_ts/102500_102599/102563/02.01.01_60/ts_102563v020101p.pdf
+- 5.1/5.2: AAC parameters, superframe structure, firecode and AU CRC.
+- 5.4: leading AAC data-stream element carrying PAD.
+- 6: shortened RS(120,110); annexes C/D: superframe synchronization/processing.
+ETSI TS 102 980 V2.1.1 (2017-01), 7.1: DL Plus command transport.
+https://www.etsi.org/deliver/etsi_ts/102900_102999/102980/02.01.01_60/ts_102980v020101p.pdf
+
+Implementation choices, not mandated by ETSI: bounded queues and recovery,
+soft reliability weighting, local CP timing tracking, fourth-power phase
+tracking, CRC-selected quadrant, Viterbi survivor storage, Berlekamp-Massey
+with Chien search and a small linear system for RS magnitudes, and a 5 ms
+PCM ramp on loss/recovery. No comparative performance advantage is claimed.
+Tests use synthetic transmitter vectors plus optional existing recorded IQ;
+the recordings and any broadcast audio are not distributed with the sources.
+
+Existing DX research reference, checked against dab-monitor/docs/734135.pdf:
+W.J. van Houtum (2012), Two-dimensional block-based reception for
+Differentially Encoded OFDM Systems, TU/e, sections 6.2--6.4 and 7.3,
+equation 7.18. https://doi.org/10.6100/IR734135
+This underlies the pre-existing non-iterative 8x4 FIC fallback, not the
+continuous audio demodulator. The earlier shorthand title in the source
+comment was corrected to the thesis's actual bibliographic title.
+
+Also consulted in dab-monitor: docs/fic-decoder-investigation.md and decisions
+0007 (PRS candidates), 0008 (CRC-valid identity accumulation), 0013 (temporal
+candidate ranking), 0019 (2D fallback). Their key constraint is retained:
+OFDM timing, a CRC-valid FIB, ECC+EId and confirmed TII are separate evidence
+levels. Do not wait for audio or a label before reporting protocol identity;
+do not equate a short lock or synthetic-noise rescue with verified DX gain.
+The local Steven thesis 374696-1.pdf (1992) was inspected as historical COFDM
+background; it supplies no constants or code in this extension.

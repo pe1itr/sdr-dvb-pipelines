@@ -198,7 +198,7 @@ int main(int argc,char **argv) {
         radio->start(hz/1000);
 #else
         (void)audio;
-        std::cerr<<"DAB+ audio unavailable: build with fdk-aac/ALSA and libdabsdr\n";
+        std::cerr<<"DAB+ audio unavailable: build with FAAD2 and ALSA\n";
 #endif
         DabResampler resampler(rate);
         std::unique_ptr<dab::StreamingChannelFilter> fir;
@@ -405,6 +405,9 @@ int main(int argc,char **argv) {
         }
         if (!interrupted && capture.size()>=196608) submit();
         {std::lock_guard<std::mutex> lock(diagnostics.mutex); diagnostics.eof=true; diagnostics.ready.notify_all();}
+#ifdef HAVE_DAB_RADIO
+        if (!interrupted) radio->finish();
+#endif
         // At EOF retain the final diagnostic result, including short IQ fixtures.
         worker.join();scope_thread.join();
         // Join guard expects a joinable thread only during exception cleanup.

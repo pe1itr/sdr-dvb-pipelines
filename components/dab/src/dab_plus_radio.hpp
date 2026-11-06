@@ -30,11 +30,11 @@ struct DabPlusRadioMetrics {
 };
 
 // Build the MPEG-4 AudioSpecificConfig required for one DAB+ access unit.
-// audio_header_raw uses the bit layout published by libdabsdr.
+// audio_header_raw follows ETSI TS 102 563 V2.1.1 table 2.
 std::vector<std::uint8_t> dab_plus_audio_specific_config(
     std::uint8_t audio_header_raw);
 
-// A persistent libdabsdr MSC session for interactive, single-channel DAB+
+// A persistent independent DX MSC session for interactive, single-channel DAB+
 // listening. It deliberately remains separate from the block-oriented DX
 // decoder API: dropping radio audio must never change DX evidence or logging.
 class DabPlusRadioSession {
@@ -49,6 +49,7 @@ public:
 
     void start(std::uint32_t frequency_khz);
     void stop() noexcept;
+    void finish(); // Drain queued IQ at EOF; stop() remains immediate cancellation.
     void set_muted(bool muted);
     void select_station(const std::string& station_selector);
     void push_samples(const std::complex<float>* samples, std::size_t count);
@@ -71,13 +72,6 @@ public:
     std::size_t decoded_slides() const;
     std::optional<MotSlide> take_slide();
     std::optional<DynamicLabel> take_dynamic_label();
-
-    // Callback entry points used by the C-only libdabsdr ABI.
-    void supply_input(float output[], std::uint16_t count);
-    void handle_notification(void* notification);
-    void handle_audio(void* audio);
-    void handle_dynamic_label(void* dynamic_label);
-    void handle_data_group(void* data_group);
 
 private:
     struct Impl;
