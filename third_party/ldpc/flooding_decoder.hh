@@ -1,3 +1,4 @@
+#include "../../src/aligned_memory.h"
 /*
 LDPC SISO flooding decoder
 
@@ -121,7 +122,7 @@ public:
 	void init(LDPCInterface *it)
 	{
 		if (initialized) {
-			free(aligned_buffer);
+			linrad_aligned_free(aligned_buffer);
 			delete[] cnc;
 			delete ldpc;
 		}
@@ -133,7 +134,7 @@ public:
 		CNL = ldpc->links_max_cn();
 		LT = ldpc->links_total();
 		int num = LT + N + R * CNL + R;
-		aligned_buffer = aligned_alloc(sizeof(TYPE), sizeof(TYPE) * num);
+		aligned_buffer = linrad_aligned_alloc(sizeof(TYPE), sizeof(TYPE) * num);
 		TYPE *ptr = reinterpret_cast<TYPE *>(aligned_buffer);
 		bnl = ptr; ptr += LT;
 		bnv = ptr; ptr += N;
@@ -160,7 +161,7 @@ public:
 	~LDPCDecoder()
 	{
 		if (initialized) {
-			free(aligned_buffer);
+			linrad_aligned_free(aligned_buffer);
 			delete[] cnc;
 			delete ldpc;
 		}

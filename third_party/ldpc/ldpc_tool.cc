@@ -1,3 +1,4 @@
+#include "../../src/aligned_memory.h"
 /*
 LDPC testbench
 Copyright 2018 Ahmet Inan <xdsopl@gmail.com>
@@ -77,7 +78,7 @@ template<typename V> struct DecoderRunner {
         if (!simd) {
             length = ldpc->code_len(); data_length = ldpc->data_len();
             decoder.init(ldpc);
-            simd = static_cast<V *>(aligned_alloc(64, (sizeof(V)*length+63)&~size_t(63)));
+            simd = static_cast<V *>(linrad_aligned_alloc(64, (sizeof(V)*length+63)&~size_t(63)));
             if (!simd) fatal("allocate LDPC workspace");
         }
         for (int j=0; j<blocks; j+=V::SIZE) {
@@ -90,7 +91,7 @@ template<typename V> struct DecoderRunner {
                 for (int i=0; i<length; ++i) code[(j+n)*length+i] = simd[i].v[n];
         }
     }
-    ~DecoderRunner() { free(simd); }
+    ~DecoderRunner() { linrad_aligned_free(simd); }
 };
 
 // EOF is allowed only between records; truncated frames are errors.

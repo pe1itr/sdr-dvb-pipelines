@@ -148,6 +148,11 @@ source packaging and tests. Tests require Python with NumPy; media tests also us
 GUI checks use `broadwayd` when available. Tests use synthetic data and local
 simulators; they do not replace reception checks with real signals.
 
+An experimental [native Windows x64 package](docs/windows.md) can also be built
+with `tools/build-windows.py` and `dev/package_windows.py`. It bundles its DLLs
+and plugins and does not require WSL. See the Windows notes for input support
+and validation limits.
+
 The source ZIP includes documentation, the screenshot, tests, decoder sources
 and licenses. It uses the current files on disk, including uncommitted changes,
 and builds without Git. It excludes local settings, recordings, build output,

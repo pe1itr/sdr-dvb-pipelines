@@ -171,7 +171,11 @@ int main(int argc, char **argv) {
         char stamp[32];
         time_t now = time(NULL);
         struct tm tm;
+#ifdef _WIN32
+        localtime_s(&tm, &now);
+#else
         localtime_r(&now, &tm);
+#endif
         strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
         /* Exclusive creation prevents accidentally overwriting a previous recording. */
         char *path = g_strdup_printf("%s/%s_%s_%s.iq", record_dir, prefix, stamp, u8 ? "u8" : "s16");

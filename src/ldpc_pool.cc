@@ -9,7 +9,9 @@
 #include <csignal>
 #include <cstdio>
 #include <fcntl.h>
+#ifndef _WIN32
 #include <spawn.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -38,19 +40,34 @@ static bool transfer(int fd, void *data, size_t size, bool writing) {
 /* Each thread owns one persistent child. No DSP/GUI locks are held during I/O.
  * Helpers inherit the decoder process group; Stop terminates the whole group. */
 static void worker(LdpcPool *pool) {
+#ifndef _WIN32
     sigset_t signals; sigemptyset(&signals); sigaddset(&signals, SIGPIPE);
     pthread_sigmask(SIG_BLOCK, &signals, nullptr);
+#endif
     int tx = -1, rx = -1, mc = -1, sf = -1;
+#ifdef _WIN32
+    GPid child = nullptr;
+#else
     pid_t child = -1;
+#endif
     auto close_child = [&]() {
         if (tx >= 0) close(tx);
         if (rx >= 0) close(rx);
         tx = rx = -1;
+#ifdef _WIN32
+        if (child) {
+            lw_stop_process(child);
+            lw_waitpid(child, nullptr, 0);
+            g_spawn_close_pid(child);
+        }
+        child = nullptr;
+#else
         if (child > 0) {
             kill(child, SIGTERM);
             while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
         }
         child = -1;
+#endif
     };
     for (;;) {
         std::vector<LdpcFrame *> frames;
@@ -73,7 +90,13 @@ static void worker(LdpcPool *pool) {
         }
         auto first = frames.front();
         bool ok = true;
-        if (child < 0 || mc != first->modcod || sf != first->short_frame) {
+        if (
+#ifdef _WIN32
+            !child
+#else
+            child < 0
+#endif
+            || mc != first->modcod || sf != first->short_frame) {
             close_child();
             int input[2], output[2];
             ok = pipe2(input, O_CLOEXEC) == 0;
@@ -84,6 +107,16 @@ static void worker(LdpcPool *pool) {
                 std::string modcod = std::to_string(first->modcod);
                 const char *args[] = {pool->command.c_str(), "--framed", "--modcod", modcod.c_str(),
                     first->short_frame ? "--shortframes" : nullptr, nullptr};
+#ifdef _WIN32
+                GError *spawn_error = nullptr;
+                int error = !g_spawn_async_with_fds(nullptr, const_cast<char **>(args), nullptr,
+                    G_SPAWN_DO_NOT_REAP_CHILD, nullptr, nullptr, &child,
+                    input[0], output[1], 2, &spawn_error);
+                if (spawn_error) {
+                    fprintf(stderr, "LDPC: %s\n", spawn_error->message);
+                    g_error_free(spawn_error);
+                }
+#else
                 posix_spawn_file_actions_t actions;
                 posix_spawn_file_actions_init(&actions);
                 posix_spawn_file_actions_adddup2(&actions, input[0], 0);
@@ -91,6 +124,7 @@ static void worker(LdpcPool *pool) {
                 int error = posix_spawn(&child, pool->command.c_str(), &actions, nullptr,
                                        const_cast<char **>(args), environ);
                 posix_spawn_file_actions_destroy(&actions);
+#endif
                 close(input[0]); close(output[1]);
                 tx = input[1]; rx = output[0]; ok = error == 0;
                 if (!ok) fprintf(stderr, "LDPC helper could not start (%d): %s\n", error, pool->command.c_str());

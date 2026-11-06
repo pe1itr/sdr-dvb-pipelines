@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include "process_control.h"
 #include <unistd.h>
 
 #define TS_SIZE 188
@@ -173,7 +174,7 @@ static gboolean launch(Relay *r, const char *ffmpeg, const char *url, int fps, i
     g_free(filter); g_free(destination);
     if (ok && !g_unix_set_fd_nonblocking(r->input, TRUE, error)) {
         close(r->input); r->input = -1;
-        kill(r->child, SIGKILL); waitpid(r->child, NULL, 0); g_spawn_close_pid(r->child); r->child = 0;
+        process_stop(r->child, FALSE, TRUE); waitpid(r->child, NULL, 0); g_spawn_close_pid(r->child); r->child = 0;
         return FALSE;
     }
     return ok;
@@ -182,7 +183,7 @@ static gboolean launch(Relay *r, const char *ffmpeg, const char *url, int fps, i
 static void stop_child(Relay *r, gint64 now) {
     if (r->input >= 0) { close(r->input); r->input = -1; }
     if (r->child && !r->kill_at) {
-        kill(r->child, SIGTERM); r->kill_at = now + 500000;
+        process_stop(r->child, FALSE, FALSE); r->kill_at = now + 500000;
     }
 }
 
@@ -233,8 +234,8 @@ int srt_output_main(int argc, char **argv) {
         }
         if (stopping) stop_child(&r, now);
         if (r.child) {
-            if (r.kill_at && now >= r.kill_at) kill(r.child, SIGKILL);
-            int status; pid_t reaped = waitpid(r.child, &status, WNOHANG);
+            if (r.kill_at && now >= r.kill_at) process_stop(r.child, FALSE, TRUE);
+            int status; GPid reaped = waitpid(r.child, &status, WNOHANG);
             if (reaped == r.child) {
                 if (!r.kill_at) {
                     g_printerr("[srt] FFmpeg stopped (%s %d); retrying while video is present\n",

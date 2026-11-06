@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "decoder_view.h"
+#include "plot_font.h"
 #include "decoder_margin.h"
 #include <arpa/inet.h>
 #include <math.h>
@@ -56,6 +57,7 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
         cairo_restore(cr);
     }
     cairo_restore(cr);
+    plot_font(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_source_rgb(cr,.8,.8,.8); cairo_set_font_size(cr,12);
     cairo_move_to(cr,left+6,top+16); cairo_show_text(cr,fresh ? "Q" : "No current constellation");
     cairo_move_to(cr,left+size-14,top+size/2-6); cairo_show_text(cr,"I");

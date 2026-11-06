@@ -1,3 +1,4 @@
+#include "../../src/aligned_memory.h"
 /*
 LDPC SISO layered decoder
 
@@ -78,8 +79,8 @@ public:
 	void init(LDPCInterface *it)
 	{
 		if (initialized) {
-			free(bnl);
-			free(pty);
+			linrad_aligned_free(bnl);
+			linrad_aligned_free(pty);
 			delete[] cnc;
 			delete[] pos;
 		}
@@ -107,8 +108,8 @@ public:
 		}
 		LT = ldpc->links_total();
 		delete ldpc;
-		bnl = reinterpret_cast<TYPE *>(aligned_alloc(64, (sizeof(TYPE) * LT + 63) & ~size_t(63)));
-		pty = reinterpret_cast<TYPE *>(aligned_alloc(64, (sizeof(TYPE) * R + 63) & ~size_t(63)));
+		bnl = reinterpret_cast<TYPE *>(linrad_aligned_alloc(64, (sizeof(TYPE) * LT + 63) & ~size_t(63)));
+		pty = reinterpret_cast<TYPE *>(linrad_aligned_alloc(64, (sizeof(TYPE) * R + 63) & ~size_t(63)));
 		uint16_t *tmp = new uint16_t[R * CNL];
 		for (int i = 0; i < q; ++i)
 			for (int j = 0; j < M; ++j)
@@ -137,8 +138,8 @@ public:
 	~LDPCDecoder()
 	{
 		if (initialized) {
-			free(bnl);
-			free(pty);
+			linrad_aligned_free(bnl);
+			linrad_aligned_free(pty);
 			delete[] cnc;
 			delete[] pos;
 		}

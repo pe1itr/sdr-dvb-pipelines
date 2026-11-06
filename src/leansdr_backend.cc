@@ -20,7 +20,11 @@ extern "C" int leansdr_backend_main(int argc,char **argv) {
             char path[PATH_MAX]; ssize_t n=readlink("/proc/self/exe",path,sizeof(path)-1);
             if (n<=0) return 2;
             path[n]=0; char *slash=strrchr(path,'/'); if (!slash) return 2; *slash=0;
-            helper=std::string(path)+"/ldpc_tool";
+            helper=std::string(path)+"/ldpc_tool"
+#ifdef _WIN32
+                ".exe"
+#endif
+                ;
             if (access(helper.c_str(),X_OK)) { fprintf(stderr,"Missing bundled LDPC helper: %s\n",helper.c_str()); return 2; }
             args.push_back(helper.c_str()); ++i;
         }

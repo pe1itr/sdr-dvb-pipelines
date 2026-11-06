@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "video_view.h"
+#include "aligned_memory.h"
 #include <glib-unix.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
@@ -11,6 +12,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include "process_control.h"
 
 struct VideoExternalChild {
     VideoView *view, *owner;
@@ -169,10 +171,10 @@ static unsigned setup(void **opaque, char *chroma, unsigned *width, unsigned *he
     unsigned char *pixels = NULL, *frame = NULL;
     if (posix_memalign((void **)&pixels, 32, (size_t)pitch * rows) ||
         posix_memalign((void **)&frame, 32, (size_t)pitch * rows)) {
-        free(pixels); free(frame); return 0;
+        linrad_aligned_free(pixels); linrad_aligned_free(frame); return 0;
     }
     g_mutex_lock(&v->mutex);
-    free(v->pixels); free(v->frame);
+    linrad_aligned_free(v->pixels); linrad_aligned_free(v->frame);
     v->pixels = pixels; v->frame = frame;
     v->width = *width; v->height = *height; v->pitch = pitch;
     v->ready = FALSE;
@@ -320,7 +322,7 @@ void video_view_set_muted(VideoView *v, gboolean muted) {
 static gboolean kill_external(gpointer data) {
     VideoExternalChild *child = data;
     child->kill_timer = 0;
-    kill(-child->pid, SIGKILL);
+    process_stop(child->pid, TRUE, TRUE);
     return G_SOURCE_REMOVE;
 }
 
@@ -329,7 +331,7 @@ static void stop_external(VideoView *v) {
     if (!child) return;
     v->external_child = NULL;
     child->view = NULL; /* Reaper must never access a stopped/destroyed view. */
-    kill(-child->pid, SIGTERM);
+    process_stop(child->pid, TRUE, FALSE);
     child->kill_timer = g_timeout_add(1000, kill_external, child);
 }
 
@@ -340,7 +342,7 @@ static void stop_player(VideoView *v) {
     }
     if (v->fd >= 0) { close(v->fd); v->fd = -1; }
     g_mutex_lock(&v->mutex);
-    free(v->pixels); free(v->frame); v->pixels = v->frame = NULL;
+    linrad_aligned_free(v->pixels); linrad_aligned_free(v->frame); v->pixels = v->frame = NULL;
     v->ready = FALSE; v->dirty = TRUE; v->aspect = 0;
     g_mutex_unlock(&v->mutex);
 }
@@ -577,7 +579,7 @@ void video_view_destroy(VideoView *v) {
         VideoExternalChild *child = p->data;
         child->owner = child->view = NULL;
         if (child->kill_timer) { g_source_remove(child->kill_timer); child->kill_timer = 0; }
-        kill(-child->pid, SIGKILL);
+        process_stop(child->pid, TRUE, TRUE);
     }
     g_list_free(v->external_children); v->external_children = NULL;
     g_free(v->gpu_program); g_free(v->gpu_device);

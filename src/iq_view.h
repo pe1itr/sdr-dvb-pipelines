@@ -1,3 +1,4 @@
+#include "plot_font.h"
 #ifndef IQ_VIEW_H
 #define IQ_VIEW_H
 #include "iq_monitor.h"
@@ -27,7 +28,7 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     double top=h/2+25, bottom=h-30;
     double floor=v->floor, span=v->span;
     cairo_set_source_rgb(cr, 0,0,0); cairo_paint(cr);
-    cairo_select_font_face(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL); cairo_set_font_size(cr,12);
+    plot_font(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL); cairo_set_font_size(cr,12);
     cairo_set_source_rgb(cr,.9,.9,.9);
     char text[200];
     if (right <= left || wh <= 0) return FALSE;

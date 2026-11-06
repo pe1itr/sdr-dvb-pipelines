@@ -101,7 +101,11 @@ $(BUILD_DIR)/components/dvbt/backend.o: src/dvbt_backend.c src/dvbt_backend.h sr
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) -pthread -c $< -o $@
 
-.PHONY: all package dist test clean
+.PHONY: all package dist package-windows test clean
+
+package-windows:
+	python3 tools/build-windows.py
+	python3 dev/package_windows.py
 
 dist:
 	python3 dev/dist.py

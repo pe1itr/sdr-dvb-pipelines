@@ -163,9 +163,14 @@ Afedri *afedri_open(const char *ip, int port, const char *bind_ip,
     /* Bind before start and fail rather than share a port with another receiver. */
     s->udp = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
     if (s->udp < 0) goto system_error;
-    int buffer = 4 * 1024 * 1024, overflow = 1;
+    int buffer = 4 * 1024 * 1024;
+#ifdef __linux__
+    int overflow = 1;
+#endif
     if (setsockopt(s->udp, SOL_SOCKET, SO_RCVBUF, &buffer, sizeof(buffer)) ||
+#ifdef __linux__
         setsockopt(s->udp, SOL_SOCKET, SO_RXQ_OVFL, &overflow, sizeof(overflow)) ||
+#endif
         bind(s->udp, (struct sockaddr *)&local, sizeof(local))) goto system_error;
     socklen_t buffer_length = sizeof(buffer);
     if (getsockopt(s->udp, SOL_SOCKET, SO_RCVBUF, &buffer, &buffer_length)) goto system_error;
@@ -197,10 +202,14 @@ static int queue_packet(Afedri *s, const unsigned char *payload) {
 static void *receive_udp(void *opaque) {
     Afedri *s = opaque;
     unsigned char packets[RX_BATCH][PACKET_BYTES];
-    union { struct cmsghdr align; unsigned char data[CMSG_SPACE(sizeof(uint32_t))]; } control[RX_BATCH];
     struct sockaddr_in from[RX_BATCH];
+#ifdef _WIN32
+    struct { unsigned msg_len; struct { int msg_flags; } msg_hdr; } msgs[RX_BATCH];
+#else
+    union { struct cmsghdr align; unsigned char data[CMSG_SPACE(sizeof(uint32_t))]; } control[RX_BATCH];
     struct iovec iov[RX_BATCH];
     struct mmsghdr msgs[RX_BATCH];
+#endif
     static const unsigned char silence[PAYLOAD_BYTES];
     while (!atomic_load_explicit(&s->stop, memory_order_relaxed)) {
         struct pollfd fd = {.fd=s->udp, .events=POLLIN};
@@ -213,16 +222,27 @@ static void *receive_udp(void *opaque) {
             pthread_cond_signal(&s->changed); pthread_mutex_unlock(&s->mutex); break;
         }
         memset(msgs, 0, sizeof(msgs));
+#ifdef _WIN32
+        for (n=0;n<RX_BATCH;++n) {
+            socklen_t length=sizeof(from[n]);
+            ssize_t bytes=recvfrom(s->udp,packets[n],PACKET_BYTES,MSG_DONTWAIT|MSG_TRUNC,
+                (struct sockaddr *)&from[n],&length);
+            if (bytes<0) { if (!n) n=-1; break; }
+            msgs[n].msg_len=(unsigned)bytes;
+        }
+#else
         for (int i=0; i<RX_BATCH; ++i) {
             iov[i] = (struct iovec){.iov_base=packets[i], .iov_len=PACKET_BYTES};
             msgs[i].msg_hdr = (struct msghdr){.msg_name=&from[i], .msg_namelen=sizeof(from[i]),
                 .msg_iov=&iov[i], .msg_iovlen=1, .msg_control=control[i].data, .msg_controllen=sizeof(control[i].data)};
         }
         n = recvmmsg(s->udp, msgs, RX_BATCH, MSG_DONTWAIT, NULL);
+#endif
         if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
         pthread_mutex_lock(&s->mutex);
         if (n < 0) s->error = errno;
         for (int i=0; i<n; ++i) {
+#ifndef _WIN32
             for (struct cmsghdr *c=CMSG_FIRSTHDR(&msgs[i].msg_hdr); c; c=CMSG_NXTHDR(&msgs[i].msg_hdr,c)) {
                 if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SO_RXQ_OVFL && c->cmsg_len >= CMSG_LEN(sizeof(uint32_t))) {
                     uint32_t drops; memcpy(&drops, CMSG_DATA(c), sizeof(drops));
@@ -230,6 +250,7 @@ static void *receive_udp(void *opaque) {
                     s->last_socket_drops = drops;
                 }
             }
+#endif
             unsigned char *packet = packets[i];
             if (msgs[i].msg_len != PACKET_BYTES || (msgs[i].msg_hdr.msg_flags & MSG_TRUNC) ||
                 from[i].sin_addr.s_addr != s->address.s_addr || packet[0] != 4 || packet[1] != 0x84) {

@@ -1,3 +1,4 @@
+#include "plot_font.h"
 #ifndef SIGNAL_METER_H
 #define SIGNAL_METER_H
 #include <gtk/gtk.h>
@@ -80,7 +81,7 @@ static gboolean signal_meter_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     cairo_set_line_width(cr,1);
     cairo_set_source_rgb(cr,.66,.66,.66);
     cairo_rectangle(cr,.5,.5,w-1,h-1); cairo_stroke(cr);
-    cairo_select_font_face(cr,"monospace",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);
+    plot_font(cr,"monospace",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr,11);
     char text[128];
     double floor_db=m->reference-m->span/2;

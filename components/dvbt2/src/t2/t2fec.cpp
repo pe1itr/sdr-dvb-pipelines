@@ -3,6 +3,7 @@
 #include "dect2/dsp/simd.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <map>
@@ -204,11 +205,12 @@ struct AxisMap {
     cf32 derot;                           // e^{-j phi}
 };
 const AxisMap& axisMap(int mod) {
-    static AxisMap maps[4];
-    static std::once_flag once;
-    std::call_once(once, [] {
+    // Function-local static initialization is thread-safe and avoids the
+    // cross-DLL TLS ABI used by older MinGW std::call_once implementations.
+    static const auto maps = [] {
+        std::array<AxisMap, 4> result;
         for (int mod = 0; mod < 4; mod++) {
-            AxisMap& A = maps[mod];
+            AxisMap& A = result[mod];
             const int M = 2 * (mod + 1), P = 1 << M;
             const auto& pl = qam().plain[mod];
             for (int b = 0; b < M; b++) {
@@ -232,7 +234,8 @@ const AxisMap& axisMap(int mod) {
                 A.imLevel[ii] = pl[p].imag();
             }
         }
-    });
+        return result;
+    }();
     return maps[mod];
 }
 const float kRotDeg[4] = {29.f, 16.8f, 8.6f, 3.576334375f};

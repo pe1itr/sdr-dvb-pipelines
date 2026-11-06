@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include "process_control.h"
 #include <unistd.h>
 
 #include "iq_view.h"
@@ -662,7 +663,7 @@ static void finish_if_stopped(App *a) {
 static gboolean force_stop(gpointer data) {
     App *a = data;
     for (int i = 0; i < a->stage_count; ++i) {
-        if (a->stages[i].group > 0) kill(-a->stages[i].group, SIGKILL);
+        if (a->stages[i].group != 0) process_stop(a->stages[i].group, TRUE, TRUE);
         a->stages[i].group = 0;
     }
     a->kill_timer = 0;
@@ -689,7 +690,7 @@ static void stop_pipeline(App *a) {
     if (!a->exit_code) status(a, "Stopping pipeline...");
     power_refresh(a);
     for (int i = 0; i < a->stage_count; ++i)
-        if (a->stages[i].group > 0) kill(-a->stages[i].group, SIGTERM);
+        if (a->stages[i].group != 0) process_stop(a->stages[i].group, TRUE, FALSE);
     a->kill_timer = g_timeout_add(1500, force_stop, a);
 }
 
@@ -705,6 +706,9 @@ static void child_exit(GPid pid, gint result, gpointer data) {
     App *a = data;
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid == pid) {
         a->stages[i].pid = 0;
+#ifdef _WIN32
+        a->stages[i].group = 0;
+#endif
         if (!a->stopping && a->source==SOURCE_FILE && WIFEXITED(result) && WEXITSTATUS(result)==0) {
             /* Let the decoder drain its input before terminating a player that
              * keeps its window open at EOF. Source/decoder callbacks can arrive
@@ -1738,7 +1742,11 @@ static void source_defaults(App *a) {
     if (!g_key_file_has_key(a->config, "ffplay", "args", NULL))
         g_key_file_set_string(a->config, "ffplay", "args", ffplay_args);
     if (!g_key_file_has_key(a->config, "ffplay", "gpu_program", NULL))
+#ifdef _WIN32
+        g_key_file_set_string(a->config, "ffplay", "gpu_program", "ffplay.exe");
+#else
         g_key_file_set_string(a->config, "ffplay", "gpu_program", "/usr/bin/ffplay");
+#endif
     if (!g_key_file_has_key(a->config, "ffplay", "gpu_device", NULL))
         g_key_file_set_string(a->config, "ffplay", "gpu_device", "NVIDIA");
     if (!g_key_file_has_key(a->config, "paths", "custom_renderer", NULL))
@@ -2478,9 +2486,14 @@ static void gui(App *a) {
     if (!g_key_file_has_key(a->config, "session", "renderer", NULL)) a->renderer = RENDER_EMBEDDED;
     /* Keep GTK's built-in dialogs and errors in the same language as the UI. */
     setlocale(LC_ALL, "");
+#ifndef _WIN32
     setlocale(LC_MESSAGES, "C");
+#endif
     gtk_disable_setlocale();
     if (!gtk_init_check(NULL, NULL)) fatal("Cannot open a graphical display. Use --print-pipeline to check without a GUI.");
+#ifdef _WIN32
+    g_object_set(gtk_settings_get_default(),"gtk-font-name","DejaVu Sans 9",NULL);
+#endif
     apply_receiver_theme();
     a->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(a->window), "Linrad DVB · PE1ITR");
@@ -2783,7 +2796,12 @@ int main(int argc, char **argv) {
     if (!config) {
         char *exe = g_file_read_link("/proc/self/exe", &error);
         if (!exe) fatal("Cannot determine the program directory: %s", error->message);
-        char *dir = g_path_get_dirname(exe); config = g_build_filename(dir, "..", "linrad-dvb.ini", NULL);
+        char *dir = g_path_get_dirname(exe);
+#ifdef _WIN32
+        config = g_build_filename(dir, "linrad-dvb.ini", NULL);
+#else
+        config = g_build_filename(dir, "..", "linrad-dvb.ini", NULL);
+#endif
         g_free(exe); g_free(dir);
     }
     a.config_path = g_canonicalize_filename(config, NULL); a.directory = g_path_get_dirname(a.config_path);
