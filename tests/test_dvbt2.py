@@ -37,7 +37,7 @@ def check_packets(data):
 
 def live(path, fmt, plp):
     with tempfile.TemporaryFile() as source_log, tempfile.TemporaryFile() as output:
-        source = subprocess.Popen([sys.executable, str(ROOT/'tools/fixed_iq_source.py'),
+        source = subprocess.Popen([sys.executable, str(ROOT/'dev/fixed_iq_source.py'),
             '--in', str(path), '--sample-rate', '10000000', '--input-format', fmt],
             stdout=subprocess.PIPE, stderr=source_log)
         try:

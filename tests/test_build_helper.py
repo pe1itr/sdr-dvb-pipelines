@@ -1,107 +1,143 @@
-"""Build preflight failures must block make; optional failures must not."""
-import contextlib
-import importlib.util
-import io
+"""Exercise the Bash build CLI with isolated compilers and package metadata."""
+import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
-from unittest.mock import patch
-
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("build_helper", ROOT / "tools/build.py")
-helper = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(helper)
+BASH = shutil.which('bash')
+STUB = r'''
+import json, os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ['BUILD_TEST_LOG'], 'a') as out:
+    out.write(json.dumps({'name': name, 'args': args, 'cwd': os.getcwd(),
+                          'cflags': os.getenv('CFLAGS', '')}) + '\n')
+if name == 'pkg-config':
+    if args[-1] == os.getenv('MISSING_LIBRARY'):
+        sys.exit(1)
+    if '--cflags' in args: print('-I"include with spaces"')
+    sys.exit(0)
+if name == 'SoapySDRUtil':
+    print('Available factories... ' + os.getenv('FACTORIES', 'rtlsdr, hackrf'))
+    sys.exit(0)
+if name == 'ffmpeg':
+    if '-protocols' in args: print(os.getenv('PROTOCOLS', 'Input:\n srt\nOutput:\n srt'))
+    if '-encoders' in args: print(os.getenv('ENCODERS', ' V..... libx264 H264\n A..... aac AAC'))
+    sys.exit(0)
+if name == 'make': sys.exit(int(os.getenv('MAKE_STATUS', '0')))
+if name in ('cc', 'g++', 'clang', 'ccache'):
+    for arg in args:
+        if arg.endswith(('.c', '.cc')):
+            header = os.getenv('FAIL_HEADER')
+            if header and ('<' + header + '>') in pathlib.Path(arg).read_text():
+                print('header or linker input missing', file=sys.stderr)
+                sys.exit(1)
+'''
+
+
+class BuildEnvironment:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.bin = self.path / 'bin'
+        self.bin.mkdir()
+        self.log = self.path / 'commands.jsonl'
+        self.env = {**os.environ, 'PATH': str(self.bin), 'BUILD_TEST_LOG': str(self.log)}
+        for key in ('CC', 'CXX', 'CPPFLAGS', 'CFLAGS', 'CXXFLAGS', 'LDFLAGS', 'LDLIBS', 'CARGO'):
+            self.env.pop(key, None)
+        for name in ('bash', 'dirname', 'uname', 'mktemp', 'rm', 'cat', 'sed', 'awk', 'realpath', 'ln', 'getconf', 'mkdir'):
+            (self.bin / name).symlink_to(shutil.which(name))
+        for name in ('cc', 'g++', 'clang', 'ccache', 'make', 'pkg-config', 'cargo', 'rustc',
+                     'ffmpeg', 'vlc', 'cvlc', 'ffplay', 'direwolf', 'SoapySDRUtil'):
+            target = self.bin / name
+            target.write_text('#!' + sys.executable + '\n' + STUB)
+            target.chmod(0o755)
+
+    def run(self, *args, script='tools/build.sh'):
+        return subprocess.run([BASH, str(ROOT / script), *args], cwd=self.path,
+                              env=self.env, text=True, capture_output=True, timeout=20)
+
+    def commands(self, name):
+        if not self.log.exists(): return []
+        return [row for line in self.log.read_text().splitlines()
+                if (row := json.loads(line))['name'] == name]
 
 
 class BuildHelperTests(unittest.TestCase):
-    def run_helper(self, args=(), missing_library=None, missing_programs=(),
-                   broken_header=None, make_status=0, environment=None):
-        def command(argv):
-            if argv[:3] == ["pkg-config", "--print-errors", "--exists"]:
-                return (False, "package not found") if argv[-1] == missing_library else (True, "")
-            if argv == ["SoapySDRUtil", "--info"]:
-                return True, "Available factories... hackrf, rtlsdr"  # rfspace is optional
-            return True, ""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='linrad-build-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.fixture = BuildEnvironment(self.temp.name)
 
-        def compile_probe(directory, compiler, flags, source, suffix, link_flags):
-            if broken_header and f"<{broken_header}>" in source:
-                return False, "header or linker input missing"
-            return True, ""
+    def test_check_does_not_build_and_works_outside_repository(self):
+        result = self.fixture.run('--check')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.fixture.commands('make'))
+        self.assertTrue(self.fixture.commands('g++'))
+        self.assertIn('-std=gnu++20', self.fixture.commands('g++')[0]['args'])
+        self.assertEqual(self.fixture.commands('cc')[0]['cwd'], str(ROOT))
 
-        output = io.StringIO()
-        with patch.dict(os.environ, environment or {}, clear=True), \
-                patch.object(helper.sys, "platform", "linux"), \
-                patch.object(helper.shutil, "which",
-                             side_effect=lambda name: None if name in missing_programs else f"/bin/{name}"), \
-                patch.object(helper.Checker, "command", side_effect=command), \
-                patch.object(helper.Checker, "compile", side_effect=compile_probe), \
-                patch.object(helper.subprocess, "call", return_value=make_status) as make, \
-                contextlib.redirect_stdout(output):
-            status = helper.main(list(args))
-        return status, output.getvalue(), make
+    def test_required_libraries_and_broken_headers_block_build(self):
+        for env in ({'MISSING_LIBRARY': 'uhd'}, {'FAIL_HEADER': 'vlc/vlc.h'}):
+            with self.subTest(env=env):
+                self.fixture.env.update(env)
+                result = self.fixture.run()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn('[ERROR]', result.stdout)
+                self.assertFalse(self.fixture.commands('make'))
+                for key in env: self.fixture.env.pop(key)
 
-    def test_missing_required_library_blocks_build(self):
-        status, output, make = self.run_helper(missing_library="uhd")
-        self.assertEqual(status, 1)
-        self.assertIn("[ERROR] uhd", output)
-        make.assert_not_called()
-
-    def test_metadata_without_working_headers_or_linker_blocks_build(self):
-        status, output, make = self.run_helper(broken_header="vlc/vlc.h")
-        self.assertEqual(status, 1)
-        self.assertIn("[ERROR] libvlc", output)
-        make.assert_not_called()
-
-    def test_missing_build_tool_blocks_build(self):
-        for program in ("cc", "g++", "pkg-config", "make", "cargo", "rustc"):
+    def test_missing_required_tools_block_build(self):
+        for program in ('cc', 'g++', 'make', 'pkg-config', 'cargo', 'rustc'):
             with self.subTest(program=program):
-                status, output, make = self.run_helper(missing_programs=(program,))
-                self.assertEqual(status, 1)
-                self.assertIn("executable missing", output)
-                make.assert_not_called()
+                path = self.fixture.bin / program
+                backup = path.with_suffix('.disabled')
+                path.rename(backup)
+                try:
+                    result = self.fixture.run()
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn('executable missing', result.stdout)
+                    self.assertFalse(self.fixture.commands('make'))
+                finally: backup.rename(path)
 
-    def test_optional_program_and_driver_only_warn(self):
-        status, output, make = self.run_helper(missing_programs=("ffplay",))
-        self.assertEqual(status, 0)
-        self.assertIn("[WARNING] ffplay missing", output)
-        self.assertIn("[WARNING] Soapy driver rfspace missing", output)
-        make.assert_called_once()
+    def test_optional_dependencies_only_warn(self):
+        self.fixture.env['MISSING_LIBRARY'] = 'LimeSuite'
+        (self.fixture.bin / 'ffplay').unlink()
+        result = self.fixture.run()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('[WARNING] ffplay missing', result.stdout)
+        self.assertIn('[WARNING] Soapy driver rfspace missing', result.stdout)
+        self.assertEqual(len(self.fixture.commands('make')), 1)
 
-    def test_missing_limesuite_is_optional(self):
-        status, output, make = self.run_helper(missing_library="LimeSuite")
-        self.assertEqual(status, 0)
-        self.assertIn("LimeSDR Mini RX unavailable", output)
-        make.assert_called_once()
+    def test_make_receives_checked_flags_and_propagates_failure(self):
+        self.fixture.env.update(CC='ccache clang', CFLAGS='-g -DNAME="two words"', MAKE_STATUS='7')
+        result = self.fixture.run('-j3', '--build-dir', 'build with spaces')
+        self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+        command = self.fixture.commands('make')[0]['args']
+        for arg in ('-j3', 'BUILD_DIR=build with spaces', 'CC=ccache clang', 'CFLAGS=-g -DNAME="two words"'):
+            self.assertIn(arg, command)
+        self.assertIn('-DNAME=two words', self.fixture.commands('ccache')[0]['args'])
+        self.assertIn('-Iinclude with spaces', self.fixture.commands('ccache')[1]['args'])
 
-    def test_check_never_runs_make_even_with_warnings(self):
-        status, output, make = self.run_helper(("--check",), missing_programs=("SoapySDRUtil",))
-        self.assertEqual(status, 0)
-        self.assertIn("cannot check optional Soapy drivers", output)
-        make.assert_not_called()
+    def test_flag_parser_never_evaluates_substitutions(self):
+        marker = Path(self.temp.name) / 'should-not-exist'
+        self.fixture.env['CFLAGS'] = "-DVALUE='$(touch " + str(marker) + ")'"
+        result = self.fixture.run('--check')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
 
-    def test_make_failure_and_checked_environment_are_preserved(self):
-        status, output, make = self.run_helper(("-j", "3"), make_status=2,
-                                             environment={"CC": "ccache clang", "CFLAGS": "-g -std=c11"})
-        self.assertEqual(status, 2)
-        argv = make.call_args.args[0]
-        self.assertIn("-j3", argv)
-        self.assertIn("CC=ccache clang", argv)
-        self.assertIn("CFLAGS=-g -std=c11", argv)
-        self.assertEqual(make.call_args.kwargs["cwd"], ROOT)
-
-    def test_invalid_job_count_is_rejected(self):
-        for value in ("0", "-1", "abc"):
-            with self.subTest(value=value), contextlib.redirect_stderr(io.StringIO()):
-                with self.assertRaises(SystemExit) as error:
-                    helper.main(["-j", value])
-                self.assertEqual(error.exception.code, 2)
-
-    def test_custom_build_directory_is_passed_to_make(self):
-        status, _, make = self.run_helper(("--build-dir", "build-odroid-n2"))
-        self.assertEqual(status, 0)
-        self.assertIn("BUILD_DIR=build-odroid-n2", make.call_args.args[0])
+    def test_invalid_options_and_unterminated_quotes_do_not_build(self):
+        for args in (('-j', '0'), ('-j', '-1'), ('-j', 'abc'), ('--build-dir', ''), ('--unknown',), ('-j',)):
+            result = self.fixture.run(*args)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.fixture.env['CC'] = "'unterminated"
+        self.assertEqual(self.fixture.run().returncode, 2)
+        self.assertFalse(self.fixture.commands('make'))
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main(verbosity=2)

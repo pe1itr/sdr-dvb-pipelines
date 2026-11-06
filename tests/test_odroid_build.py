@@ -1,125 +1,119 @@
-"""ODROID setup planning: no apt installation, radio or network access."""
+"""Bash ODROID planning and INI generation without package or radio access."""
 import configparser
-import contextlib
-import importlib.util
-import io
-import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("odroid_build", ROOT / "tools/build_odroid_n2.py")
-helper = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(helper)
+from test_build_helper import BASH, BuildEnvironment, ROOT
 
 
 class OdroidTests(unittest.TestCase):
-    def invoke(self, args=(), *, runtime_error=None, command_error=None):
-        with patch.object(helper, "require_platform"), patch.object(helper, "run", side_effect=command_error) as run, \
-                patch.object(helper, "check_repeater", side_effect=runtime_error) as check, \
-                patch.object(helper, "install_dependencies") as install, patch.object(helper, "write_config") as config, \
-                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            result = helper.main(list(args))
-        return result, run, check, install, config
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='linrad-odroid-test-')
+        self.addCleanup(self.temp.cleanup)
+        self.fixture = BuildEnvironment(self.temp.name)
+        self.root = Path(self.temp.name) / 'source with spaces'
+        (self.root / 'tools').mkdir(parents=True)
+        shutil.copy(ROOT / 'linrad-dvb.example.ini', self.root)
+        # Substitute only the build command, keeping the real ODROID control flow.
+        helper = self.root / 'tools/build.sh'
+        helper.write_text('#!/usr/bin/env bash\nexec make "$@"\n')
 
-    def test_check_is_read_only_and_uses_isolated_directory(self):
-        result, run, _, install, config = self.invoke(["--check"])
-        self.assertEqual(result, 0)
-        install.assert_not_called()
-        config.assert_not_called()
-        run.assert_called_once()
-        self.assertIn("--check", run.call_args.args[0])
-        self.assertIn("build-odroid-n2", run.call_args.args[0])
+    def shell(self, body, *args):
+        code = ('source "$1"\nPROJECT_ROOT=$2\nshift 2\n' + body)
+        return subprocess.run([BASH, '-c', code, 'test', str(ROOT / 'tools/build_odroid_n2.sh'),
+                               str(self.root), *args], cwd=self.temp.name, env=self.fixture.env,
+                              text=True, capture_output=True, timeout=20)
 
-    def test_build_defaults_and_explicit_package_install(self):
-        for flags, expected in (([], 0), (["--install-deps", "-j", "2"], 1)):
-            with self.subTest(flags=flags):
-                result, run, check, install, config = self.invoke(flags)
-                self.assertEqual(result, 0)
-                self.assertEqual(install.call_count, expected)
-                self.assertEqual(run.call_count, 2)
-                check.assert_called_once_with("ffmpeg")
-                config.assert_called_once()
-                self.assertNotIn("--check", run.call_args.args[0])
-                self.assertIn("-march=armv8-a", run.call_args.kwargs["env"]["CFLAGS"])
-                self.assertNotIn("-march=native", run.call_args.kwargs["env"]["CFLAGS"])
-
-    def test_failed_dependency_or_runtime_blocks_build_and_config(self):
-        for kwargs in ({"runtime_error": ValueError("SRT missing")},
-                       {"command_error": subprocess.CalledProcessError(1, "check")}):
-            result, run, _, _, config = self.invoke(**kwargs)
-            self.assertEqual(result, 1)
-            self.assertEqual(run.call_count, 1)
-            config.assert_not_called()
+    def run_main(self, *args):
+        return self.shell('odroid_require_platform() { :; }\n'
+                          'odroid_install_dependencies() { echo INSTALL; }\n'
+                          'odroid_main "$@"', *args)
 
     def test_wrong_architecture_is_rejected(self):
-        for machine in ("x86_64", "armv7l"):
-            with patch.object(helper.platform, "machine", return_value=machine):
-                with self.assertRaisesRegex(ValueError, "aarch64"):
-                    helper.require_platform()
+        result = self.shell('uname() { if [[ $1 == -m ]]; then echo x86_64; else echo Linux; fi; }\n'
+                            'odroid_require_platform')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('aarch64', result.stderr)
 
-    def test_focal_release_and_compiler_flags(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp, "os-release")
-            path.write_text('NAME="Ubuntu"\nVERSION_ID="20.04"\nID=ubuntu\nID_LIKE=debian\n')
-            self.assertEqual(helper.os_release(path)["VERSION_ID"], "20.04")
-        with patch.dict(os.environ, {"CFLAGS": "-O1 -g", "CC": "ccache gcc"}, clear=True):
-            env = helper.build_environment()
-            self.assertTrue(env["CFLAGS"].startswith("-O1 -g "))
-            self.assertIn("-mtune=cortex-a73.cortex-a53", env["CXXFLAGS"])
-            self.assertEqual(env["CC"], "ccache gcc")
+    def test_check_never_builds_installs_or_creates_config(self):
+        result = self.run_main('--check')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('INSTALL', result.stdout)
+        commands = self.fixture.commands('make')
+        self.assertEqual(len(commands), 1)
+        self.assertIn('--check', commands[0]['args'])
+        self.assertIn('-march=armv8-a', commands[0]['cflags'])
+        self.assertFalse((self.root / 'pi6ehv-odroid.ini').exists())
 
-    def test_config_preserves_existing_and_corrects_helper_paths(self):
-        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
-            path = Path(tmp, "pi6ehv.ini")
-            helper.write_config(path, "/usr/bin/ffmpeg")
-            cfg = configparser.ConfigParser(interpolation=None)
-            cfg.read(path)
-            self.assertEqual(cfg["session"]["source"], "rtlsdr")
-            self.assertEqual(cfg["session"]["renderer"], "srt")
-            self.assertEqual(cfg["rtlsdr"]["frequency"], "0")
-            self.assertEqual(cfg["srt"]["x264_preset"], "ultrafast")
-            self.assertEqual(cfg["srt"]["video_threads"], "3")
-            self.assertEqual(cfg["srt"]["filter_threads"], "1")
-            self.assertEqual(cfg["paths"]["sdr"], str(ROOT / "build-odroid-n2/sdr_to_stdout"))
-            path.write_text("user settings\n")
-            helper.write_config(path, "/usr/bin/ffmpeg")
-            self.assertEqual(path.read_text(), "user settings\n")
+    def test_build_and_explicit_install_create_config(self):
+        result = self.run_main('--install-deps', '-j', '2')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('INSTALL', result.stdout)
+        commands = self.fixture.commands('make')
+        self.assertEqual(len(commands), 2)
+        self.assertNotIn('--check', commands[1]['args'])
+        self.assertIn('build-odroid-n2', commands[1]['args'])
+        self.assertTrue((self.root / 'pi6ehv-odroid.ini').is_file())
 
-    def test_runtime_requires_output_protocol_and_driver(self):
-        for protocols, factories, ok in (("Input:\n srt\nOutput:\n udp", "rtlsdr", False),
-                                         ("Input:\nOutput:\n srt", "hackrf", False),
-                                         ("Input:\nOutput:\n srt", "rtlsdr", True)):
-            results = [subprocess.CompletedProcess([], 0, protocols),
-                       subprocess.CompletedProcess([], 0, " V..... libx264 H264\n A..... aac AAC\n"),
-                       subprocess.CompletedProcess([], 0, "Available factories... " + factories)]
-            with patch.object(helper, "run", side_effect=results), contextlib.redirect_stdout(io.StringIO()):
-                if ok:
-                    helper.check_repeater("ffmpeg")
-                else:
-                    with self.assertRaises(ValueError):
-                        helper.check_repeater("ffmpeg")
+    def test_dependency_or_runtime_failure_blocks_build_and_config(self):
+        for env in ({'MAKE_STATUS': '4'}, {'PROTOCOLS': 'Input:\n srt\nOutput:\n udp'},
+                    {'ENCODERS': ' V..... libx264 H264'}, {'FACTORIES': 'hackrf'}):
+            with self.subTest(env=env):
+                self.fixture.log.unlink(missing_ok=True)
+                self.fixture.env.update(env)
+                result = self.run_main()
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(len(self.fixture.commands('make')), 1)
+                self.assertFalse((self.root / 'pi6ehv-odroid.ini').exists())
+                for key in env: self.fixture.env.pop(key)
 
-    def test_local_ffmpeg_is_pinned_and_installed_only_in_build_directory(self):
-        with tempfile.TemporaryDirectory() as tmp, patch.object(helper, "ROOT", Path(tmp)), \
-                patch.object(helper, "run", return_value=subprocess.CompletedProcess([], 0, helper.FFMPEG_COMMIT + "\n")) as run:
-            binary = helper.local_ffmpeg(1)
-            self.assertEqual(binary, str(Path(tmp) / helper.BUILD_DIR / "ffmpeg/bin/ffmpeg"))
-            commands = [call.args[0] for call in run.call_args_list]
-            self.assertIn(helper.FFMPEG_TAG, commands[0])
-            self.assertIn("--enable-libsrt", commands[2])
-            self.assertIn("--enable-libx264", commands[2])
-            self.assertIn("--prefix=" + str(Path(tmp) / helper.BUILD_DIR / "ffmpeg"), commands[2])
-            self.assertEqual(commands[-1], ["make", "install"])
-        with tempfile.TemporaryDirectory() as tmp, patch.object(helper, "ROOT", Path(tmp)), \
-                patch.object(helper, "run", return_value=subprocess.CompletedProcess([], 0, "wrong-commit\n")) as run:
-            with self.assertRaisesRegex(ValueError, "Unexpected FFmpeg"):
-                helper.local_ffmpeg(1)
-            self.assertEqual(run.call_count, 2)
+    def test_config_preserves_existing_and_sets_paths_and_tuning(self):
+        path = Path(self.temp.name) / 'receiver.ini'
+        result = self.shell('odroid_write_config "$1" ffmpeg', str(path))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(path)
+        self.assertEqual(cfg['paths']['sdr'], str(self.root / 'build-odroid-n2/sdr_to_stdout'))
+        self.assertEqual(cfg['paths']['ffmpeg'], str(self.fixture.bin / 'ffmpeg'))
+        self.assertEqual(cfg['rtlsdr']['frequency'], '0')
+        self.assertEqual(cfg['session']['source'], 'rtlsdr')
+        self.assertEqual(cfg['session']['renderer'], 'srt')
+        self.assertEqual(cfg['session']['gi'], 'auto')
+        self.assertEqual(cfg['srt']['x264_preset'], 'ultrafast')
+        self.assertEqual(cfg['srt']['video_threads'], '3')
+        self.assertEqual(cfg['srt']['filter_threads'], '1')
+        path.write_text('user settings\n')
+        result = self.shell('odroid_write_config "$1" ffmpeg', str(path))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.read_text(), 'user settings\n')
+        self.assertEqual(list(path.parent.glob('receiver.ini.*')), [])
+
+    def test_conflicting_and_invalid_options_are_rejected(self):
+        for args in (('--check', '--install-deps'), ('--check', '--build-ffmpeg'),
+                     ('--build-ffmpeg', '--ffmpeg', '/some/ffmpeg'), ('-j', '0'), ('--config',)):
+            result = self.run_main(*args)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertFalse(self.fixture.commands('make'))
+
+    def test_local_ffmpeg_pin_and_isolated_prefix(self):
+        source = self.root / 'build-odroid-n2/ffmpeg-src'
+        source.mkdir(parents=True)
+        (source / 'configure').write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
+        (source / 'configure').chmod(0o755)
+        result = self.shell('git() { echo "$FFMPEG_COMMIT"; }\nodroid_local_ffmpeg 2')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('--prefix=' + str(self.root / 'build-odroid-n2/ffmpeg'), result.stdout)
+        self.assertIn('--enable-libsrt', result.stdout)
+        self.assertIn('--enable-libx264', result.stdout)
+        commands = self.fixture.commands('make')
+        self.assertEqual([row['args'] for row in commands], [['-j2'], ['install']])
+        result = self.shell('git() { echo wrong-revision; }\nodroid_local_ffmpeg 2')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(len(self.fixture.commands('make')), 2)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main(verbosity=2)

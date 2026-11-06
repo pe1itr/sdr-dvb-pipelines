@@ -40,7 +40,7 @@ make test-dvbt
 ```
 
 The component uses FFTW3 single precision, pthreads and libm. The full
-application's dependencies are checked by `python3 tools/build.py --check`.
+application's dependencies are checked by `bash tools/build.sh --check`.
 [`test_dvbt_stream.c`](../../tests/test_dvbt_stream.c) covers streaming Viterbi
 puncturing, errors, chunk continuity and reset behavior;
 [`test_dvbt_psi.c`](../../tests/test_dvbt_psi.c) covers PAT/PMT bootstrap and
@@ -106,8 +106,8 @@ from pathlib import Path
 report = json.loads(Path('components/dvbt/benchmarks/step1-2026-11-05.json').read_text())
 Path('/tmp/dvbt-inputs.json').write_text(json.dumps(report['fixtures'][:3]))
 PY
-python3 tools/dvbt_frontend_experiment.py build /tmp/dvbt-step1 --baseline-ref 1069f21 --variants baseline,current
-python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-step1 /tmp/dvbt-inputs.json --repeat 2 --variants baseline,current
+python3 dev/dvbt_frontend_experiment.py build /tmp/dvbt-step1 --baseline-ref 1069f21 --variants baseline,current
+python3 dev/dvbt_frontend_experiment.py run /tmp/dvbt-step1 /tmp/dvbt-inputs.json --repeat 2 --variants baseline,current
 ```
 
 `current` reads the working-tree source; `baseline` reads the specified Git
@@ -119,7 +119,7 @@ bandwidth, for live pacing.
 ## Viterbi SIMD investigation (2026-11-05)
 
 The following records the **research phase** of the now integrated optimization.
-The [experiment tool](../../tools/dvbt_viterbi_experiment.py) builds
+The [experiment tool](../../dev/dvbt_viterbi_experiment.py) builds
 the baseline from `3b9077b`, an AVX2 candidate, and a per-step comparison checker.
 Both variants include the already integrated frontend optimization above.
 The [report](benchmarks/viterbi-2026-11-05.json) records all 24 live runs,
@@ -170,16 +170,16 @@ Reproduce on an AVX2 machine with the Git history and local recordings present:
 
 ```sh
 make all
-python3 tools/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
-python3 tools/dvbt_viterbi_experiment.py test /tmp/dvbt-viterbi
-python3 tools/dvbt_viterbi_experiment.py kernel /tmp/dvbt-viterbi --repeat 3
+python3 dev/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
+python3 dev/dvbt_viterbi_experiment.py test /tmp/dvbt-viterbi
+python3 dev/dvbt_viterbi_experiment.py kernel /tmp/dvbt-viterbi --repeat 3
 python3 - <<'PY'
 import json
 from pathlib import Path
 r = json.loads(Path('components/dvbt/benchmarks/viterbi-2026-11-05.json').read_text())
 Path('/tmp/viterbi-cases.json').write_text(json.dumps(r['fixtures']))
 PY
-python3 tools/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/viterbi-cases.json --repeat 2
+python3 dev/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/viterbi-cases.json --repeat 2
 ```
 
 Adjust recording paths in the manifest as needed. The controlled fading input
@@ -217,7 +217,7 @@ arriving when processing stalls. The additional
 [high-FEC report](benchmarks/viterbi-high-fec-2026-11-05.json) records **24 runs**
 with this stricter source model, including FEC **3/4, 5/6 and 7/8**.
 
-`tools/fixed_iq_source.py` releases 10 ms chunks against one monotonic sample
+`dev/fixed_iq_source.py` releases 10 ms chunks against one monotonic sample
 clock. Its 100 ms FIFO is bounded: overflow drops incoming samples and records
 the loss; it never shifts the clock to accommodate the receiver. The kernel
 pipe and the receiver's existing buffers also have finite capacity. The source
@@ -278,8 +278,8 @@ built transmitter fixture are required):
 
 ```sh
 python3 tests/test_fixed_iq_source.py
-python3 tools/dvbt_high_fec_fixtures.py /path/to/datv-transmitter/build/datv-iq build/diagnostics/viterbi-high-fec
-python3 tools/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
+python3 dev/dvbt_high_fec_fixtures.py /path/to/datv-transmitter/build/datv-iq build/diagnostics/viterbi-high-fec
+python3 dev/dvbt_viterbi_experiment.py build /tmp/dvbt-viterbi
 python3 - <<'PY'
 import json
 from pathlib import Path
@@ -290,13 +290,13 @@ for c in cases:
                        and c['fec'] != '1/2' and c['expected_clean']) else 1
 Path('/tmp/high-fec-sdr.json').write_text(json.dumps(cases))
 PY
-python3 tools/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/high-fec-sdr.json --sdr-live --repeat 1
+python3 dev/dvbt_viterbi_experiment.py run /tmp/dvbt-viterbi /tmp/high-fec-sdr.json --sdr-live --repeat 1
 ```
 
 ## Live-rate frontend investigation (2026-11-05)
 
 The following records the earlier research phase, before integration above. The
-[experiment tool](../../tools/dvbt_frontend_experiment.py) builds isolated copies
+[experiment tool](../../dev/dvbt_frontend_experiment.py) builds isolated copies
 of this component, linked to the normal embedded backend objects. The
 [measurements](benchmarks/frontend-2026-11-05.json) retain the 46 individual runs,
 input hashes, build identity, limitations and per-phase summaries.
@@ -379,10 +379,10 @@ from pathlib import Path
 report = json.loads(Path('components/dvbt/benchmarks/frontend-2026-11-05.json').read_text())
 Path('/tmp/dvbt-inputs.json').write_text(json.dumps(report['fixtures'][:2]))
 PY
-python3 tools/dvbt_frontend_experiment.py build /tmp/dvbt-front --baseline-ref 1069f21 --variants baseline,rotations,buffers,combined,cached,alloc-profile
-python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-inputs.json --repeat 3 --variants baseline,rotations,buffers,combined,cached
-python3 tools/dvbt_frontend_experiment.py impair /tmp/dvbt-front /tmp/dvbt-inputs.json
-python3 tools/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-front/controlled.json --repeat 2 --variants baseline,rotations,buffers,combined,cached
+python3 dev/dvbt_frontend_experiment.py build /tmp/dvbt-front --baseline-ref 1069f21 --variants baseline,rotations,buffers,combined,cached,alloc-profile
+python3 dev/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-inputs.json --repeat 3 --variants baseline,rotations,buffers,combined,cached
+python3 dev/dvbt_frontend_experiment.py impair /tmp/dvbt-front /tmp/dvbt-inputs.json
+python3 dev/dvbt_frontend_experiment.py run /tmp/dvbt-front /tmp/dvbt-front/controlled.json --repeat 2 --variants baseline,rotations,buffers,combined,cached
 ```
 
 `impair` requires NumPy. Run variants sequentially without competing benchmarks.
@@ -472,10 +472,10 @@ The investigation is reproducible with:
 
 ```sh
 make all test-dvbt
-python3 tools/dvbt_pilot_experiment.py build /tmp/dvbt-pilots
-python3 tools/dvbt_pilot_experiment.py check /tmp/dvbt-pilots
-python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --repeat 1
-python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --variants profile,roles-profile --repeat 1
+python3 dev/dvbt_pilot_experiment.py build /tmp/dvbt-pilots
+python3 dev/dvbt_pilot_experiment.py check /tmp/dvbt-pilots
+python3 dev/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --repeat 1
+python3 dev/dvbt_pilot_experiment.py run /tmp/dvbt-pilots CASES.json --variants profile,roles-profile --repeat 1
 ```
 
 The baseline probe and carrier model are pinned to `d45f7c8`; the other backend
@@ -501,8 +501,8 @@ outer-decoder decisions independently of thread log ordering.
 For additional file-only DX scenarios from a prepared s16 recording:
 
 ```sh
-python3 tools/dvbt_dx_fixtures.py CASES.json 40k-OAeYaF /tmp/dvbt-dx
-python3 tools/dvbt_pilot_experiment.py run /tmp/dvbt-pilots /tmp/dvbt-dx/dx.json --repeat 2
+python3 dev/dvbt_dx_fixtures.py CASES.json 40k-OAeYaF /tmp/dvbt-dx
+python3 dev/dvbt_pilot_experiment.py run /tmp/dvbt-pilots /tmp/dvbt-dx/dx.json --repeat 2
 ```
 
 The generator records seeds, hashes and clipping counts. It covers increasing

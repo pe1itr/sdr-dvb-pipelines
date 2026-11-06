@@ -15,7 +15,7 @@ class SourceTests(unittest.TestCase):
         data=bytes(range(256))*1000  # 0.64 seconds at 100k complex s16 samples/s.
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'input.iq';path.write_bytes(data)
-            proc=subprocess.Popen([sys.executable,str(ROOT/'tools/fixed_iq_source.py'),
+            proc=subprocess.Popen([sys.executable,str(ROOT/'dev/fixed_iq_source.py'),
                 '--in',str(path),'--sample-rate','100000','--input-format','s16',
                 '--buffer-ms','50'],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             if stall:time.sleep(.3)

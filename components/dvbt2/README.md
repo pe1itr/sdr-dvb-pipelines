@@ -157,13 +157,13 @@ To repeat with a local headerless recording:
 
 ```sh
 make build/dvbt2_worker
-python3 tools/bench_dvbt2.py --decoder build/dvbt2_worker --iq FILE --output build/t2-bench/run1
+python3 dev/bench_dvbt2.py --decoder build/dvbt2_worker --iq FILE --output build/t2-bench/run1
 ```
 
 Use a fresh output prefix for each run. The helper
 uses a bounded, fixed-clock source and records TS hashes and all drop counters;
 `--profile` additionally reports component CPU stages. The optional NumPy tool
-`tools/dvbt2_impair_fixture.py` makes reproducible noise/fade recordings offline.
+`dev/dvbt2_impair_fixture.py` makes reproducible noise/fade recordings offline.
 Physical ARM/NEON and long-duration broadcast testing remain separate work.
 
 ## Eindhoven reception

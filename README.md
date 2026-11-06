@@ -58,7 +58,7 @@ See the [DVB-T2 component](components/dvbt2/README.md) for the supported scope.
 
 The complete application builds on Linux. You need:
 
-- A C compiler, a C++20 compiler, Make, `pkg-config`, Python 3.8+ and Rust/Cargo 1.70+.
+- A C compiler, a C++20 compiler, Make, Bash, `pkg-config` and Rust/Cargo 1.70+.
 - Development libraries for GTK 3, GLib, json-c, single-precision FFTW3,
   SoapySDR, UHD, ALSA, libsamplerate, libVLC 3, libzvbi and FFmpeg
   (`libavcodec`, `libavformat`, `libavutil`, `libswscale`).
@@ -72,8 +72,8 @@ built-in decoders.
 From the repository root:
 
 ```sh
-python3 tools/build.py --check
-python3 tools/build.py -j 4
+bash tools/build.sh --check
+bash tools/build.sh -j 4
 cp -n linrad-dvb.example.ini linrad-dvb.ini
 ./build/linrad_dvb
 ```
@@ -125,7 +125,8 @@ programs in `build/` supply IQ to the application and can also be used directly.
 | `components/` | Maintained DVB-T, DVB-T2 and TSscatterFix components |
 | `third_party/` | Bundled LeanSDR and LDPC sources, licenses and provenance |
 | `tests/` | Regression tests, fixtures and hardware simulators |
-| `tools/` | Build, source packaging and decoder development tools |
+| `tools/` | Bash scripts for Linux and ODROID-N2 builds |
+| `dev/` | Source packaging, test fixtures and decoder experiments |
 | `benchmarks/` | Decoder measurement reports |
 | `docs/` | Detailed documentation and the README screenshot |
 | `*.example.ini`, `direwolf-pcm.conf` | Example receiver and audio configurations |
@@ -142,7 +143,8 @@ make package     # build and copy component licenses into build/
 make dist        # create dist/linrad_dvb-source.zip
 ```
 
-Tests require Python with NumPy; media tests also use FFmpeg with libx264/libx265.
+Building uses Bash and Make; Python is only needed for development utilities,
+source packaging and tests. Tests require Python with NumPy; media tests also use FFmpeg with libx264/libx265.
 GUI checks use `broadwayd` when available. Tests use synthetic data and local
 simulators; they do not replace reception checks with real signals.
 

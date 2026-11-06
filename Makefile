@@ -104,7 +104,7 @@ $(BUILD_DIR)/components/dvbt/backend.o: src/dvbt_backend.c src/dvbt_backend.h sr
 .PHONY: all package dist test clean
 
 dist:
-	python3 tools/dist.py
+	python3 dev/dist.py
 
 all: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout $(BUILD_DIR)/sdr_to_stdout $(BUILD_DIR)/iq_file_to_stdout
 

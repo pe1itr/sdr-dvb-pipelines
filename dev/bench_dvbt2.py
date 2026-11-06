@@ -38,7 +38,7 @@ def main():
     env.pop('LINRAD_DECODER_MONITOR_PORT', None)
     env['DECT2_STAGE_PROF'] = '1' if args.profile else '0'
     with paths['ts'].open('xb') as ts, paths['decoder.log'].open('xb') as log, paths['source.log'].open('xb') as source_log:
-        source = subprocess.Popen([sys.executable, str(ROOT/'tools/fixed_iq_source.py'), '--in', str(args.iq.resolve()),
+        source = subprocess.Popen([sys.executable, str(ROOT/'dev/fixed_iq_source.py'), '--in', str(args.iq.resolve()),
             '--sample-rate', str(args.sample_rate), '--input-format', args.input_format], stdout=subprocess.PIPE, stderr=source_log)
         worker = None
         try:

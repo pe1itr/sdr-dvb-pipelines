@@ -140,7 +140,7 @@ def run(out, manifest, variants, repeat):
         for index in range(case.get('repeat', repeat)):
             for variant in variants if index % 2 == 0 else list(reversed(variants)):
                 row = frontend.run_one(out, logs, case, variant, index,
-                    [sys.executable, str(ROOT/'tools/fixed_iq_source.py')])
+                    [sys.executable, str(ROOT/'dev/fixed_iq_source.py')])
                 live_detail(row, case)
                 assert row['processed_input_samples'] == row['input_samples']
                 assert not row['iq_dropped'] and not row['fec_dropped']

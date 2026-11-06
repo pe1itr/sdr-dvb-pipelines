@@ -454,7 +454,7 @@ installatie die ook `datv-transmitter` gebruikt:
 
 ```bash
 export PKG_CONFIG_PATH="/path/to/limesuite/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-python3 tools/build.py -j4
+bash tools/build.sh -j4
 ./build/linrad_dvb --source lime
 ```
 

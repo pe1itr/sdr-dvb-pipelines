@@ -27,7 +27,7 @@ replace=frontend.replace_once
 
 def transform(source, variant):
     if variant=='baseline':return source
-    helper=(ROOT/'tools/viterbi_experiment_avx2.h').read_text()
+    helper=(ROOT/'dev/viterbi_experiment_avx2.h').read_text()
     source=replace(source,'static void survivor_row_set(',helper+'\nstatic void survivor_row_set(')
     source=replace(source,'    viterbi_tables_ready = 1;', '''    for (unsigned s=0;s<64;++s) {
         bench_exp0[s]=viterbi_expected_table[s][0];
@@ -219,7 +219,7 @@ def main():
         for rep in range(case.get('repeat',a.repeat)):
             pair=[]
             for variant in ('baseline','avx2') if rep%2==0 else ('avx2','baseline'):
-                feeder=[sys.executable,str(ROOT/'tools/fixed_iq_source.py')] if a.sdr_live else None
+                feeder=[sys.executable,str(ROOT/'dev/fixed_iq_source.py')] if a.sdr_live else None
                 row=frontend.run_one(out,logs,case,variant,rep,feeder_override=feeder)
                 log=Path(row['log_prefix']+'.log').read_text()
                 m=re.search(r'\[bench-viterbi\] cpu=([\d.]+) pairs=(\d+)',log)

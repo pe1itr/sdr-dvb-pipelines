@@ -20,7 +20,7 @@ API and its callers belong in the same project change.
 Build and test from the repository root:
 
 ```sh
-python3 tools/build.py
+bash tools/build.sh
 make test-dvbt test-dvbt2 test-scatter
 make test
 make package

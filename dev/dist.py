@@ -17,7 +17,7 @@ FILES = (
     "linrad-dvbt2-eindhoven.example.ini",
     "direwolf-pcm.conf",
 )
-DIRECTORIES = ("src", "components", "third_party", "tools", "tests", "docs", "benchmarks")
+DIRECTORIES = ("src", "components", "third_party", "tools", "dev", "tests", "docs", "benchmarks")
 SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "build", "dist", "target"}
 SKIP_SUFFIXES = {".pyc", ".pyo", ".o", ".a", ".so", ".d", ".log", ".iq", ".ts", ".zip"}
 SCREENSHOT = Path("docs/images/linrad-dvb-dvbt2.png")

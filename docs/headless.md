@@ -109,7 +109,7 @@ Voor deze machine is er een aparte native buildhelper:
 
 ```bash
 # Vanuit de uitgepakte bronmap / checkout op de Odroid, als gewone gebruiker:
-python3 tools/build_odroid_n2.py --install-deps --build-ffmpeg
+bash tools/build_odroid_n2.sh --install-deps --build-ffmpeg
 ```
 
 Het script gebruikt `sudo apt-get` voor de Ubuntu/Debian-pakketten en bouwt
@@ -222,9 +222,9 @@ ontvangst- of prestatietest op een fysieke Odroid N2.
 
 ```bash
 # Later opnieuw bouwen; lokale FFmpeg wordt automatisch hergebruikt:
-python3 tools/build_odroid_n2.py
+bash tools/build_odroid_n2.sh
 # Alleen controleren, zonder installatie, build of configuratiewijzigingen:
-python3 tools/build_odroid_n2.py --check
+bash tools/build_odroid_n2.sh --check
 # Opdracht controleren zonder de dongle of SRT-verbinding te openen:
 ./build-odroid-n2/linrad_dvb --config pi6ehv-odroid.ini \
   --print-pipeline --rtlsdr-serial 1002

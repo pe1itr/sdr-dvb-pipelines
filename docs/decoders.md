@@ -117,7 +117,7 @@ en continu zoeken. De BCH-optimalisatie verandert geen
 filtering, acquisitie, LDPC-iteratielimiet of codeersterkte.
 
 **LDPC-onderzoek met live bestandsinvoer (2026-11-05).**
-`tools/ldpc_experiment.py` bouwt afzonderlijke onderzoekshelpers in een opgegeven
+`dev/ldpc_experiment.py` bouwt afzonderlijke onderzoekshelpers in een opgegeven
 werkmap. De normale decoder en LDPC-helper worden daarbij niet vervangen.
 De twee referenties zijn de volledige `recordings/fbn2.raw` (DL4FBN, QPSK
 125 ksym/s, korte frames, 1/2, 215,686 s) en
@@ -212,9 +212,9 @@ from pathlib import Path
 report = json.loads(Path('benchmarks/ldpc-2026-11-05.json').read_text())
 Path('/tmp/ldpc-cases.json').write_text(json.dumps(report['cases']))
 PY
-python3 tools/ldpc_experiment.py build /tmp/ldpc-check --variants baseline-plain,profile,single16-plain
-python3 tools/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label baseline --helper /tmp/ldpc-check/baseline-plain
-python3 tools/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label candidate --helper /tmp/ldpc-check/single16-plain
+python3 dev/ldpc_experiment.py build /tmp/ldpc-check --variants baseline-plain,profile,single16-plain
+python3 dev/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label baseline --helper /tmp/ldpc-check/baseline-plain
+python3 dev/ldpc_experiment.py run /tmp/ldpc-check /tmp/ldpc-cases.json --label candidate --helper /tmp/ldpc-check/single16-plain
 ```
 
 De onderzoeksbuild gebruikt standaard de helperbron uit Git-revisie `eb2e09d`

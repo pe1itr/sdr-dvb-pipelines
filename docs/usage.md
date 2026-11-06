@@ -16,13 +16,13 @@ libsamplerate en libVLC 3
 (inclusief de VLC-codecplugins)):
 
 ```bash
-python3 tools/build.py
+bash tools/build.sh
 # Eenmalig, als linrad-dvb.ini nog niet bestaat:
 cp -n linrad-dvb.example.ini linrad-dvb.ini
 ./build/linrad_dvb
 ```
 
-De [buildhelper](../tools/build.py) vereist Python 3.8+ en controleert eerst de
+De [buildhelper](../tools/build.sh) gebruikt Bash en controleert eerst de
 buildtools, de C/C++-compiler en alle hierboven genoemde bibliotheken met
 `pkg-config` en kleine compileer-/linkproeven. Alleen runtimebibliotheken
 installeren is onvoldoende: ook de headers en development packages zijn nodig.
@@ -38,8 +38,8 @@ gecontroleerd konden worden. De controle garandeert geen aangesloten hardware,
 UHD-firmware, toegangsrechten of beschikbare VLC-codecplugins.
 
 ```bash
-python3 tools/build.py --check     # alleen afhankelijkheden controleren
-python3 tools/build.py -j 4        # controleren en met vier jobs bouwen
+bash tools/build.sh --check     # alleen afhankelijkheden controleren
+bash tools/build.sh -j 4        # controleren en met vier jobs bouwen
 ```
 
 De helper werkt ook vanuit een andere werkmap. Hij gebruikt `make all` en

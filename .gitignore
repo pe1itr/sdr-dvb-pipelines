@@ -15,6 +15,7 @@
 !/third_party/
 !/tests/
 !/tools/
+!/dev/
 !/docs/
 
 # Generated files inside the included directories also stay local.
