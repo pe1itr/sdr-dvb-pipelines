@@ -2080,6 +2080,10 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
     }
     tuning_refresh(a);
     refresh_preview(a);
+    // GTK grows a window for newly shown fields but retains its old size when
+    // they disappear. Request the minimum; GTK enforces the visible content's
+    // requisition, including the dialog buttons and window decorations.
+    if (a->mode_dialog) gtk_window_resize(GTK_WINDOW(a->mode_dialog),1,1);
 }
 static void power_clicked(GtkWidget *w, gpointer data) {
     (void)w; App *a = data;
@@ -2804,6 +2808,7 @@ static gboolean hide_dialog_close(GtkWidget *widget, GdkEvent *event, gpointer d
 static void show_mode(GtkWidget *widget, gpointer data) {
     (void)widget; App *a=data; gtk_widget_show_all(a->mode_dialog);
     scatter_refresh(a);
+    gtk_window_resize(GTK_WINDOW(a->mode_dialog),1,1);
     gtk_window_present(GTK_WINDOW(a->mode_dialog));
 }
 

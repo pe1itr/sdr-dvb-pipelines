@@ -9,6 +9,38 @@ static GtkWidget *tii_cell_at(App *a,int column,int row) {
     g_assert_nonnull(cell);return cell;
 }
 
+static void mode_window_size(App *a,int *width,int *height) {
+    // Window sizing is asynchronous: allow GTK and the display backend to
+    // finish allocation before inspecting the actual window, not its request.
+    gint64 deadline=g_get_monotonic_time()+250000;
+    while (g_get_monotonic_time()<deadline) {
+        g_main_context_iteration(NULL,FALSE);
+        g_usleep(1000);
+    }
+    gtk_window_get_size(GTK_WINDOW(a->mode_dialog),width,height);
+}
+
+static void exercise_mode_window_size(App *a) {
+    int large_width,large_height,small_width,small_height,width,height;
+    show_mode(NULL,a);
+    mode_window_size(a,&large_width,&large_height);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),0);
+    mode_window_size(a,&small_width,&small_height);
+    g_assert_cmpint(small_height,<,large_height);
+    g_assert_cmpint(small_width,<=,large_width);
+    // Reopening a previously enlarged popup must also fit the current fields.
+    gtk_widget_hide(a->mode_dialog);
+    gtk_window_resize(GTK_WINDOW(a->mode_dialog),large_width,large_height);
+    show_mode(NULL,a);
+    mode_window_size(a,&width,&height);
+    g_assert_cmpint(height,==,small_height);
+    g_assert_cmpint(width,==,small_width);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
+    mode_window_size(a,&width,&height);
+    g_assert_cmpint(height,>=,large_height);
+    gtk_widget_hide(a->mode_dialog);
+}
+
 static gboolean exercise_dab_lifecycle(gpointer data) {
     App *a=data;
     static int phase,ticks;static GPid old_decoder,old_source;
@@ -211,6 +243,7 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"—");
     g_assert_cmpint(gtk_image_get_storage_type(GTK_IMAGE(a->dab.image)),==,GTK_IMAGE_EMPTY);
+    exercise_mode_window_size(a);
     for (int mode=0; mode<4; ++mode) {
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),mode);
         g_assert_null(strstr(gtk_label_get_text(GTK_LABEL(a->frequency_display))," · "));
