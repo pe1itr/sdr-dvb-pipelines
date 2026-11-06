@@ -332,7 +332,11 @@ int main(int argc, char **argv) {
         int index=dab_channel_nearest(freq), direction=index>=2 ? -1 : 1;
         int path[]={index,index+direction,index+2*direction,index+direction,index};
         for (unsigned p=0;p<sizeof(path)/sizeof(path[0]) && !stopped;++p) {
-            if (b210_mixer_tune(&mixer,usrp,dab_channels[path[p]].hz,dab_if)) goto done;
+            // Off-grid DAB must finish on the requested RF, never the nearest
+            // Band III preset. Retain the established channel sweep for presets.
+            double conditioning_rf=freq==dab_channels[index].hz ? dab_channels[path[p]].hz : freq;
+            if (!b210_mixer_valid(conditioning_rf,dab_if,b210_port,lo_port,1)) conditioning_rf=freq;
+            if (b210_mixer_tune(&mixer,usrp,conditioning_rf,dab_if)) goto done;
             double until=monotonic_seconds()+.25;
             while (monotonic_seconds()<until && !stopped) {
                 size_t got=0;void *buffers[]={iq};
@@ -356,7 +360,8 @@ int main(int argc, char **argv) {
                 rsp ? 20 : afedri ? -10 : sdriq ? -20 : 0,
                 airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
                 airspyr2 || rsp || lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
-        if ((changed & 1) && !rx_tuning_valid(source,requested,receiver_offset)) {
+        if ((changed & 1) && (!rx_tuning_valid(source,requested,receiver_offset) ||
+            (dab_if && !b210_mixer_valid(requested,dab_if,b210_port,lo_port,dab_lo)))) {
             fprintf(stderr, "[SDR] Ignoring tune outside model/input range\n");
             changed &= ~1;
         }

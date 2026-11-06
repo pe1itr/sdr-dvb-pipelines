@@ -50,6 +50,48 @@ class DabTests(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertNotIn("--dab-lo-output", p.stdout)
 
+    def test_free_frequency_pipeline_and_limits(self):
+        for hz in (145500000, 436123456, 5700000000, 6000000000):
+            with self.subTest(hz=hz):
+                p = self.preview(free_tuning="true", frequency_hz=str(hz))
+                self.assertEqual(p.returncode, 0, p.stderr)
+                stages = [shlex.split(line) for line in p.stdout.splitlines() if line.startswith("'")]
+                for stage in stages:
+                    self.assertEqual(stage[stage.index("--frequency")+1], str(hz))
+                self.assertNotIn("--channel", stages[1])
+        p = self.preview(free_tuning="true", frequency_hz="145500000", mixer_enabled="true")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("'--dab-if' '53000000'", p.stdout)
+        for hz in ("nan", "-1", "0", "1e30", "6000000001", "145500000.5", "69000000"):
+            with self.subTest(hz=hz):
+                self.assertNotEqual(self.preview(free_tuning="true", frequency_hz=hz).returncode, 0)
+        self.assertNotEqual(self.preview(source="rtlsdr", rate=2048000,
+            free_tuning="true", frequency_hz="5700000000").returncode, 0)
+        self.assertNotEqual(self.preview(free_tuning="true", frequency_hz="70000000",
+            mixer_enabled="true").returncode, 0)
+        # The remembered free frequency does not override the channel when off.
+        p = self.preview(free_tuning="false", frequency_hz="145500000")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("'--channel' '12D'", p.stdout)
+
+    def test_worker_free_frequency_and_invalid_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for hz in ("145500000", "5700000000"):
+                p = subprocess.run([ROOT/"build/dab_worker", "--state-dir", tmp,
+                    "--frequency", hz, "--no-audio"], input=bytes(196608*4*3),
+                    capture_output=True, timeout=15)
+                self.assertEqual(p.returncode, 0, p.stderr.decode())
+                state = json.loads((Path(tmp)/"state.json").read_text())
+                self.assertEqual(state["frequency"], int(hz))
+                self.assertEqual(state["channel"], "free")
+            for options in (["--frequency", ""], ["--frequency", "nan"],
+                            ["--frequency", "6000000001"], ["--frequency", "-1"],
+                            ["--frequency", "145500000x"],
+                            ["--frequency", "145500000", "--channel", "9C"]):
+                p = subprocess.run([ROOT/"build/dab_worker", "--state-dir", tmp,
+                    "--no-audio", *options], input=b"", capture_output=True, timeout=5)
+                self.assertNotEqual(p.returncode, 0, options)
+
     def test_invalid_settings_fail_before_hardware(self):
         for values in ({"channel": "4Z"}, {"profile": "unknown"},
                        {"mixer_enabled": "true", "if_hz": "nan"},
@@ -79,6 +121,12 @@ class DabTests(unittest.TestCase):
                 self.assertNotEqual(self.preview(source=source,rate=rate).returncode,0)
 
     def test_retune_discards_queued_iq_at_acknowledged_byte_boundary(self):
+        self.check_retune_boundary("10A", 209936000)
+
+    def test_free_retune_discards_queued_iq_at_acknowledged_byte_boundary(self):
+        self.check_retune_boundary("free", 5700000123)
+
+    def check_retune_boundary(self, channel, hz):
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)
             p=subprocess.Popen([ROOT/"build/dab_worker","--state-dir",tmp,"--channel","9C","--no-audio"],
@@ -94,12 +142,12 @@ class DabTests(unittest.TestCase):
                 self.fail("DAB worker did not acknowledge channel request")
             try:
                 wait_state(lambda s:s["generation"]==0)
-                (directory/"channel").write_text("1 10A\n")
+                (directory/"channel").write_text(f"1 {channel} {hz}\n")
                 wait_state(lambda s:s["generation"]==1 and s["tuning"])
                 old=struct.pack("<hh",16384,-16384)*196608
                 # An odd partial read while waiting must not corrupt I/Q alignment.
                 p.stdin.write(old[:12345]);p.stdin.flush()
-                (directory/"tuned").write_text(f"1 209936000 {len(old)}\n")
+                (directory/"tuned").write_text(f"1 {hz} {len(old)}\n")
                 p.stdin.write(old[12345:]+bytes(3));p.stdin.flush()
                 fresh_samples=196608*3
                 p.stdin.write(bytes(4*fresh_samples-3));p.stdin.close();p.stdin=None
@@ -107,7 +155,8 @@ class DabTests(unittest.TestCase):
                 self.assertEqual(p.returncode,0,errors.decode())
                 state=json.loads((directory/"state.json").read_text())
                 self.assertEqual(state["generation"],1)
-                self.assertEqual(state["channel"],"10A")
+                self.assertEqual(state["channel"],channel)
+                self.assertEqual(state["frequency"],hz)
                 self.assertEqual(state["input_samples"],fresh_samples)
                 self.assertEqual(state["ueid"],0)
                 self.assertEqual(state["tii"],[])

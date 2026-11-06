@@ -24,7 +24,7 @@ typedef struct {
 } DabView;
 void dab_view_create(DabView *v,DecoderView *decoder,GtkWindow *parent,void (*log)(const DabReception*,gpointer),GHashTable *(*logged_tii)(const char*,gpointer),gpointer data);
 void dab_view_refresh_tii(DabView *v);
-gboolean dab_view_retune(DabView *v,int fd,const char *channel,unsigned hz);
+gboolean dab_view_retune(DabView *v,int fd,const char *channel,guint64 hz);
 void dab_view_mute(DabView *v,gboolean muted);
 void dab_view_reset(DabView *v);
 void dab_view_tick(DabView *v,gboolean active);

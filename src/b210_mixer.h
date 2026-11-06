@@ -28,7 +28,7 @@ static int b210_input(const char *input,size_t *channel,const char **antenna) {
 static int b210_mixer_valid(double rf,double intermediate,const char *rx,const char *tx,int enabled) {
     size_t channel;const char *antenna;
     return isfinite(rf) && isfinite(intermediate) && intermediate>=46000000 && intermediate<=126428000 &&
-        rf>=174928000 && rf<=239200000 && rf-intermediate-2500000>=46000000 &&
+        rf>=70000000 && rf<=6000000000.0 && rf-intermediate-2500000>=46000000 &&
         !b210_input(rx,&channel,&antenna) && (!strcmp(tx,"TRX1") || !strcmp(tx,"TRX2")) &&
         (!enabled || strcmp(rx,tx));
 }

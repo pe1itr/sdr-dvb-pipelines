@@ -187,6 +187,11 @@ use the same physical connector. The measured dab-monitor clock/tone settings
 and startup conditioning are preserved. Hardware validation of this integration
 is still required; the software tests use IQ recordings and UHD mocks.
 
+For DAB outside the Band III channel grid, open **Mode**, check **Free
+frequency**, and enter the frequency in MHz. Uncheck it to use the channel
+list again. During reception, left/right tunes by the SDR tuning step in free
+mode. The receiver's hardware range and DAB sample-rate requirements still apply.
+
 ## Build and run
 
 The complete application builds on Linux. You need:

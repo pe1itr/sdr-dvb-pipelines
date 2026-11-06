@@ -29,7 +29,21 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
         power_clicked(NULL,a);++phase;
     } else if (phase==3 && !a->running) {
         g_assert_false(a->stopping);
-        g_assert_cmpint(a->exit_code,==,0);gtk_main_quit();return G_SOURCE_REMOVE;
+        g_assert_cmpint(a->exit_code,==,0);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),TRUE);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dab_frequency_box),5700.0);
+        power_clicked(NULL,a);++phase;
+    } else if (phase==4 && a->running && !a->stopping) {
+        old_decoder=a->stages[1].pid;old_source=a->stages[0].pid;
+        tune_step(a,1);g_assert_cmpuint(a->dab.generation,==,1);++phase;
+    } else if (phase==5 && a->dab.snapshot && dab_view_number(&a->dab,"generation")==1 && !dab_view_number(&a->dab,"tuning")) {
+        g_assert_cmpint(a->stages[1].pid,==,old_decoder);g_assert_cmpint(a->stages[0].pid,==,old_source);
+        g_assert_cmpfloat(dab_view_number(&a->dab,"frequency"),==,5700001250.0);
+        g_assert_cmpstr(dab_view_text(&a->dab,"channel"),==,"free");
+        power_clicked(NULL,a);++phase;
+    } else if (phase==6 && !a->running) {
+        g_assert_false(a->stopping);g_assert_cmpint(a->exit_code,==,0);
+        gtk_main_quit();return G_SOURCE_REMOVE;
     }
     return G_SOURCE_CONTINUE;
 }
@@ -64,6 +78,28 @@ static gboolean exercise_dab(gpointer data) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_channel_box),DAB_CHANNEL_COUNT-1);
     gtk_button_clicked(GTK_BUTTON(a->dab_next));
     g_assert_cmpint(dab_channel(a),==,DAB_CHANNEL_COUNT-1);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),TRUE);
+    g_assert_false(gtk_widget_get_sensitive(a->dab_channel_box));
+    g_assert_true(gtk_widget_get_sensitive(a->dab_frequency_box));
+    g_assert_true(gtk_widget_get_sensitive(a->step_box));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dab_frequency_box),145.500123);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->step_box),1250);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"145.500123 MHz");
+    gtk_button_clicked(GTK_BUTTON(a->dab_next));
+    g_assert_cmpfloat(dab_frequency(a),==,145501373);
+    gtk_button_clicked(GTK_BUTTON(a->dab_previous));
+    g_assert_cmpfloat(dab_frequency(a),==,145500123);
+    g_assert_cmpint(dab_channel(a),==,DAB_CHANNEL_COUNT-1);
+    save_settings(a);
+    GKeyFile *saved=g_key_file_new();
+    g_assert_true(g_key_file_load_from_file(saved,a->config_path,0,NULL));
+    g_assert_true(g_key_file_get_boolean(saved,"dab","free_tuning",NULL));
+    g_assert_cmpfloat(g_key_file_get_double(saved,"dab","frequency_hz",NULL),==,145500123);
+    g_key_file_unref(saved);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),FALSE);
+    g_assert_true(gtk_widget_get_sensitive(a->dab_channel_box));
+    g_assert_false(gtk_widget_get_sensitive(a->dab_frequency_box));
+    g_assert_cmpfloat(dab_frequency(a),==,239200000);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box),TRUE);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),TRUE);
     char *pipeline=describe(a);
@@ -175,6 +211,20 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"—");
     g_assert_cmpint(gtk_image_get_storage_type(GTK_IMAGE(a->dab.image)),==,GTK_IMAGE_EMPTY);
+    for (int mode=0; mode<4; ++mode) {
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),mode);
+        g_assert_null(strstr(gtk_label_get_text(GTK_LABEL(a->frequency_display))," · "));
+        g_assert_true(gtk_widget_get_sensitive(a->frequency_box));
+        g_assert_false(gtk_widget_get_visible(a->dab_controls));
+        g_assert_false(gtk_widget_get_visible(a->dab_previous));
+        g_assert_false(gtk_widget_get_visible(a->dab.stations_frame));
+        // Reopening Mode must not resurrect hidden DAB controls via show_all.
+        show_mode(NULL,a);
+        g_assert_false(gtk_widget_get_visible(a->dab_controls));
+        gtk_widget_hide(a->mode_dialog);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
+        g_assert_true(gtk_widget_get_visible(a->dab_controls));
+    }
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),0);
     g_assert_true(gtk_widget_get_visible(a->decoder_view.service_frame));
     g_assert_false(gtk_widget_get_visible(a->dab.tii_button));

@@ -56,6 +56,7 @@ typedef struct {
     DabView dab;
     GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
     GtkWidget *video_frame, *dab_previous, *dab_next;
+    GtkWidget *dab_controls, *dab_free_box, *dab_frequency_box;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
@@ -130,6 +131,13 @@ static int dab_channel(App *a) {
     char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
     int index=dab_channel_index(name);g_free(name);return index<0 ? 30 : index;
 }
+static gboolean dab_free_tuning(App *a) {
+    return g_key_file_get_boolean(a->config,"dab","free_tuning",NULL);
+}
+static double dab_frequency(App *a) {
+    return dab_free_tuning(a) ? g_key_file_get_double(a->config,"dab","frequency_hz",NULL)
+        : dab_channels[dab_channel(a)].hz;
+}
 static const int t2_rates[] = {8000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
@@ -196,7 +204,10 @@ static const char *receiver_offset_problem(App *a) {
 #endif
         char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
         int index=dab_channel_index(name);g_free(name);
-        if (index<0) return "DAB: unknown Band III channel in [dab] channel.";
+        if (!dab_free_tuning(a) && index<0) return "DAB: unknown Band III channel in [dab] channel.";
+        double rf=dab_frequency(a);
+        if (!isfinite(rf) || rf<1 || rf>6000000000.0 || floor(rf)!=rf)
+            return "DAB: enter a frequency from 1 Hz to 6 GHz, in whole Hz.";
         char *profile=g_key_file_get_string(a->config,"dab","profile",NULL);
         gboolean known=profile && (!strcmp(profile,"normal") || !strcmp(profile,"weak") || !strcmp(profile,"aircraft"));g_free(profile);
         if (!known) return "DAB profile must be normal, weak or aircraft.";
@@ -208,11 +219,11 @@ static const char *receiver_offset_problem(App *a) {
         if (g_key_file_get_boolean(a->config,sources[a->source],"filter_enabled",NULL) &&
             g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL)<1536000)
             return "DAB: disable the narrow IQ filter or select at least 1.536 MHz.";
-        if (receiver_offset(a)!=0) return "DAB: set receiver offset to zero; select the channel in Mode.";
+        if (receiver_offset(a)!=0) return "DAB: set receiver offset to zero; select the channel or free frequency in Mode.";
         if (a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL)) {
             double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
-            if (!isfinite(intermediate) || intermediate<46000000 || intermediate>dab_channels[0].hz-48500000)
-                return "DAB mixer IF must be 46..126.428 MHz, keeping the low-side LO within the board tuning range.";
+            if (!isfinite(intermediate) || intermediate<46000000 || intermediate>126428000 || rf-intermediate-2500000<46000000)
+                return "DAB mixer IF must be 46..126.428 MHz and RF minus IF minus 2.5 MHz must be at least 46 MHz.";
             char *input=g_key_file_get_string(a->config,"dab","rx_input",NULL);
             char *port=g_key_file_get_string(a->config,"dab","lo_port",NULL);
             gboolean valid=input && (!strcmp(input,"TRX1") || !strcmp(input,"RX1") || !strcmp(input,"TRX2") || !strcmp(input,"RX2")) &&
@@ -426,7 +437,9 @@ static void build_pipeline(App *a) {
     if (a->standard == 4) {
         s=new_stage(a,"dab");
         add(s,"--state-dir");add(s,a->dab.directory);
-        add(s,"--channel");add(s,dab_channels[dab_channel(a)].name);
+        if (dab_free_tuning(a)) {
+            add(s,"--frequency");g_ptr_array_add(s->args,g_strdup_printf("%.0f",dab_frequency(a)));
+        } else {add(s,"--channel");add(s,dab_channels[dab_channel(a)].name);}
         add(s,"--input-format");add(s,format);add_number(s,"--sample-rate",sample_rate);
         char *profile=setting(a,"dab","profile"), *device=setting(a,"dab","audio_device");
         add(s,"--profile");add(s,profile);add(s,"--audio-device");add(s,device);g_free(profile);g_free(device);
@@ -699,11 +712,16 @@ static void scatter_refresh(App *a) {
             if (dab) gtk_widget_hide(a->information.dialogs[i]);
         }
         gtk_widget_set_visible(a->dab_previous,dab);gtk_widget_set_visible(a->dab_next,dab);
-        gtk_widget_set_sensitive(a->dab_previous,!a->stopping && hardware_source(a) && dab_channel(a)>0);
-        gtk_widget_set_sensitive(a->dab_next,!a->stopping && hardware_source(a) && dab_channel(a)+1<(int)DAB_CHANNEL_COUNT);
+        gtk_widget_set_sensitive(a->dab_previous,!a->stopping && hardware_source(a) && (dab_free_tuning(a) || dab_channel(a)>0));
+        gtk_widget_set_sensitive(a->dab_next,!a->stopping && hardware_source(a) && (dab_free_tuning(a) || dab_channel(a)+1<(int)DAB_CHANNEL_COUNT));
     }
     if (a->dab_channel_box) {
-        GtkWidget *widgets[]={a->dab_channel_box,a->dab_profile_box,a->dab_filter_box};
+        gboolean free_frequency=dab_free_tuning(a);
+        gtk_widget_set_visible(a->dab_controls,a->standard==4);
+        gtk_widget_set_sensitive(a->dab_free_box,a->standard==4);
+        gtk_widget_set_sensitive(a->dab_frequency_box,a->standard==4 && free_frequency);
+        GtkWidget *widgets[]={a->dab_profile_box,a->dab_filter_box};
+        gtk_widget_set_sensitive(a->dab_channel_box,a->standard==4 && !free_frequency);
         for (unsigned i=0;i<G_N_ELEMENTS(widgets);++i) gtk_widget_set_sensitive(widgets[i],a->standard==4);
         GtkWidget *mixer[]={a->dab_mixer_box,a->dab_if_box,a->dab_input_box,a->dab_lo_box,a->dab_lo_port_box};
         for (unsigned i=0;i<G_N_ELEMENTS(mixer);++i) gtk_widget_set_sensitive(mixer[i],a->standard==4 && a->source==2);
@@ -1026,13 +1044,18 @@ static void tuning_refresh(App *a) {
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
     gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && hardware_source(a));
-    gtk_widget_set_sensitive(a->step_box, a->standard!=4 && hardware_source(a));
+    gtk_widget_set_sensitive(a->step_box, (a->standard!=4 || dab_free_tuning(a)) && hardware_source(a));
     if (a->standard==4) {
         int channel=dab_channel(a);
-        char *label=g_strdup_printf("%s · %.6f MHz",dab_channels[channel].name,dab_channels[channel].hz/1e6);
+        char *label=dab_free_tuning(a) ? g_strdup_printf("%.6f MHz",dab_frequency(a)/1e6) :
+            g_strdup_printf("%s · %.6f MHz",dab_channels[channel].name,dab_frequency(a)/1e6);
+        g_signal_handlers_block_by_func(a->step_box,tuning_changed,a);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->step_box),g_key_file_get_double(a->config,sources[a->source],"tune_step",NULL));
+        g_signal_handlers_unblock_by_func(a->step_box,tuning_changed,a);
         gtk_label_set_text(GTK_LABEL(a->frequency_display),label);g_free(label);
         gtk_label_set_text(GTK_LABEL(a->frequency_calculation),a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL) ?
-            "DAB external mixer: fixed IF input; low-side LO = channel frequency − IF. Configure ports in Mode." :
+            "DAB external mixer: fixed IF input; low-side LO = receive frequency − IF. Configure ports in Mode." :
+            hardware_source(a) && dab_free_tuning(a) ? "DAB: free frequency in Mode; ← / → tunes by the SDR tuning step." :
             hardware_source(a) ? "DAB: select a channel in Mode; ← / → selects the previous / next channel." :
             "DAB: set the IQ input to the selected channel and sample rate; channel labels do not retune Linrad or files.");
         return;
@@ -1100,18 +1123,33 @@ static void tune_step(App *a, int direction) {
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
     if (a->standard==4) {
-        int index=dab_channel(a)+direction;
-        if (index<0 || index>=(int)DAB_CHANNEL_COUNT) return;
-        if (a->running && !dab_view_retune(&a->dab,a->tune_fd,dab_channels[index].name,dab_channels[index].hz)) {
+        gboolean free_frequency=dab_free_tuning(a);
+        int index=dab_channel(a);
+        if (free_frequency) next=dab_frequency(a)+direction*step;
+        else {
+            index+=direction;
+            if (index<0 || index>=(int)DAB_CHANNEL_COUNT) return;
+            next=dab_channels[index].hz;
+        }
+        double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
+        if (!rx_tuning_valid(section,next,0) ||
+            (a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL) &&
+             next-intermediate-2500000<46000000)) {
+            status(a,"DAB tuning limit reached for the selected SDR / mixer");return;
+        }
+        if (a->running && !dab_view_retune(&a->dab,a->tune_fd,
+                free_frequency ? "free" : dab_channels[index].name,(guint64)next)) {
             status(a,"DAB tuning command not sent; try again");return;
         }
-        g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
-        next=dab_channels[index].hz;
+        if (free_frequency) g_key_file_set_double(a->config,"dab","frequency_hz",next);
+        else g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
         g_key_file_set_double(a->config,section,"frequency",next);
-        if (a->dab_channel_box) {
-            g_signal_handlers_block_matched(a->dab_channel_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
-            gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_channel_box),index);
-            g_signal_handlers_unblock_matched(a->dab_channel_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+        GtkWidget *field=free_frequency ? a->dab_frequency_box : a->dab_channel_box;
+        if (field) {
+            g_signal_handlers_block_matched(field,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+            if (free_frequency) gtk_spin_button_set_value(GTK_SPIN_BUTTON(field),next/1e6);
+            else gtk_combo_box_set_active(GTK_COMBO_BOX(field),index);
+            g_signal_handlers_unblock_matched(field,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
         }
         tuning_refresh(a);power_refresh(a);
         if (!a->running) refresh_preview(a);
@@ -1240,7 +1278,7 @@ static void save_settings(App *a) {
     /* Commit any numeric text still being edited before serializing. */
     if (a->window) {
         GtkWidget *fields[] = {a->offset_box, a->receiver_offset_box, a->step_box, a->frequency_box,
-                              a->rate_box};
+                              a->rate_box,a->dab_frequency_box};
         for (unsigned i = 0; i < G_N_ELEMENTS(fields); ++i)
             if (gtk_widget_is_sensitive(fields[i])) gtk_spin_button_update(GTK_SPIN_BUTTON(fields[i]));
         g_key_file_set_double(a->config, "display", "floor_dbfs_hz", a->iq_view.floor);
@@ -1502,7 +1540,7 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
     const char *source=sources[a->source];
     double hz=g_key_file_get_double(a->config,source,"frequency",NULL)+receiver_offset(a);
     if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
-    if (a->standard==4) hz=dab_channels[dab_channel(a)].hz;
+    if (a->standard==4) hz=dab_frequency(a);
     g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
     const char *fec=a->standard>=3 ? "auto" : fecs[a->fec];
     if (a->decoder_view.status_time && g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
@@ -1833,7 +1871,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
     if (a->running) return;
     a->source = gtk_combo_box_get_active(GTK_COMBO_BOX(a->source_box));
     const char *section = sources[a->source];
-    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_channels[dab_channel(a)].hz);
+    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
     if (widget == a->source_box) {
         g_signal_handlers_block_by_func(a->format_box, source_changed, a);
         char *fmt = setting(a, section, "format");
@@ -1879,7 +1917,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
             atoi(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box))) :
             gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)));
         if (hardware_source(a)) {
-            g_key_file_set_double(a->config, section, "frequency", a->standard==4 ? dab_channels[dab_channel(a)].hz : gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
+            g_key_file_set_double(a->config, section, "frequency", a->standard==4 ? dab_frequency(a) : gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
     gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
@@ -2017,7 +2055,7 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
     if (a->standard==4) {
         const char *section=sources[a->source];
         if (hardware_source(a)) {
-            g_key_file_set_double(a->config,section,"frequency",dab_channels[dab_channel(a)].hz);
+            g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
             g_key_file_set_double(a->config,section,"receiver_offset",0);
             g_key_file_set_double(a->config,section,"lo_offset",0);
             g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
@@ -2029,6 +2067,18 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
     }
     populate_rates(a); populate_fecs(a);
     if (a->standard==4 && a->source_box) source_changed(a->source_box,a);
+    else if (a->frequency_box) {
+        // Leaving DAB refreshes presentation without reselecting the source
+        // or changing its sample rate or hardware settings.
+        gtk_widget_set_sensitive(a->frequency_box,hardware_source(a));
+        if (hardware_source(a)) {
+            g_signal_handlers_block_by_func(a->frequency_box,source_changed,a);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),
+                g_key_file_get_double(a->config,sources[a->source],"frequency",NULL)/1000.0);
+            g_signal_handlers_unblock_by_func(a->frequency_box,source_changed,a);
+        }
+    }
+    tuning_refresh(a);
     refresh_preview(a);
 }
 static void power_clicked(GtkWidget *w, gpointer data) {
@@ -2175,8 +2225,8 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
-    const char *dk[]={"channel","profile","channel_filter","audio_device","mixer_enabled","lo_output_enabled","if_hz","rx_input","lo_port"};
-    const char *dv[]={"12C","normal","true","default","false","false","53000000","RX1","TRX1"};
+    const char *dk[]={"channel","profile","channel_filter","audio_device","mixer_enabled","lo_output_enabled","if_hz","rx_input","lo_port","free_tuning","frequency_hz"};
+    const char *dv[]={"12C","normal","true","default","false","false","53000000","RX1","TRX1","false","227360000"};
     for (unsigned i=0;i<G_N_ELEMENTS(dk);++i)
         if (!g_key_file_has_key(a->config,"dab",dk[i],NULL)) g_key_file_set_string(a->config,"dab",dk[i],dv[i]);
     if (!g_key_file_has_key(a->config,"paths","dab",NULL)) {
@@ -2559,7 +2609,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"D","FM-DATA receiver (20 kHz), flat audio to speaker and TCI on/off"},
         {"Page Up / Page Down","Tune monitor down / up: USB 100 Hz, FM / FM-DATA 2.5 kHz"},
         {"Click spectrum","Tune the active USB / FM / FM-DATA monitor at the clicked frequency"},
-        {"← / →","Decrease / increase receive frequency; previous / next channel in DAB"},
+        {"← / →","Decrease / increase receive frequency; previous / next channel in DAB, or tuning step with Free frequency"},
         {"↑ / ↓","Increase / decrease gain"},
         {"[ / ]","Narrow / widen the IQ bandpass filter"},
         {"W","Save settings, including spectrum and waterfall"},
@@ -2753,6 +2803,7 @@ static gboolean hide_dialog_close(GtkWidget *widget, GdkEvent *event, gpointer d
 
 static void show_mode(GtkWidget *widget, gpointer data) {
     (void)widget; App *a=data; gtk_widget_show_all(a->mode_dialog);
+    scatter_refresh(a);
     gtk_window_present(GTK_WINDOW(a->mode_dialog));
 }
 
@@ -2961,6 +3012,8 @@ static void dab_settings_changed(GtkWidget *widget,gpointer data) {
     int profile=gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_profile_box));
     if (index<0 || profile<0) return;
     g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
+    g_key_file_set_boolean(a->config,"dab","free_tuning",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_free_box)));
+    g_key_file_set_double(a->config,"dab","frequency_hz",round(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->dab_frequency_box))*1e6));
     g_key_file_set_string(a->config,"dab","profile",dab_profiles[profile]);
     g_key_file_set_boolean(a->config,"dab","channel_filter",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_filter_box)));
     g_key_file_set_boolean(a->config,"dab","mixer_enabled",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box)));
@@ -2970,7 +3023,7 @@ static void dab_settings_changed(GtkWidget *widget,gpointer data) {
     char *port=gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->dab_lo_port_box));
     g_key_file_set_string(a->config,"dab","rx_input",input);g_key_file_set_string(a->config,"dab","lo_port",port);
     g_free(input);g_free(port);
-    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,sources[a->source],"frequency",dab_channels[index].hz);
+    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,sources[a->source],"frequency",dab_frequency(a));
     tuning_refresh(a);refresh_preview(a);
 }
 static void dab_step_clicked(GtkButton *button,gpointer data) {
@@ -3008,37 +3061,52 @@ static void create_mode_renderer(App *a) {
     GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
     gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
     gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,11,2,1);
+    a->dab_controls=gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(a->dab_controls),8);
+    gtk_grid_set_column_spacing(GTK_GRID(a->dab_controls),12);
+    gtk_grid_attach(GTK_GRID(a->controls),a->dab_controls,0,12,2,1);
+    a->dab_free_box=gtk_check_button_new_with_label("Free frequency");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),dab_free_tuning(a));
+    gtk_grid_attach(GTK_GRID(a->dab_controls),a->dab_free_box,0,0,2,1);
+    a->dab_frequency_box=spin(a->dab_controls,"DAB frequency (MHz)",1,.000001,6000,.001);
+    gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->dab_frequency_box),6);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dab_frequency_box),g_key_file_get_double(a->config,"dab","frequency_hz",NULL)/1e6);
+    gtk_widget_set_tooltip_text(a->dab_free_box,"Tune DAB outside the Band III channel grid, within your receiver's range.");
     const char *channels[DAB_CHANNEL_COUNT];
     for (unsigned i=0;i<DAB_CHANNEL_COUNT;++i) channels[i]=dab_channels[i].name;
-    a->dab_channel_box=combo(a->controls,"DAB channel",12,channels,DAB_CHANNEL_COUNT,dab_channel(a));
+    a->dab_channel_box=combo(a->dab_controls,"DAB channel",2,channels,DAB_CHANNEL_COUNT,dab_channel(a));
     char *profile=setting(a,"dab","profile");
     int selected=!strcmp(profile,"aircraft") ? 2 : !strcmp(profile,"weak") ? 1 : 0;g_free(profile);
-    a->dab_profile_box=combo(a->controls,"DAB reception",13,(const char *[]){"Normal","Weak signal / DX","Aircraft scatter"},3,selected);
+    a->dab_profile_box=combo(a->dab_controls,"DAB reception",3,(const char *[]){"Normal","Weak signal / DX","Aircraft scatter"},3,selected);
     a->dab_filter_box=gtk_check_button_new_with_label("DAB channel filter (before decimation)");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_filter_box),g_key_file_get_boolean(a->config,"dab","channel_filter",NULL));
-    gtk_grid_attach(GTK_GRID(a->controls),a->dab_filter_box,0,14,2,1);
+    gtk_grid_attach(GTK_GRID(a->dab_controls),a->dab_filter_box,0,4,2,1);
     a->dab_mixer_box=gtk_check_button_new_with_label("B210 external mixer / fixed IF");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box),g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL));
-    gtk_grid_attach(GTK_GRID(a->controls),a->dab_mixer_box,0,15,2,1);
-    a->dab_if_box=spin(a->controls,"B210 IF (MHz)",16,46,126.428,0.001);
+    gtk_grid_attach(GTK_GRID(a->dab_controls),a->dab_mixer_box,0,5,2,1);
+    a->dab_if_box=spin(a->dab_controls,"B210 IF (MHz)",6,46,126.428,0.001);
     gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->dab_if_box),3);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dab_if_box),g_key_file_get_double(a->config,"dab","if_hz",NULL)/1e6);
     char *input=setting(a,"dab","rx_input");
     int rx=!strcmp(input,"TRX1") ? 0 : !strcmp(input,"RX1") ? 1 : !strcmp(input,"TRX2") ? 2 : 3;g_free(input);
-    a->dab_input_box=combo(a->controls,"B210 receive port",17,(const char *[]){"TRX1","RX1","TRX2","RX2"},4,rx);
+    a->dab_input_box=combo(a->dab_controls,"B210 receive port",7,(const char *[]){"TRX1","RX1","TRX2","RX2"},4,rx);
     a->dab_lo_box=gtk_check_button_new_with_label("Enable conducted mixer LO output");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),g_key_file_get_boolean(a->config,"dab","lo_output_enabled",NULL));
     gtk_widget_set_tooltip_text(a->dab_lo_box,"Connect this port to the external mixer LO input. 0 dB gain, IQ level 0.05; 2.5 MHz tone at 8.192 MS/s, as in dab-monitor.");
-    gtk_grid_attach(GTK_GRID(a->controls),a->dab_lo_box,0,18,2,1);
+    gtk_grid_attach(GTK_GRID(a->dab_controls),a->dab_lo_box,0,8,2,1);
     char *port=setting(a,"dab","lo_port");
-    a->dab_lo_port_box=combo(a->controls,"B210 mixer LO port",19,(const char *[]){"TRX1","TRX2"},2,!strcmp(port,"TRX2"));g_free(port);
+    a->dab_lo_port_box=combo(a->dab_controls,"B210 mixer LO port",9,(const char *[]){"TRX1","TRX2"},2,!strcmp(port,"TRX2"));g_free(port);
     GtkWidget *dab_hint=gtk_label_new("Weak/DX: adaptive FIC, PRS candidates and partial identity accumulation.\nAircraft scatter: adds temporal ranking and six 2.5 s windows per 8 s capture.\nTII candidates remain separate from confirmed transmitter observations.");
-    gtk_label_set_xalign(GTK_LABEL(dab_hint),0);gtk_grid_attach(GTK_GRID(a->controls),dab_hint,0,20,2,1);
+    gtk_label_set_xalign(GTK_LABEL(dab_hint),0);gtk_grid_attach(GTK_GRID(a->dab_controls),dab_hint,0,10,2,1);
     GtkWidget *dab_combos[]={a->dab_channel_box,a->dab_profile_box,a->dab_input_box,a->dab_lo_port_box};
     for (unsigned i=0;i<G_N_ELEMENTS(dab_combos);++i) g_signal_connect(dab_combos[i],"changed",G_CALLBACK(dab_settings_changed),a);
     GtkWidget *dab_checks[]={a->dab_filter_box,a->dab_mixer_box,a->dab_lo_box};
     for (unsigned i=0;i<G_N_ELEMENTS(dab_checks);++i) g_signal_connect(dab_checks[i],"toggled",G_CALLBACK(dab_settings_changed),a);
     g_signal_connect(a->dab_if_box,"value-changed",G_CALLBACK(dab_settings_changed),a);
+    g_signal_connect(a->dab_free_box,"toggled",G_CALLBACK(dab_settings_changed),a);
+    g_signal_connect(a->dab_frequency_box,"value-changed",G_CALLBACK(dab_settings_changed),a);
+    gtk_widget_show_all(a->dab_controls);
+    gtk_widget_set_no_show_all(a->dab_controls,TRUE);
     g_signal_connect(a->ldpc_mode_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
@@ -3167,8 +3235,8 @@ static void gui(App *a) {
     gtk_widget_set_tooltip_text(a->frequency_display, "Receive frequency · ← / → to tune; when using Linrad, tune in Linrad.");
     gtk_box_pack_start(GTK_BOX(top_bar), a->frequency_display, FALSE, FALSE, 8);
     a->dab_previous=gtk_button_new_with_label("◀");a->dab_next=gtk_button_new_with_label("▶");
-    gtk_widget_set_tooltip_text(a->dab_previous,"Previous DAB channel (←)");
-    gtk_widget_set_tooltip_text(a->dab_next,"Next DAB channel (→)");
+    gtk_widget_set_tooltip_text(a->dab_previous,"Tune DAB down: previous channel or free-frequency step (←)");
+    gtk_widget_set_tooltip_text(a->dab_next,"Tune DAB up: next channel or free-frequency step (→)");
     gtk_box_pack_start(GTK_BOX(top_bar),a->dab_previous,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(top_bar),a->dab_next,FALSE,FALSE,0);
     g_signal_connect(a->dab_previous,"clicked",G_CALLBACK(dab_step_clicked),a);
@@ -3499,7 +3567,7 @@ int main(int argc, char **argv) {
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;
     if (a.standard==4 && hardware_source(&a)) {
-        g_key_file_set_double(a.config,sources[a.source],"frequency",dab_channels[dab_channel(&a)].hz);
+        g_key_file_set_double(a.config,sources[a.source],"frequency",dab_frequency(&a));
     }
     a.headless = run;
     g_free(source); g_free(iq_file);

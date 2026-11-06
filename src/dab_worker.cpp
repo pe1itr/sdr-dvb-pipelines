@@ -46,7 +46,7 @@ struct Diagnostics {
     IQ pending, scope_pending;
     std::atomic<uint64_t> generation{0};
     uint64_t pending_generation=0, scope_generation=0, scope_sequence=0;
-    unsigned pending_hz=0;
+    uint64_t pending_hz=0;
     dab::dx::ConstellationSnapshot scope;
     dab::Detection detection;
     std::chrono::steady_clock::time_point scope_time{};
@@ -68,7 +68,7 @@ void decode(Diagnostics& d,bool weak,bool aircraft) {
         backend->set_cancel_callback(cancelled);
         auto accumulator=std::make_unique<dab::FicIdentityAccumulator>();
         while (!interrupted && !d.cancel) {
-            IQ samples;time_t observed=0;unsigned hz=0;
+            IQ samples;time_t observed=0;uint64_t hz=0;
             {
                 std::unique_lock<std::mutex> lock(d.mutex);
                 d.ready.wait_for(lock,std::chrono::milliseconds(100),[&] {return d.eof || !d.pending.empty() || d.cancel;});
@@ -165,7 +165,8 @@ void scope_worker(Diagnostics& d) {
 
 int main(int argc,char **argv) {
     std::string directory, format="s16", channel="12C", profile="normal", device="default";
-    unsigned rate=2048000; bool audio=true, filter=false;
+    unsigned rate=2048000; bool audio=true, filter=false, explicit_channel=false, explicit_frequency=false;
+    std::string frequency;
     try {
         for (int i=1;i<argc;++i) {
             std::string arg=argv[i];
@@ -175,17 +176,23 @@ int main(int argc,char **argv) {
             std::string value=argv[++i];
             if (arg=="--state-dir") directory=value;
             else if (arg=="--input-format") format=value;
-            else if (arg=="--channel") channel=value;
+            else if (arg=="--channel") {channel=value;explicit_channel=true;}
+            else if (arg=="--frequency") {frequency=value;explicit_frequency=true;}
             else if (arg=="--profile") profile=value;
             else if (arg=="--audio-device") device=value;
             else if (arg=="--sample-rate") rate=std::stoul(value);
             else throw std::runtime_error("Unknown argument "+arg);
         }
         int index=dab_channel_index(channel.c_str());
-        if (index<0 || directory.empty() || (rate<2048000 || rate>100000000) ||
+        uint64_t hz=0;
+        if (explicit_frequency) {
+            if (explicit_channel || !dab_parse_frequency(frequency.c_str(),&hz))
+                throw std::runtime_error("Choose --channel or --frequency (whole Hz, 1..6000000000)");
+            channel="free";
+        } else if (index>=0) hz=dab_channels[index].hz;
+        if (!hz || directory.empty() || (rate<2048000 || rate>100000000) ||
             (format!="s16" && format!="u8") || (profile!="normal" && profile!="weak" && profile!="aircraft"))
-            throw std::runtime_error("DAB requires a Band III channel, state directory, s16/u8 and 2.048..100 MS/s");
-        unsigned hz=dab_channels[index].hz;
+            throw std::runtime_error("DAB requires a channel or frequency, state directory, s16/u8 and 2.048..100 MS/s");
         signal(SIGTERM,stop_signal); signal(SIGINT,stop_signal);
         Diagnostics diagnostics;
         std::thread worker(decode,std::ref(diagnostics),profile=="weak",profile=="aircraft");
@@ -326,8 +333,13 @@ int main(int argc,char **argv) {
                 uint64_t requested_generation=0;std::string requested_channel;
                 std::ifstream request(directory+"/channel");request>>requested_generation>>requested_channel;
                 int requested_index=dab_channel_index(requested_channel.c_str());
-                if (requested_generation>generation && requested_index>=0) {
-                    generation=requested_generation;channel=requested_channel;hz=dab_channels[requested_index].hz;
+                uint64_t requested_hz=requested_index>=0 ? dab_channels[requested_index].hz : 0;
+                if (requested_channel=="free") {
+                    std::string value;
+                    if (request>>value) dab_parse_frequency(value.c_str(),&requested_hz);
+                }
+                if (requested_generation>generation && requested_hz) {
+                    generation=requested_generation;channel=requested_channel;hz=requested_hz;
                     {
                         std::lock_guard<std::mutex> lock(diagnostics.mutex);
                         diagnostics.generation=generation;diagnostics.pending.clear();diagnostics.scope_pending.clear();
@@ -347,7 +359,7 @@ int main(int argc,char **argv) {
                     publish();
                 }
                 if (tuning) {
-                    uint64_t ack_generation=0,ack_boundary=0;unsigned ack_hz=0;
+                    uint64_t ack_generation=0,ack_boundary=0,ack_hz=0;
                     std::ifstream ack(directory+"/tuned");
                     if (ack>>ack_generation>>ack_hz>>ack_boundary && ack_generation==generation && ack_hz==hz) {
                         boundary=ack_boundary;tuning=false;

@@ -160,15 +160,15 @@ void dab_view_reset(DabView *v) {
         for (unsigned i=0;i<G_N_ELEMENTS(names);++i) {char *p=g_build_filename(v->directory,names[i],NULL);g_unlink(p);g_free(p);}
     }
 }
-gboolean dab_view_retune(DabView *v,int fd,const char *channel,unsigned hz) {
+gboolean dab_view_retune(DabView *v,int fd,const char *channel,guint64 hz) {
     if (fd<0 || !v->directory) return FALSE;
     guint64 generation=v->generation+1;
     char request[80],command[80];
-    g_snprintf(request,sizeof(request),"%" G_GUINT64_FORMAT " %s\n",generation,channel);
+    g_snprintf(request,sizeof(request),"%" G_GUINT64_FORMAT " %s %" G_GUINT64_FORMAT "\n",generation,channel,hz);
     char *path=g_build_filename(v->directory,"channel",NULL);
     gboolean ok=g_file_set_contents(path,request,-1,NULL);g_free(path);
     if (!ok) return FALSE;
-    int length=g_snprintf(command,sizeof(command),"dab %" G_GUINT64_FORMAT " %u\n",generation,hz);
+    int length=g_snprintf(command,sizeof(command),"dab %" G_GUINT64_FORMAT " %" G_GUINT64_FORMAT "\n",generation,hz);
     ssize_t sent;
     do {sent=write(fd,command,length);} while (sent<0 && errno==EINTR);
     // Even a failed source write invalidates old channel evidence; show waiting.

@@ -2,6 +2,9 @@
 #define DAB_CHANNELS_H
 #include <stddef.h>
 #include <string.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <errno.h>
 typedef struct { const char *name; unsigned hz; } DabChannel;
 static const DabChannel dab_channels[] = {
     {"5A",174928000},{"5B",176640000},{"5C",178352000},{"5D",180064000},
@@ -20,6 +23,14 @@ static inline int dab_channel_index(const char *name) {
     for (size_t i=0; i<DAB_CHANNEL_COUNT; ++i)
         if (name && !strcmp(name,dab_channels[i].name)) return (int)i;
     return -1;
+}
+/* Frequency metadata and retune commands retain whole Hz through 6 GHz. */
+static inline int dab_parse_frequency(const char *text, uint64_t *hz) {
+    if (!text || *text<'0' || *text>'9') return 0;
+    char *end;errno=0;
+    unsigned long long value=strtoull(text,&end,10);
+    if (errno || *end || !value || value>6000000000ULL) return 0;
+    *hz=(uint64_t)value;return 1;
 }
 static inline int dab_channel_nearest(double hz) {
     size_t best=0;

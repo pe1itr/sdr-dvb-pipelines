@@ -49,6 +49,9 @@ int main(void) {
     assert(b210_input("RX3",&c,&a));
     assert(b210_mixer_valid(229072000,53000000,"RX1","TRX1",1));
     assert(!b210_mixer_valid(229072000,53000000,"TRX1","TRX1",1));
+    assert(b210_mixer_valid(145500000,53000000,"RX1","TRX1",1));
+    assert(b210_mixer_valid(5700000000.0,53000000,"RX1","TRX1",1));
+    assert(!b210_mixer_valid(70000000,53000000,"RX1","TRX1",1));
     assert(!b210_mixer_valid(229072000,NAN,"RX1","TRX1",1));
     B210Mixer mixer={0};
     assert(!b210_mixer_open(&mixer,NULL,"TRX2",229072000,53000000));

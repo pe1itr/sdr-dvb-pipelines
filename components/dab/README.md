@@ -39,6 +39,26 @@ choices and reused project/third-party components. These references document
 provenance; they do not establish a legal clean-room process or improved
 sensitivity. The new continuous radio does not yet use the DX path's 2D fallback.
 
+## Tuning
+
+In Mode, enable **Free frequency** to enter the DAB centre frequency in MHz,
+including frequencies outside Band III. Turn it off to return to the remembered
+5A--13F channel. The setting and free frequency are saved with the usual Save
+command (`W`): `[dab] free_tuning=true` and `frequency_hz=145500000`, for example.
+The selected SDR's tuning and sample-rate limits still apply. This changes the
+RF frequency; the supported waveform remains DAB Mode I.
+
+During reception, the arrow buttons and left/right keys keep the source and
+worker running. With Free frequency enabled they use the tuning step in SDR
+settings; otherwise they move between adjacent channels. DAB state, audio and
+DX evidence reset at the source's acknowledged IQ byte boundary in both cases.
+For Linrad or file input, the selected frequency describes the supplied IQ;
+it does not retune an external receiver or shift the file's spectrum.
+
+The worker also accepts `--frequency HZ` instead of `--channel NAME`. Frequency
+metadata and retune acknowledgements retain whole Hz through 6 GHz. Hardware
+limits are checked by the host/source; the worker operates on baseband IQ.
+
 ## Reception profiles
 
 All profiles use 2.048 MS/s internally. Input accepts s16/u8 IQ from 2.048 MS/s
@@ -113,8 +133,9 @@ defaults copied from dab-monitor are 53 MHz IF, 0 dB TX gain, IQ amplitude
 0.05, 8.192 MS/s TX, 6 MHz TX bandwidth and a +2.5 MHz digital tone. Thus the
 TX synthesizer is `RF − IF − 2.5 MHz`, and the wanted mixer LO is `RF − IF`.
 RX rate is configured before TX; coerced rates/frequencies are rejected.
-Full-duplex startup conditioning traverses two neighbouring blocks and returns
-to the requested block, discarding 250 ms at each step. Shutdown sends an end
+For preset channels, full-duplex startup conditioning traverses two neighbouring
+blocks and returns to the requested block. Free-frequency operation keeps the
+LO at the requested frequency during conditioning, discarding 250 ms at each step. Shutdown sends an end
 of burst and joins the LO thread before closing UHD.
 
 Connect the LO port to the shielded external mixer's LO input through the
