@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cctype>
 #include <condition_variable>
 #include <cstring>
@@ -181,6 +182,7 @@ struct DabPlusRadioSession::Impl {
     std::atomic<std::size_t> service_generation{0};
     std::atomic<std::size_t> dropped_iq{0};
     std::atomic<std::size_t> dropped_audio{0};
+    std::atomic<std::size_t> alsa_underruns{0};
     std::atomic<std::size_t> decoded_audio{0};
     std::atomic<std::size_t> decoded_slides{0};
     std::atomic<std::size_t> audio_reset_generation{0};
@@ -189,6 +191,7 @@ struct DabPlusRadioSession::Impl {
     std::condition_variable input_ready;
     std::deque<InputBlock> input_queue;
     std::size_t queued_input_samples = 0;
+    std::size_t peak_input_samples = 0;
 
     mutable std::mutex state_mutex;
     std::condition_variable state_changed;
@@ -207,6 +210,7 @@ struct DabPlusRadioSession::Impl {
     std::mutex audio_mutex;
     std::condition_variable audio_ready;
     std::deque<EncodedAudio> audio_queue;
+    std::size_t peak_audio_frames = 0;
 
     std::mutex slide_mutex;
     MotSlideshowDecoder slideshow_decoder;
@@ -418,6 +422,7 @@ struct DabPlusRadioSession::Impl {
                 const INT_PCM* output = pcm_buffer.data();
                 while (remaining > 0 && !stopping.load()) {
                     auto written = snd_pcm_writei(pcm, output, remaining);
+                    if (written == -EPIPE) ++alsa_underruns;
                     if (written < 0) written = snd_pcm_recover(pcm, int(written), 1);
                     if (written < 0)
                         throw std::runtime_error(
@@ -573,6 +578,7 @@ void DabPlusRadioSession::push_samples(
         block.samples.assign(samples, samples + added);
         impl_->input_queue.push_back(std::move(block));
         impl_->queued_input_samples += added;
+        impl_->peak_input_samples = std::max(impl_->peak_input_samples, impl_->queued_input_samples);
         samples += added;
         count -= added;
     }
@@ -766,6 +772,7 @@ void DabPlusRadioSession::handle_audio(void* opaque)
         ++impl_->dropped_audio;
     }
     impl_->audio_queue.push_back(std::move(frame));
+    impl_->peak_audio_frames = std::max(impl_->peak_audio_frames, impl_->audio_queue.size());
     impl_->audio_ready.notify_one();
 }
 
@@ -869,6 +876,27 @@ std::string DabPlusRadioSession::selected_station() const
 {
     std::lock_guard<std::mutex> lock(impl_->state_mutex);
     return impl_->selected_label;
+}
+
+DabPlusRadioMetrics DabPlusRadioSession::metrics() const
+{
+    DabPlusRadioMetrics result;
+    {
+        std::lock_guard<std::mutex> lock(impl_->input_mutex);
+        result.iq_samples = impl_->queued_input_samples;
+        result.iq_peak_samples = impl_->peak_input_samples;
+        result.iq_capacity_samples = maximum_input_samples;
+        result.dropped_iq = impl_->dropped_iq.load();
+    }
+    {
+        std::lock_guard<std::mutex> lock(impl_->audio_mutex);
+        result.audio_frames = impl_->audio_queue.size();
+        result.audio_peak_frames = impl_->peak_audio_frames;
+        result.audio_capacity_frames = maximum_audio_frames;
+        result.dropped_audio = impl_->dropped_audio.load();
+    }
+    result.alsa_underruns = impl_->alsa_underruns.load();
+    return result;
 }
 
 std::size_t DabPlusRadioSession::dropped_iq_blocks() const

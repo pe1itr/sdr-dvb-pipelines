@@ -80,6 +80,8 @@ static gboolean exercise_dab(gpointer data) {
     const char *json="{\"channel\":\"9C\",\"frequency\":206352000,\"ensemble\":\"Test ensemble\","
         "\"synced\":1,\"signal_synced\":1,\"audio_active\":1,\"station\":\"Station one\",\"snr\":15.5,\"cfo\":120,\"mer\":12.5,"
         "\"scope_sequence\":1,\"scope_age_ms\":20,\"constellation\":[0.7,0.7,-0.7,-0.7],"
+        "\"iq_queue_ms\":125,\"iq_queue_peak_ms\":500,\"audio_queue_frames\":2,\"audio_queue_peak_frames\":8,"
+        "\"dropped_audio\":3,\"alsa_underruns\":4,\"dropped_dx\":5,\"dx_decode_ms\":6500,"
         "\"radio_ensemble\":\"Test ensemble\",\"ueid\":14909596,\"observed\":1793989196,\"radio_available\":1,"
         "\"services\":[{\"id\":4660,\"label\":\"Station one\",\"bitrate\":96},{\"id\":4661,\"label\":\"Station two\",\"bitrate\":64}],"
         "\"tii\":[{\"main\":19,\"sub\":4,\"confidence\":0.9,\"hits\":12,\"confirmed\":1,\"ambiguous\":0},"
@@ -103,6 +105,16 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_cmpuint(a->decoder_view.status.locks,==,15);
     g_assert_cmpfloat(a->decoder_view.status.snr_db,==,15.5);
     g_assert_cmpuint(a->decoder_view.points.count,==,2);
+    g_assert_true(gtk_widget_get_visible(a->decoder_view.dab_metrics_grid));
+    const char *metrics[]={"125","500","2","8","3","4","5","6500"};
+    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,metrics[i]);
+    a->decoder_view.status_time-=3*G_USEC_PER_SEC;
+    dab_view_tick(&a->dab,TRUE);
+    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,"—");
+    a->decoder_view.status_time=g_get_monotonic_time();
+    dab_view_tick(&a->dab,TRUE);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(g_object_get_data(G_OBJECT(a->decoder_view.service),"caption"))),==,"Ensemble");
     const char *screenshot=g_getenv("LINRAD_DAB_SCREENSHOT");
     if (screenshot) {
@@ -158,6 +170,8 @@ static gboolean exercise_dab(gpointer data) {
     dab_view_tick(&a->dab,TRUE);
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"—");
+    for (unsigned i=0;i<G_N_ELEMENTS(metrics);++i)
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.dab_metrics[i])),==,"—");
     g_assert_true(g_file_set_contents(state,json,-1,NULL));g_free(state);
     dab_view_tick(&a->dab,TRUE);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,1))),==,"✓ Logged");
@@ -177,6 +191,7 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_true(gtk_widget_get_visible(a->video_frame));
     g_assert_false(gtk_widget_get_visible(a->dab.tii_dialog));
     decoder_view_tick(&a->decoder_view,FALSE,"DVB-S");
+    g_assert_false(gtk_widget_get_visible(a->decoder_view.dab_metrics_grid));
     g_assert_false(gtk_widget_get_visible(a->decoder_view.country));
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),FALSE);

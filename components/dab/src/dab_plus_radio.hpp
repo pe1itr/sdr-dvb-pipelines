@@ -21,6 +21,14 @@ struct DabPlusService {
     bool primary = false;
 };
 
+// Queue peaks and loss counters cover this session (reset on channel change).
+// Audio queue counts encoded access units, not PCM samples or playback latency.
+struct DabPlusRadioMetrics {
+    std::size_t iq_samples = 0, iq_peak_samples = 0, iq_capacity_samples = 0;
+    std::size_t audio_frames = 0, audio_peak_frames = 0, audio_capacity_frames = 0;
+    std::size_t dropped_iq = 0, dropped_audio = 0, alsa_underruns = 0;
+};
+
 // Build the MPEG-4 AudioSpecificConfig required for one DAB+ access unit.
 // audio_header_raw uses the bit layout published by libdabsdr.
 std::vector<std::uint8_t> dab_plus_audio_specific_config(
@@ -58,6 +66,7 @@ public:
     std::string selected_station() const;
     std::size_t dropped_iq_blocks() const;
     std::size_t dropped_audio_frames() const;
+    DabPlusRadioMetrics metrics() const;
     std::size_t decoded_audio_frames() const;
     std::size_t decoded_slides() const;
     std::optional<MotSlide> take_slide();

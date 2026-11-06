@@ -34,6 +34,30 @@ int main()
     // Radio diagnostics distinguish RF/null synchronization from full FIC
     // synchronization, and an empty early list is not considered discovery.
     dab::DabPlusRadioSession radio("0xffffffff", "null", false);
+    // Exercise queue pressure without starting decoder/audio consumer threads.
+    auto metrics=radio.metrics();
+    assert(metrics.iq_samples==0 && metrics.iq_peak_samples==0);
+    assert(metrics.audio_frames==0 && metrics.alsa_underruns==0);
+    std::vector<std::complex<float>> block(32768, {0.25f, -0.25f});
+    const auto blocks=metrics.iq_capacity_samples/block.size();
+    for (std::size_t i=0;i<blocks+1;++i) radio.push_samples(block.data(),block.size());
+    metrics=radio.metrics();
+    assert(metrics.iq_samples==metrics.iq_capacity_samples);
+    assert(metrics.iq_peak_samples==metrics.iq_capacity_samples);
+    assert(metrics.dropped_iq==1);
+    float output[512];
+    radio.supply_input(output,256);
+    metrics=radio.metrics();
+    assert(metrics.iq_samples==metrics.iq_capacity_samples-256);
+    assert(metrics.iq_peak_samples==metrics.iq_capacity_samples);
+    assert(output[0]==8192.0f && output[1]==-8192.0f);
+    dabsdrAudioCBData_t audio{};
+    audio.id=DABSDR_ID_AUDIO_PRIMARY;audio.ASCTy=63;
+    for (std::size_t i=0;i<metrics.audio_capacity_frames+3;++i) radio.handle_audio(&audio);
+    metrics=radio.metrics();
+    assert(metrics.audio_frames==metrics.audio_capacity_frames);
+    assert(metrics.audio_peak_frames==metrics.audio_capacity_frames);
+    assert(metrics.dropped_audio==3 && metrics.alsa_underruns==0);
     assert(!radio.dab_signal_synced());
     assert(!radio.fic_synced());
     dabsdrNtfSyncStatus_t sync{};

@@ -56,6 +56,7 @@ struct Diagnostics {
     dab::TiiInfo tii;
     dab::FicIdentityEvidence fic;
     unsigned dropped=0, captures=0, mux_count=0;
+    double decode_ms=NAN;
     time_t observed=0, pending_observed=0;
     std::string error, route, ensembles;
 };
@@ -76,6 +77,7 @@ void decode(Diagnostics& d,bool weak,bool aircraft) {
                 samples.swap(d.pending);observed=d.pending_observed;hz=d.pending_hz;generation=d.pending_generation;
             }
             if (generation!=previous) {accumulator=std::make_unique<dab::FicIdentityAccumulator>();previous=generation;}
+            auto decode_start=std::chrono::steady_clock::now();
             auto detection=dab::detect_mode_i(samples,{});
             dab::CaptureDecodeResult result;
             if (weak || aircraft) {
@@ -110,6 +112,7 @@ void decode(Diagnostics& d,bool weak,bool aircraft) {
                 tii=backend->decode_tii(samples,hz/1000,dab::default_tii_decode_settings(true,2));
             std::lock_guard<std::mutex> lock(d.mutex);
             if (cancelled()) continue;
+            d.decode_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-decode_start).count();
             ++d.captures;
             d.fic=result.normal_result ? result.normal_result->fic : dab::FicIdentityEvidence{};
             for (const auto& candidate:result.candidate_attempts)
@@ -254,7 +257,16 @@ int main(int argc,char **argv) {
                 std::chrono::steady_clock::now()-audio_time<std::chrono::seconds(1));
             num(root,"signal_synced",input_live && radio->dab_signal_synced());
             num(root,"synced",input_live && radio->fic_synced()); num(root,"audio_frames",radio->decoded_audio_frames());
-            num(root,"radio_available",1); num(root,"dropped_iq",radio->dropped_iq_blocks());
+            auto metrics=radio->metrics();
+            num(root,"radio_available",1); num(root,"dropped_iq",metrics.dropped_iq);
+            num(root,"iq_queue_ms",metrics.iq_samples/2048.0);
+            num(root,"iq_queue_peak_ms",metrics.iq_peak_samples/2048.0);
+            num(root,"iq_queue_capacity_ms",metrics.iq_capacity_samples/2048.0);
+            num(root,"audio_queue_frames",metrics.audio_frames);
+            num(root,"audio_queue_peak_frames",metrics.audio_peak_frames);
+            num(root,"audio_queue_capacity_frames",metrics.audio_capacity_frames);
+            num(root,"dropped_audio",metrics.dropped_audio);
+            num(root,"alsa_underruns",audio ? double(metrics.alsa_underruns) : NAN);
             auto *services=json_object_new_array();
             for (const auto& s:radio->services()) {
                 auto *item=json_object_new_object(); num(item,"id",s.service_id); str(item,"label",s.label);
@@ -291,6 +303,7 @@ int main(int argc,char **argv) {
                  num(root,"observed",diagnostics.observed);
                 num(root,"mux_count",diagnostics.mux_count); num(root,"captures",diagnostics.captures);
                 num(root,"dropped_dx",diagnostics.dropped); str(root,"route",diagnostics.route);str(root,"dx_ensembles",diagnostics.ensembles);
+                num(root,"dx_decode_ms",diagnostics.decode_ms);
                 str(root,"error",diagnostics.error);
                 auto *items=json_object_new_array();
                 for (const auto& t:diagnostics.tii.candidates) {
@@ -321,6 +334,7 @@ int main(int argc,char **argv) {
                         diagnostics.ensemble={};diagnostics.tii={};diagnostics.fic={};diagnostics.scope={};diagnostics.detection={};
                         diagnostics.scope_sequence=0;diagnostics.observed=0;diagnostics.mux_count=0;
                         diagnostics.captures=diagnostics.dropped=0;diagnostics.route.clear();diagnostics.ensembles.clear();diagnostics.error.clear();
+                        diagnostics.decode_ms=NAN;
                     }
                     tuning=true;used=0;input_samples=0;capture.clear();scope_capture.clear();resampler.reset();if (fir) fir->reset();
                     selected.clear();dynamic_label.clear();slide_generation=0;rms=peak=NAN;

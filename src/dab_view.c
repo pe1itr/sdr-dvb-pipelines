@@ -147,6 +147,8 @@ static void clear_reception(DabView *v) {
         v->decoder->selected_video_codec[0]=v->decoder->selected_audio_codec[0]=0;
         gtk_label_set_text(GTK_LABEL(v->decoder->country),"—");
         gtk_widget_set_tooltip_text(v->decoder->country,NULL);
+        for (unsigned i=0;i<G_N_ELEMENTS(v->decoder->dab_metrics);++i)
+            gtk_label_set_text(GTK_LABEL(v->decoder->dab_metrics[i]),"—");
     }
     if (!v->info) return;
     gtk_style_context_remove_class(gtk_widget_get_style_context(v->tii_button),"information-ready");
@@ -255,6 +257,17 @@ void dab_view_tick(DabView *v,gboolean active) {
     read_state(v,active);
     if (!v->decoder) return;
     decoder_view_tick(v->decoder,active,"DAB");
+    gboolean fresh=active && v->snapshot && v->decoder->status_time &&
+        g_get_monotonic_time()-v->decoder->status_time<2*G_USEC_PER_SEC;
+    const char *keys[]={"iq_queue_ms","iq_queue_peak_ms","audio_queue_frames","audio_queue_peak_frames",
+        "dropped_audio","alsa_underruns","dropped_dx","dx_decode_ms"};
+    for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) {
+        double value=fresh ? metric(v->snapshot,keys[i]) : NAN;
+        char label[48];
+        if (isfinite(value)) g_snprintf(label,sizeof(label),"%.0f",value);
+        else g_strlcpy(label,"—",sizeof(label));
+        gtk_label_set_text(GTK_LABEL(v->decoder->dab_metrics[i]),label);
+    }
     unsigned ueid=(unsigned)dab_view_number(v,"ueid");
     const char *country=dab_country_code(ueid);
     gtk_label_set_text(GTK_LABEL(v->decoder->country),active && *country ? country : "—");

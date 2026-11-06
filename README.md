@@ -136,6 +136,21 @@ beneath the image. **M** mutes audio. No substitute station image is fabricated
 when no slideshow is broadcast. DAB uses its own audio output; the DVB MPEG-TS
 renderer and TSscatterFix do not apply.
 
+Additional DAB Service info rows show radio **IQ queue / IQ peak** in milliseconds
+(2000 ms capacity), **Audio queue / Audio peak** in encoded frames (64-frame
+capacity), **Audio drops**, **ALSA underruns**, **DX drops** and the last **DX time**
+in milliseconds. Peaks and loss counters reset on channel change, and persist
+across station changes. IQ drops count discarded radio IQ blocks; DX drops count
+complete pending identification captures replaced under load. ALSA underruns
+count playback EPIPE errors before recovery, including possible resume-after-mute
+events; they are unavailable with audio output disabled. Queue values exclude
+work in progress, source/USB buffers and the sound device's playback buffer.
+Missing or stale measurements display a dash. Hover over a value for details.
+The **Capture** percentage remains the progress of the eight-second identification
+recording for short signal openings/scatter, not a queue-fill measurement.
+Its length and analysis frequency are unchanged; compare DX time with the
+8000 ms capture interval when checking whether analysis keeps up.
+
 **Normal**, **Weak signal / DX** and **Aircraft scatter** profiles are available.
 The latter two reuse dab-monitor's PRS fallback and partial FIC accumulation;
 aircraft scatter also enables temporal ranking and subscans. TII decoding runs

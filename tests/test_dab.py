@@ -129,6 +129,16 @@ class DabTests(unittest.TestCase):
             self.assertEqual(state["ueid"], 0)
             self.assertEqual(state["tii"], [])
             self.assertEqual(state.get("services", []), [])
+            self.assertGreaterEqual(state["dx_decode_ms"], 0)
+            self.assertEqual(state["dropped_dx"], 0)
+            if state["radio_available"]:
+                self.assertEqual(state["iq_queue_capacity_ms"], 2000)
+                self.assertLessEqual(state["iq_queue_ms"], state["iq_queue_peak_ms"])
+                self.assertLessEqual(state["iq_queue_peak_ms"], state["iq_queue_capacity_ms"])
+                self.assertEqual(state["audio_queue_capacity_frames"], 64)
+                self.assertEqual(state["audio_queue_frames"], 0)
+                self.assertEqual(state["dropped_audio"], 0)
+                self.assertIsNone(state["alsa_underruns"])  # --no-audio
 
     def test_iq_file_pipeline_drains_and_stops(self):
         with tempfile.TemporaryDirectory() as tmp:
