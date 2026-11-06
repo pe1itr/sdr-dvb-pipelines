@@ -90,6 +90,7 @@ GUI_HEADERS += src/lime_rx.h src/rx_limits.h
 GUI_SOURCES += src/program_view.c src/srt_output.c
 GUI_HEADERS += src/program_view.h src/srt_output.h
 GUI_HEADERS += src/decoder_margin.h
+GUI_HEADERS += src/signal_meter.h
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/dvbt2_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
 $(BUILD_DIR)/components/dvbt/%.o: $(DVBT_DIR)/src/%.c $(wildcard $(DVBT_DIR)/include/*.h) src/dvbt_backend.h src/decoder_monitor.h

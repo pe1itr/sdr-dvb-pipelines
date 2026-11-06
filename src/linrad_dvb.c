@@ -505,7 +505,7 @@ static void status(App *a, const char *message) {
     fprintf(stderr, "[pipeline] %s\n", message);
     if (a->status) {
         gtk_label_set_text(GTK_LABEL(a->status), message);
-        gtk_widget_set_visible(a->status, *message != '\0');
+        gtk_widget_set_tooltip_text(a->status, *message ? message : NULL);
     }
 }
 
@@ -763,6 +763,7 @@ static void start_pipeline(App *a) {
         if (!valid) { a->exit_code=1; status(a,error ? error->message : "Select an IQ file in Input first"); g_clear_error(&error); return; }
     }
     a->iq_view.rows = 0; a->iq_view.last_frame = 0;
+    signal_meter_reset(&a->iq_view.meter);
     for (int i = 0; i < a->stage_count; ++i) {
         char *program = a->stages[i].args->pdata[0], *found = g_find_program_in_path(program);
         if (!found) {
@@ -1107,6 +1108,7 @@ static void save_settings(App *a) {
             if (gtk_widget_is_sensitive(fields[i])) gtk_spin_button_update(GTK_SPIN_BUTTON(fields[i]));
         g_key_file_set_double(a->config, "display", "floor_dbfs_hz", a->iq_view.floor);
         g_key_file_set_double(a->config, "display", "range_db", a->iq_view.span);
+        signal_meter_save(&a->iq_view.meter,a->config);
     }
     g_key_file_set_string(a->config, "session", "source", sources[a->source]);
     g_key_file_set_string(a->config, "session", "standard", standards[a->standard]);
@@ -2487,7 +2489,9 @@ static void gui(App *a) {
     if (!monitor) monitor = gdk_display_get_monitor(display, 0);
     GdkRectangle work = {0, 0, 1600, 1000};
     if (monitor) gdk_monitor_get_workarea(monitor, &work);
-    gtk_window_set_default_size(GTK_WINDOW(a->window), work.width*0.83, work.height*0.8);
+    if (work.width<=0) work.width=1600;
+    if (work.height<=0) work.height=1000;
+    gtk_window_set_default_size(GTK_WINDOW(a->window), work.width*0.83, work.height*.84);
     gtk_window_set_position(GTK_WINDOW(a->window), GTK_WIN_POS_CENTER);
     GtkWidget *root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     gtk_container_add(GTK_CONTAINER(a->window), root);
@@ -2559,7 +2563,6 @@ static void gui(App *a) {
 
     /* Full-width waterfall + spectrum above decoder information and video. */
     a->dashboard = gtk_grid_new();
-    gtk_grid_set_row_homogeneous(GTK_GRID(a->dashboard), TRUE);
     gtk_box_pack_start(GTK_BOX(root), a->dashboard, TRUE, TRUE, 0);
     GtkWidget *view = iq_view_create(&a->iq_view, a->config);
     gtk_widget_add_events(a->iq_view.area,GDK_BUTTON_PRESS_MASK);
@@ -2599,26 +2602,60 @@ static void gui(App *a) {
     gtk_grid_attach(GTK_GRID(a->dashboard), view, 0, 0, 1, 1);
     a->lower = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     gtk_container_set_border_width(GTK_CONTAINER(a->lower), 6);
-    gtk_widget_set_hexpand(a->lower, TRUE); gtk_widget_set_vexpand(a->lower, TRUE);
+    gtk_widget_set_hexpand(a->lower, TRUE);
     GtkWidget *lower_scroll = gtk_scrolled_window_new(NULL, NULL);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(lower_scroll), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    /* Reserve the panels' natural height; the spectrum takes the remaining
+     * space. Small screens can still scroll the lower panels. */
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(lower_scroll), TRUE);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(lower_scroll), work.height*.55);
+    gtk_widget_set_vexpand(lower_scroll,FALSE);
     gtk_container_add(GTK_CONTAINER(lower_scroll), a->lower);
     gtk_grid_attach(GTK_GRID(a->dashboard), lower_scroll, 0, 1, 1, 1);
-    /* Match Service info's natural width and height without consuming spare
-     * horizontal space; future panels can join this row. */
+    /* Stack Status below Service info and the meter below Received video. */
     GtkWidget *receiver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(receiver_row, GTK_ALIGN_START);
-    gtk_box_pack_start(GTK_BOX(receiver_row), decoder_view_create(&a->decoder_view), FALSE, FALSE, 0);
+    GtkWidget *decoder=decoder_view_create(&a->decoder_view);
+    GtkWidget *service_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
+    g_object_ref(a->decoder_view.service_frame);
+    gtk_container_remove(GTK_CONTAINER(decoder),a->decoder_view.service_frame);
+    gtk_box_pack_start(GTK_BOX(decoder),service_column,FALSE,FALSE,0);
+    GtkWidget *status_frame=gtk_frame_new("Status");
+    a->status=gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(a->status),0);
+    gtk_label_set_yalign(GTK_LABEL(a->status),0);
+    gtk_label_set_line_wrap(GTK_LABEL(a->status),TRUE);
+    gtk_label_set_line_wrap_mode(GTK_LABEL(a->status),PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_ellipsize(GTK_LABEL(a->status),PANGO_ELLIPSIZE_END);
+    gtk_label_set_lines(GTK_LABEL(a->status),2);
+    gtk_label_set_width_chars(GTK_LABEL(a->status),1);
+    gtk_label_set_max_width_chars(GTK_LABEL(a->status),48);
+    gtk_widget_set_margin_start(a->status,8);
+    gtk_widget_set_margin_end(a->status,8);
+    gtk_widget_set_margin_top(a->status,4);
+    gtk_widget_set_margin_bottom(a->status,4);
+    gtk_widget_set_size_request(a->status,-1,36);
+    gtk_container_add(GTK_CONTAINER(status_frame),a->status);
+    gtk_box_pack_start(GTK_BOX(service_column),a->decoder_view.service_frame,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(service_column),status_frame,FALSE,FALSE,0);
+    g_object_unref(a->decoder_view.service_frame);
+    gtk_box_pack_start(GTK_BOX(receiver_row),decoder,FALSE,FALSE,0);
+    GtkWidget *video_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
     GtkWidget *video_frame = video_view_create(&a->video_view);
     char *gpu_program = setting(a, "ffplay", "gpu_program"), *gpu_device = setting(a, "ffplay", "gpu_device");
     video_view_set_gpu_player(&a->video_view, gpu_program, gpu_device);
     g_free(gpu_program); g_free(gpu_device);
     gtk_widget_set_hexpand(video_frame, FALSE);
-    GtkSizeGroup *panel_width = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
-    gtk_size_group_add_widget(panel_width, a->decoder_view.service_frame);
-    gtk_size_group_add_widget(panel_width, video_frame);
-    g_object_unref(panel_width);
-    gtk_box_pack_start(GTK_BOX(receiver_row), video_frame, FALSE, FALSE, 0);
+    /* Preserve the original video size: match Service info in both axes,
+     * reserving additional space below the video for the signal meter. */
+    GtkSizeGroup *panel_size = gtk_size_group_new(GTK_SIZE_GROUP_BOTH);
+    gtk_size_group_add_widget(panel_size, a->decoder_view.service_frame);
+    gtk_size_group_add_widget(panel_size, video_frame);
+    g_object_unref(panel_size);
+    gtk_box_pack_start(GTK_BOX(video_column),video_frame,FALSE,FALSE,0);
+    GtkWidget *meter=signal_meter_create(&a->iq_view.meter,a->config);
+    gtk_box_pack_start(GTK_BOX(video_column),meter,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(receiver_row),video_column,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(receiver_row), scatter_view_create(&a->scatter_view), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(receiver_row), program_view_create(&a->programs, select_program, a), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
@@ -2626,11 +2663,6 @@ static void gui(App *a) {
     create_tci(a,usb_error ? usb_error->message : NULL);
     g_clear_error(&usb_error);
     populate_rates(a); populate_fecs(a);
-    a->status = gtk_label_new("");
-    gtk_widget_set_no_show_all(a->status, TRUE);
-    gtk_label_set_xalign(GTK_LABEL(a->status), 0);
-    gtk_label_set_ellipsize(GTK_LABEL(a->status), PANGO_ELLIPSIZE_END);
-    gtk_box_pack_start(GTK_BOX(a->lower), a->status, FALSE, FALSE, 0);
     create_diagnostics(a);
     create_config(a);
     source_changed(a->source_box, a);

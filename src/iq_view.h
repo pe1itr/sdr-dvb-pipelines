@@ -1,6 +1,7 @@
 #ifndef IQ_VIEW_H
 #define IQ_VIEW_H
 #include "iq_monitor.h"
+#include "signal_meter.h"
 #include "usb_demod.h"
 #include <math.h>
 #include <sys/socket.h>
@@ -17,6 +18,7 @@ typedef struct {
     MonitorMode monitor_mode;
     double usb_frequency;
     gint64 last_frame;
+    SignalMeter meter;
 } IQView;
 static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     IQView *v = data;
@@ -148,6 +150,8 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     return FALSE;
 }
 static void iq_view_receive(IQView *v) {
+    signal_meter_configure(&v->meter,v->active,v->enabled,v->bandwidth,
+                           v->receiver_offset,v->center,v->rate);
     IQMonitorFrame frame; int count=0;
     while(v->fd>=0 && count++<32) {
         ssize_t n=recv(v->fd,&frame,sizeof(frame),MSG_DONTWAIT|MSG_TRUNC);
@@ -160,8 +164,10 @@ static void iq_view_receive(IQView *v) {
         memmove(v->history+1,v->history,(IQ_VIEW_ROWS-1)*sizeof(v->history[0]));
         memcpy(v->history[0],frame.power,sizeof(frame.power));
         v->frame=frame; v->rows=MIN(v->rows+1,IQ_VIEW_ROWS); v->last_frame=g_get_monotonic_time();
+        signal_meter_feed(&v->meter,&frame,v->last_frame/1e6);
     }
     gtk_widget_queue_draw(v->area);
+    if (v->meter.area) gtk_widget_queue_draw(v->meter.area);
 }
 
 static void iq_view_level_refresh(IQView *v) {

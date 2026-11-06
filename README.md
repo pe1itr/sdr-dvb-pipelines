@@ -245,7 +245,9 @@ De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staa
 links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
 en hoogte als Service info. Rechts daarvan verschijnt het TSscatterFix-paneel
 wanneer TSscatterFix is ingeschakeld.
-Status en log staan onder deze rij. De ontvangen
+Onder Service info staat Status; onder het playerkader staat de S-meter.
+Het hoofdvenster is iets hoger zodat het playerkader zijn eerdere grootte behoudt.
+Het log is bereikbaar via Log in de bovenbalk. De ontvangen
 resolutie verandert de afmetingen van het kader niet. Zowel 4:3 als 16:9 wordt
 met behoud van beeldverhouding weergegeven, zonder afsnijden of uitrekken;
 overgebleven ruimte is zwart.
@@ -310,6 +312,24 @@ melding; de ontvangst blijft doorlopen.
   In de instellingendialogen werken de toetsen als normale invoer.
 
 De GUI bevat onder andere:
+
+- Direct onder Received video een compacte signaalmeter met de indeling van Linrad: een gele
+  vermogenslijn op zwart, horizontale rasterlijnen en zes pijltjes. Links stel je
+  de verticale resolutie in, rechts verplaats je de lijn omhoog/omlaag en met de
+  twee horizontale pijlen rechtsonder verander je de snelheid en middeling
+  (0,1–12,8 s per punt). De lijn loopt van links naar rechts; als het venster vol
+  is schuift de historie een stukje terug. Onderaan staat de tijdschaal.
+  Met **BW aan** wordt het vermogen binnen de ingestelde bandbreedte rond de
+  receiver offset opgeteld; met **BW uit** over de volledige IQ-invoerband.
+  De waarde is gemiddeld vermogen in **dBFS**, berekend uit de spectrumtelemetrie
+  vóór het filter (inclusief ruis; bandranden op FFT-resolutie), geen gekalibreerde
+  dBm-waarde. Langzamer tekenen middelt het lineaire vermogen over meer updates.
+  Bij een andere meetband, afstemming, samplerate of snelheid begint een nieuwe
+  grafiek. Bij Stop blijft de historie staan; ontbrekende IQ-data wordt gemeld.
+  **W** bewaart niveau, resolutie en snelheid in de sectie `[display]`.
+- Onder Service info staat een apart Status-vak voor meldingen zoals
+  `Pipeline running` en `Settings saved`. Lange meldingen worden over twee
+  regels verdeeld; de volledige tekst is ook zichtbaar als tooltip.
 
 - DVB-S en DVB-S2: SR 35000, 66000, 125000, 250000 of 333000; FEC 1/2 of 2/3.
 - DVB-T: BW 35000, 40000, 150000, 250000, 333000 of 500000 Hz; FEC 1/2, 2/3, 3/4, 5/6 of 7/8;

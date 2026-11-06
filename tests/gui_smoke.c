@@ -5,6 +5,95 @@
 #include "../src/tune_control.h"
 #include "../src/decoder_margin.h"
 
+static void exercise_signal_meter(App *a) {
+    IQMonitorFrame frame={.magic=IQ_MONITOR_MAGIC,.rate=204800};
+    for (int i=0; i<IQ_MONITOR_BINS; ++i) frame.power[i]=-120;
+    /* Flat PSD integrates to bandwidth, including fractional edge bins. */
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,FALSE,0,0),204800e-12,1e-15);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,12345,2137),12345e-12,1e-15);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,204800,0),204800e-12,1e-15);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,1000,102400),500e-12,1e-15);
+    g_assert_true(isnan(signal_meter_power(&frame,TRUE,100,300000)));
+    g_assert_true(isnan(signal_meter_power(&frame,TRUE,NAN,0)));
+    /* A 0.25 full-scale tone in a 100 Hz bin must read -12.0412 dBFS. */
+    frame.power[1124]=10*log10(.0625/100);
+    g_assert_cmpfloat_with_epsilon(10*log10(signal_meter_power(&frame,FALSE,0,0)),20*log10(.25),.0001);
+    g_assert_cmpfloat_with_epsilon(10*log10(signal_meter_power(&frame,TRUE,2000,10000)),20*log10(.25),.0001);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,2000,-10000),2000e-12,1e-15);
+    frame.power[1124]=-120; frame.power[0]=10*log10(.0625/100);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,100,102400),.03125,1e-8);
+    g_assert_cmpfloat_with_epsilon(signal_meter_power(&frame,TRUE,100,-102400),.03125,1e-8);
+    frame.power[0]=NAN;
+    g_assert_true(isnan(signal_meter_power(&frame,FALSE,0,0)));
+
+    SignalMeter *m=&a->iq_view.meter;
+    m->interval=1;
+    signal_meter_configure(m,TRUE,FALSE,2000,0,437e6,frame.rate);
+    for (int i=0; i<IQ_MONITOR_BINS; ++i) frame.power[i]=-100;
+    signal_meter_feed(m,&frame,10);
+    for (int i=0; i<IQ_MONITOR_BINS; ++i) frame.power[i]=-90;
+    signal_meter_feed(m,&frame,10.5);
+    double mean=10*log10(frame.rate*5.5e-10);
+    g_assert_cmpfloat_with_epsilon(m->value,mean,1e-6);
+    signal_meter_feed(m,&frame,11);
+    g_assert_cmpuint(m->count,==,1);
+    g_assert_cmpfloat_with_epsilon(m->points[0].db,mean,1e-6);
+    signal_meter_configure(m,FALSE,FALSE,2000,0,437e6,frame.rate);
+    signal_meter_feed(m,&frame,12);
+    g_assert_cmpfloat(m->last,==,11); /* stop freezes history */
+    signal_meter_configure(m,TRUE,FALSE,2000,0,437e6,frame.rate);
+    g_assert_cmpuint(m->count,==,0);
+    g_assert_cmpuint(m->average_count,==,0);
+    signal_meter_feed(m,&frame,13);
+    signal_meter_configure(m,TRUE,TRUE,2000,0,437e6,frame.rate);
+    g_assert_cmpuint(m->average_count,==,0);
+    signal_meter_feed(m,&frame,14);
+    signal_meter_configure(m,TRUE,TRUE,2000,10000,437e6,frame.rate);
+    g_assert_cmpuint(m->average_count,==,0);
+    signal_meter_feed(m,&frame,15);
+    signal_meter_configure(m,TRUE,TRUE,2000,10000,438e6,frame.rate);
+    g_assert_cmpuint(m->average_count,==,0);
+
+    double span=m->span, reference=m->reference;
+    gtk_button_clicked(GTK_BUTTON(m->buttons[0])); g_assert_cmpfloat(m->span,<,span);
+    gtk_button_clicked(GTK_BUTTON(m->buttons[1])); g_assert_cmpfloat(m->span,>,span);
+    gtk_button_clicked(GTK_BUTTON(m->buttons[2])); g_assert_cmpfloat(m->reference,<,reference);
+    gtk_button_clicked(GTK_BUTTON(m->buttons[3])); g_assert_cmpfloat_with_epsilon(m->reference,reference,1e-10);
+    gtk_button_clicked(GTK_BUTTON(m->buttons[4])); g_assert_cmpfloat(m->interval,==,.5);
+    gtk_button_clicked(GTK_BUTTON(m->buttons[5])); g_assert_cmpfloat(m->interval,==,1);
+    signal_meter_save(m,a->config);
+    g_assert_cmpfloat(signal_meter_setting(a->config,"meter_range_db",80,1,160),==,m->span);
+    g_assert_cmpfloat(signal_meter_setting(a->config,"meter_reference_dbfs",-50,-200,20),==,m->reference);
+    g_assert_cmpfloat(signal_meter_setting(a->config,"meter_seconds_per_point",.1,.1,12.8),==,1);
+    g_key_file_set_string(a->config,"display","meter_seconds_per_point","nan");
+    g_assert_cmpfloat(signal_meter_setting(a->config,"meter_seconds_per_point",.1,.1,12.8),==,.1);
+
+    m->reference=-50; m->span=80; m->interval=.1;
+    signal_meter_reset(m);
+    double now=g_get_monotonic_time()/1e6;
+    for (int j=0; j<4500; ++j) {
+        for (int i=0; i<IQ_MONITOR_BINS; ++i)
+            frame.power[i]=-85+6*sin(j*.04)+2*sin(j*.31);
+        signal_meter_feed(m,&frame,now-(4499-j)*.1);
+    }
+    g_assert_cmpuint(m->count,==,SIGNAL_METER_POINTS);
+    GtkRequisition minimum,natural;
+    gtk_widget_get_preferred_size(gtk_widget_get_parent(m->area),&minimum,&natural);
+    GtkAllocation allocation={0,0,430,110};
+    gtk_widget_size_allocate(gtk_widget_get_parent(m->area),&allocation);
+    if (g_getenv("LINRAD_GUI_SCREENSHOT")) {
+        cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,430,110);
+        cairo_t *cr=cairo_create(surface);
+        gtk_widget_draw(gtk_widget_get_parent(m->area),cr);
+        g_assert_cmpint(cairo_status(cr),==,CAIRO_STATUS_SUCCESS);
+        char *dir=g_path_get_dirname(g_getenv("LINRAD_GUI_SCREENSHOT"));
+        char *path=g_build_filename(dir,"signal-meter-smoke.png",NULL);
+        g_assert_cmpint(cairo_surface_write_to_png(surface,path),==,CAIRO_STATUS_SUCCESS);
+        g_free(path); g_free(dir); cairo_destroy(cr); cairo_surface_destroy(surface);
+    }
+    signal_meter_reset(m); signal_meter_refresh(m);
+}
+
 static void exercise_margin_reference(void) {
     DecoderStatus s={.satellite=2,.constellation_order=4,.modcod=4,.short_frame=0,
         .mer_db=6,.lock_valid=DECODER_OFDM,.locks=DECODER_OFDM};
@@ -1041,7 +1130,7 @@ static void exercise_scatter_view(App *a) {
     g_assert_false(gtk_widget_get_visible(a->programs.frame));
     g_assert_true(gtk_widget_get_visible(a->scatter_view.frame));
     g_assert_true(gtk_widget_get_parent(a->scatter_view.frame) ==
-                  gtk_widget_get_parent(a->video_view.container));
+                  gtk_widget_get_parent(gtk_widget_get_parent(a->video_view.container)));
     ScatterBackend sample = {0};
     g_mutex_init(&sample.mutex);
     const guint8 rgb[] = {255,0,0, 0,255,0, 0,0,255, 255,255,255};
@@ -1367,15 +1456,13 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_get_parent(a->mode_summary) == gtk_widget_get_parent(a->power_button));
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->mode_summary)), ==, "DVB-S · Symb/s 125000 · FEC 1/2");
         g_assert_true(gtk_widget_get_parent(a->scatter_box) == gtk_widget_get_parent(a->filter_box));
-        g_assert_cmpint(abs(2*gtk_widget_get_allocated_height(a->iq_view.area) -
-                           gtk_widget_get_allocated_height(a->dashboard)), <=, 1);
         const char *screenshot = g_getenv("LINRAD_GUI_SCREENSHOT");
         if (screenshot) {
             /* Broadway has no browser client in this test, so allocate the
              * offscreen window explicitly before asking GTK to paint it. */
             GtkRequisition minimum, natural;
             gtk_widget_get_preferred_size(a->window, &minimum, &natural);
-            GtkAllocation allocation = {0, 0, 1280, 900};
+            GtkAllocation allocation = {0, 0, 1600, 900};
             gtk_widget_size_allocate(a->window, &allocation);
             cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
                 gtk_widget_get_allocated_width(a->window), gtk_widget_get_allocated_height(a->window));
@@ -1459,6 +1546,8 @@ static gboolean exercise(gpointer data) {
         iq_view_receive(&a->iq_view);
         g_assert_cmpint(a->iq_view.rows, ==, 1);
         g_assert_cmpfloat(a->iq_view.history[0][1200], ==, -80);
+        g_assert_cmpuint(a->iq_view.meter.average_count,>,0);
+        exercise_signal_meter(a);
         GtkAllocation allocation = {0,0,800,500};
         gtk_widget_size_allocate(a->iq_view.area, &allocation);
         cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,800,500);
