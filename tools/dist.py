@@ -8,17 +8,19 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 FILES = (
+    ".gitignore",
     "Makefile",
     "README.md",
     "LICENSE",
+    "NOTICE",
     "linrad-dvb.example.ini",
     "linrad-dvbt2-eindhoven.example.ini",
-    "benchmarks/dvbt2-ldpc-2026-11-05.json",
     "direwolf-pcm.conf",
 )
-DIRECTORIES = ("src", "components", "third_party", "tools", "tests")
-SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "build", "dist"}
-SKIP_SUFFIXES = {".pyc", ".pyo", ".o", ".a", ".so", ".log"}
+DIRECTORIES = ("src", "components", "third_party", "tools", "tests", "docs", "benchmarks")
+SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", "build", "dist", "target"}
+SKIP_SUFFIXES = {".pyc", ".pyo", ".o", ".a", ".so", ".d", ".log", ".iq", ".ts", ".zip"}
+SCREENSHOT = Path("docs/images/linrad-dvb-dvbt2.png")
 
 
 def main():
@@ -32,6 +34,9 @@ def main():
             if path.is_file()
             and not SKIP_DIRS.intersection(path.relative_to(ROOT).parts)
             and path.suffix not in SKIP_SUFFIXES
+            and not path.name.endswith(".iq.json")
+            and (path.suffix.lower() not in {".png", ".jpg", ".jpeg"}
+                 or path.relative_to(ROOT) == SCREENSHOT)
         )
 
     destination = ROOT / "dist" / "linrad_dvb-source.zip"

@@ -1,5 +1,4 @@
-"""Compare the hardware converter against the existing HackRF pipeline oracle."""
-import importlib.util
+"""Verify hardware IQ conversion, quantization and sample ordering."""
 from pathlib import Path
 import random
 import struct
@@ -7,19 +6,16 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("old_hackrf", ROOT / "hackrf_s8_to_u8.py")
-reference = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(reference)
 
 class ConversionTests(unittest.TestCase):
     def convert(self, fmt, data):
         return subprocess.run([ROOT / "build/iq_conversion_probe", fmt], input=data,
                               capture_output=True, check=True).stdout
 
-    def test_hackrf_matches_original_all_byte_values_and_block_boundaries(self):
+    def test_hackrf_all_byte_values_and_block_boundaries(self):
         data = bytes(range(256))*33 + random.Random(42).randbytes(20000)
-        expected = bytearray(data)
-        reference.process_chunk_inplace(expected, False)
+        # Signed two's-complement samples become offset-binary samples.
+        expected = bytes(value + 128 for (value,) in struct.iter_unpack("b", data))
         self.assertEqual(self.convert("cs8", data), expected)
 
     def test_b210_all_signed_values(self):

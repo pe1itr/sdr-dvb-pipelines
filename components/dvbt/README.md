@@ -5,6 +5,14 @@ receiver directly in this directory. The former `dvbt-rx` repository is no
 longer the development source; no checkout, installed `rbdvbt_rx` executable or
 download from that repository is needed.
 
+## License
+
+Copyright (c) 2026 Rob Hardenberg / PE1ITR.
+This component is licensed under GNU GPL version 3 only (`GPL-3.0-only`),
+as part of Linrad DVB. See [LICENSE](LICENSE) and the project [NOTICE](../../NOTICE).
+This replaces the custom attribution license for the current version;
+previously distributed versions retain their original licensing terms.
+
 ## Source layout and integration
 
 - `include/`: receiver configuration and C interfaces (`rbdvbt_*`).

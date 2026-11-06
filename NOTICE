@@ -1,0 +1,36 @@
+Linrad DVB
+Copyright (c) 2026 Rob Hardenberg / PE1ITR
+SPDX-License-Identifier: GPL-3.0-only
+
+Linrad DVB is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, version 3 of the License.
+
+Linrad DVB is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program in LICENSE. If not, see <https://www.gnu.org/licenses/>.
+
+Scope
+-----
+GPL-3.0-only is the default license for the project-owned application, build
+tools, tests and documentation, and for the DVB-T receiver in components/dvbt.
+Explicit licenses in individual files or component directories take precedence.
+The combined linrad_dvb application is distributed under GNU GPL version 3.
+
+Bundled code retains its own copyright notices and license terms:
+- third_party/leansdr: GPL-3.0-or-later; see LICENSE.txt and ORIGIN there.
+- third_party/ldpc: 0BSD; see LICENSE and ORIGIN there.
+- components/dvbt2: GPL version 3; see LICENSE and UPSTREAM.json there.
+- components/tsscatterfix: MIT; see LICENSE there.
+
+The earlier MIT notice for project-owned code is retained in
+docs/licenses/MIT-legacy.txt. This change does not revoke permissions already
+granted for earlier MIT-licensed versions. Earlier DVB-T releases retain the
+license under which they were distributed; the current component is GPLv3.
+
+See docs/credits.md for component authors and acknowledgements. Third-party
+broadcast content visible in screenshots and linked videos is not covered by
+the software license.

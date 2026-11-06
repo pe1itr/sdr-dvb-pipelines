@@ -43,8 +43,8 @@ provenance, not the current component version.
 The migration preserves all C sources and headers already integrated into
 `linrad_dvb`, including the original CLI entry points. It does not import the
 old repositories' Windows GUIs, deployment scripts, recordings, model files or
-full Git histories. The old experimental root shell launcher is separate from
-the supported `linrad_dvb` workflow.
+full Git histories. The retired shell launcher and its Python input helpers are
+not part of this source tree; `linrad_dvb` uses the compiled helpers in `src/`.
 
 External LeanSDR and LDPC sources remain under `third_party/` with their own
 licenses and provenance.

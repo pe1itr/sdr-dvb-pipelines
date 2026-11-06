@@ -14,7 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-/* Wire commands match afedri-control-fixed.py and Linrad afedri.c.
+/* Wire commands follow the AFEDRI protocol and Linrad afedri.c.
  * TCP replies are framed: reads must tolerate fragmentation/coalescing. */
 enum { PACKET_BYTES = 1028, PAYLOAD_BYTES = 1024, RX_BATCH = 32 };
 struct Afedri {

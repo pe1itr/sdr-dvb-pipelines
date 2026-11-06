@@ -9,8 +9,8 @@ The initial source is the DVB-T2 core from
 `25034214fa91adcdfd7ec843c51f9d79285472d8`. `UPSTREAM.json` records the original
 file hashes and local changes. The source is maintained here from this point;
 updating it requires review and regression testing. Its namespace remains
-`dect2`. The GPL-3.0 license is preserved in `LICENSE`; the root MIT notice does
-not relicense this component or the resulting combined executable.
+`dect2`. The GPL-3.0 license is preserved in `LICENSE`; this component retains
+its upstream license and attribution within the GPLv3 application.
 
 ## Boundaries
 

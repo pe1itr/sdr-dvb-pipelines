@@ -1,6 +1,5 @@
 """Regression tests; Python is only a test dependency, not used by the receiver/GUI."""
 import configparser
-import importlib.util
 import itertools
 import json
 import os
@@ -20,9 +19,19 @@ ROOT = Path(__file__).resolve().parents[1]
 RX = ROOT / "build/linrad_udp_to_stdout"
 UI = ROOT / "build/linrad_dvb"
 EXAMPLE = ROOT / "linrad-dvb.example.ini"
-spec = importlib.util.spec_from_file_location("reference", ROOT / "linrad_udp_to_stdout_v3.py")
-reference = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(reference)
+
+
+def gain_s16le(data, gain=1.0):
+    """Reference contract: round to nearest even and saturate signed 16-bit."""
+    values = (max(-32768, min(32767, round(value * gain)))
+              for (value,) in struct.iter_unpack("<h", data))
+    return b"".join(struct.pack("<h", value) for value in values)
+
+
+def s16le_iq_to_u8(data, scale=256.0, offset=128):
+    """Reference contract for Linrad's configurable unsigned output scaling."""
+    return bytes(max(0, min(255, round(offset + value * scale / 256.0)))
+                 for (value,) in struct.iter_unpack("<h", data))
 
 
 def free_port():
@@ -146,14 +155,14 @@ class ReceiverTests(unittest.TestCase):
         data = struct.pack("<65536h", *range(-32768, 32768))
         chunks = [data[i:i+4096] for i in range(0, len(data), 4096)]
         for args, convert in [
-            ([], lambda x: reference.gain_s16le(x)),
-            (["--s16-gain", "0.5"], lambda x: reference.gain_s16le(x, 0.5)),
-            (["--s16-gain", "2.5"], lambda x: reference.gain_s16le(x, 2.5)),
-            (["--s16-gain", "-1"], lambda x: reference.gain_s16le(x, -1)),
-            (["--u8"], lambda x: reference.s16le_iq_to_u8(x)),
-            (["--u8", "--scale", "0.5"], lambda x: reference.s16le_iq_to_u8(x, 0.5)),
+            ([], lambda x: gain_s16le(x)),
+            (["--s16-gain", "0.5"], lambda x: gain_s16le(x, 0.5)),
+            (["--s16-gain", "2.5"], lambda x: gain_s16le(x, 2.5)),
+            (["--s16-gain", "-1"], lambda x: gain_s16le(x, -1)),
+            (["--u8"], lambda x: s16le_iq_to_u8(x)),
+            (["--u8", "--scale", "0.5"], lambda x: s16le_iq_to_u8(x, 0.5)),
             (["--u8", "--scale", "-128", "--offset", "120"],
-             lambda x: reference.s16le_iq_to_u8(x, -128, 120)),
+             lambda x: s16le_iq_to_u8(x, -128, 120)),
         ]:
             with self.subTest(args=args):
                 self.receive([bytes(24) + x for x in chunks], [convert(x) for x in chunks], args)
@@ -169,7 +178,7 @@ class ReceiverTests(unittest.TestCase):
 
     def test_u8_measurement(self):
         payload = struct.pack("<4h", -1, 1, -2, 2)
-        err = self.receive([bytes(24) + payload], [reference.s16le_iq_to_u8(payload)], ["--u8", "--measure", "4"])
+        err = self.receive([bytes(24) + payload], [s16le_iq_to_u8(payload)], ["--u8", "--measure", "4"])
         self.assertIn(b"[INPUT] type=s16 iq_samples=1", err)
         self.assertIn(b"[OUTPUT] type=u8 iq_samples=2", err)
 
@@ -185,7 +194,7 @@ class ReceiverTests(unittest.TestCase):
                 args = ["--record-iq", "--record-prefix", "capture", "--u8"]
                 if tee:
                     args += ["--record-stdout"]
-                output = reference.s16le_iq_to_u8(payload)
+                output = s16le_iq_to_u8(payload)
                 self.receive([bytes(24) + payload], [output if tee else b""], args, tmp)
                 files = list(Path(tmp, "recordings").glob("capture_*_u8.iq"))
                 self.assertEqual(len(files), 1)

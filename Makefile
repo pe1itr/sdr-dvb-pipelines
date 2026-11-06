@@ -121,6 +121,11 @@ $(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c src/iq_monitor.c s
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c src/iq_record.c src/iq_output.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
 package: all
+	cp LICENSE $(BUILD_DIR)/LICENSE
+	cp NOTICE $(BUILD_DIR)/NOTICE
+	mkdir -p $(BUILD_DIR)/docs/licenses
+	cp docs/credits.md $(BUILD_DIR)/docs/credits.md
+	cp docs/licenses/MIT-legacy.txt $(BUILD_DIR)/docs/licenses/MIT-legacy.txt
 	cp $(LEAN_DIR)/LICENSE.txt $(BUILD_DIR)/leansdr-LICENSE.txt
 	cp $(LDPC_DIR)/LICENSE $(BUILD_DIR)/ldpc-LICENSE.txt
 	cp $(DVBT_DIR)/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
