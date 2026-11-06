@@ -1,7 +1,7 @@
 LDPC by Ahmet Inan (xdsopl), helper adaptation by pabr@pabr.org
 Upstream: https://github.com/pabr/xdsopl-LDPC-pabr
 Snapshot: 6ada4aac6d853835eeaefb7e12a0136481647b01
-Copied from /home/rhardenb/repos/xdsopl-LDPC-pabr; original checkout unchanged.
+Copied from a local xdsopl-LDPC-pabr checkout; original checkout unchanged.
 License: 0BSD, see LICENSE and source headers.
 Local checkout also contained psk.hh C++11 constexpr definitions, preserved.
 

@@ -12,21 +12,21 @@
         "-Wextra",
         "-std=c11",
         "-O3",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/components/dvbt/include",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/src",
+        "-Icomponents/dvbt/include",
+        "-Isrc",
         "-DLINRAD_EMBEDDED_DVBT",
         "-pthread",
         "/tmp/linrad-viterbi-investigation/baseline.c",
         "/tmp/linrad-viterbi-investigation/entry.c",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/backend.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/config.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_2k_model.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_outer.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/iq_input.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/pipeline.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/receiver.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/udp_ts_output.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/visualizer.o",
+        "build/components/dvbt/backend.o",
+        "build/components/dvbt/config.o",
+        "build/components/dvbt/dvbt_2k_model.o",
+        "build/components/dvbt/dvbt_outer.o",
+        "build/components/dvbt/iq_input.o",
+        "build/components/dvbt/pipeline.o",
+        "build/components/dvbt/receiver.o",
+        "build/components/dvbt/udp_ts_output.o",
+        "build/components/dvbt/visualizer.o",
         "-lfftw3f",
         "-lm",
         "-o",
@@ -39,21 +39,21 @@
         "-Wextra",
         "-std=c11",
         "-O3",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/components/dvbt/include",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/src",
+        "-Icomponents/dvbt/include",
+        "-Isrc",
         "-DLINRAD_EMBEDDED_DVBT",
         "-pthread",
         "/tmp/linrad-viterbi-investigation/avx2.c",
         "/tmp/linrad-viterbi-investigation/entry.c",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/backend.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/config.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_2k_model.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_outer.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/iq_input.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/pipeline.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/receiver.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/udp_ts_output.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/visualizer.o",
+        "build/components/dvbt/backend.o",
+        "build/components/dvbt/config.o",
+        "build/components/dvbt/dvbt_2k_model.o",
+        "build/components/dvbt/dvbt_outer.o",
+        "build/components/dvbt/iq_input.o",
+        "build/components/dvbt/pipeline.o",
+        "build/components/dvbt/receiver.o",
+        "build/components/dvbt/udp_ts_output.o",
+        "build/components/dvbt/visualizer.o",
         "-lfftw3f",
         "-lm",
         "-o",
@@ -66,21 +66,21 @@
         "-Wextra",
         "-std=c11",
         "-O3",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/components/dvbt/include",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/src",
+        "-Icomponents/dvbt/include",
+        "-Isrc",
         "-DLINRAD_EMBEDDED_DVBT",
         "-pthread",
         "/tmp/linrad-viterbi-investigation/check.c",
         "/tmp/linrad-viterbi-investigation/entry.c",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/backend.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/config.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_2k_model.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_outer.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/iq_input.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/pipeline.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/receiver.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/udp_ts_output.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/visualizer.o",
+        "build/components/dvbt/backend.o",
+        "build/components/dvbt/config.o",
+        "build/components/dvbt/dvbt_2k_model.o",
+        "build/components/dvbt/dvbt_outer.o",
+        "build/components/dvbt/iq_input.o",
+        "build/components/dvbt/pipeline.o",
+        "build/components/dvbt/receiver.o",
+        "build/components/dvbt/udp_ts_output.o",
+        "build/components/dvbt/visualizer.o",
         "-lfftw3f",
         "-lm",
         "-o",
@@ -93,20 +93,20 @@
         "-Wextra",
         "-std=c11",
         "-O3",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/components/dvbt/include",
-        "-I/home/rhardenb/repos/sdr-dvb-pipelines/src",
+        "-Icomponents/dvbt/include",
+        "-Isrc",
         "-DLINRAD_EMBEDDED_DVBT",
         "-pthread",
         "/tmp/linrad-viterbi-investigation/test.c",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/backend.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/config.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_2k_model.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/dvbt_outer.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/iq_input.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/pipeline.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/receiver.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/udp_ts_output.o",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/components/dvbt/visualizer.o",
+        "build/components/dvbt/backend.o",
+        "build/components/dvbt/config.o",
+        "build/components/dvbt/dvbt_2k_model.o",
+        "build/components/dvbt/dvbt_outer.o",
+        "build/components/dvbt/iq_input.o",
+        "build/components/dvbt/pipeline.o",
+        "build/components/dvbt/receiver.o",
+        "build/components/dvbt/udp_ts_output.o",
+        "build/components/dvbt/visualizer.o",
         "-lfftw3f",
         "-lm",
         "-o",
@@ -153,7 +153,7 @@
   "fixtures": [
     {
       "name": "35k-oliYYC",
-      "path": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-qpsk-bw35000-gi1-32-fec2-3-fs250000-40s-oliYYC_rx.iq",
+      "path": "../datv-transmitter/iq-output/dvbt-qpsk-bw35000-gi1-32-fec2-3-fs250000-40s-oliYYC_rx.iq",
       "format": "s16",
       "rate": 250000,
       "bandwidth": 35000,
@@ -165,7 +165,7 @@
     },
     {
       "name": "40k-OAeYaF",
-      "path": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000-40s-OAeYaF_rx.iq",
+      "path": "../datv-transmitter/iq-output/dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000-40s-OAeYaF_rx.iq",
       "format": "s16",
       "rate": 250000,
       "bandwidth": 40000,
@@ -177,7 +177,7 @@
     },
     {
       "name": "40k-jubzGI",
-      "path": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000-40s-jubzGI_rx.iq",
+      "path": "../datv-transmitter/iq-output/dvbt-qpsk-bw40000-gi1-32-fec1-2-fs250000-40s-jubzGI_rx.iq",
       "format": "s16",
       "rate": 250000,
       "bandwidth": 40000,
@@ -189,7 +189,7 @@
     },
     {
       "name": "250k-fec12",
-      "path": "/home/rhardenb/repos/dvbt-rx/recordings/dvbt_250k_fec12_gi32_001.u8iq",
+      "path": "../dvbt-rx/recordings/dvbt_250k_fec12_gi32_001.u8iq",
       "format": "u8",
       "rate": 1010526,
       "bandwidth": 250000,
@@ -200,7 +200,7 @@
     },
     {
       "name": "333k-fec23",
-      "path": "/home/rhardenb/repos/dvbt-rx/recordings/dvbt_333k_fec23_gi32_004.u8iq",
+      "path": "../dvbt-rx/recordings/dvbt_333k_fec23_gi32_004.u8iq",
       "format": "u8",
       "rate": 1010526,
       "bandwidth": 333000,
@@ -397,7 +397,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/35k-oliYYC.iq",
         "--input-format",
@@ -451,7 +451,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/35k-oliYYC.iq",
         "--input-format",
@@ -505,7 +505,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/35k-oliYYC.iq",
         "--input-format",
@@ -559,7 +559,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/35k-oliYYC.iq",
         "--input-format",
@@ -613,7 +613,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-OAeYaF.iq",
         "--input-format",
@@ -667,7 +667,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-OAeYaF.iq",
         "--input-format",
@@ -721,7 +721,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-OAeYaF.iq",
         "--input-format",
@@ -775,7 +775,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-OAeYaF.iq",
         "--input-format",
@@ -829,7 +829,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-jubzGI.iq",
         "--input-format",
@@ -883,7 +883,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-jubzGI.iq",
         "--input-format",
@@ -937,7 +937,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-jubzGI.iq",
         "--input-format",
@@ -991,7 +991,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/40k-jubzGI.iq",
         "--input-format",
@@ -1045,7 +1045,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-fec12.iq",
         "--input-format",
@@ -1099,7 +1099,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-fec12.iq",
         "--input-format",
@@ -1153,7 +1153,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-fec12.iq",
         "--input-format",
@@ -1207,7 +1207,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-fec12.iq",
         "--input-format",
@@ -1261,7 +1261,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/333k-fec23.iq",
         "--input-format",
@@ -1315,7 +1315,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/333k-fec23.iq",
         "--input-format",
@@ -1369,7 +1369,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/333k-fec23.iq",
         "--input-format",
@@ -1423,7 +1423,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/333k-fec23.iq",
         "--input-format",
@@ -1477,7 +1477,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-controlled-fade.iq",
         "--input-format",
@@ -1531,7 +1531,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-controlled-fade.iq",
         "--input-format",
@@ -1585,7 +1585,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-controlled-fade.iq",
         "--input-format",
@@ -1639,7 +1639,7 @@
         "info"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
         "/tmp/linrad-viterbi-investigation/250k-controlled-fade.iq",
         "--input-format",

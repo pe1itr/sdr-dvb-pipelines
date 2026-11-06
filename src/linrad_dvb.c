@@ -2584,18 +2584,26 @@ static void show_about(GtkWidget *widget, gpointer data) {
     GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);
     gtk_container_set_border_width(GTK_CONTAINER(box),12);
     gtk_container_add(GTK_CONTAINER(scroll),box);
-    about_label(box,"linrad_dvb","about-title");
+    about_label(box,"Linrad DVB","about-title");
     about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
-        "amateur television under weak signal conditions, broadcast DVB-T2 and DAB/DAB+ radio.",NULL);
+        "amateur television under weak signal conditions (DVB-S, DVB-S2 and narrowband DVB-T), "
+        "supported 8 MHz broadcast DVB-T2 and DAB/DAB+ radio.",NULL);
     about_label(box,"DAB is implemented as a separate receiver component, developed from "
         "Rob Hardenberg / PE1ITR's own dab-monitor. It provides Band III channel tuning, "
         "DAB+ audio, station selection, MOT slideshow, constellation and ensemble information, "
         "country identification and TII reception logging. Normal, weak-signal and aircraft-scatter "
-        "profiles and the B210 fixed-IF / LO-output option are available.",NULL);
+        "profiles, free-frequency tuning and the B210 fixed-IF / LO-output option are available. "
+        "DAB+ audio requires a build with FAAD2 and ALSA support.",NULL);
     about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
         "elements in static test patterns from fragments of the received "
         "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
     about_label(box,"Created by Rob Hardenberg, PE1ITR.",NULL);
+    about_label(box,"Copyright (c) 2026 Rob Hardenberg / PE1ITR. "
+        "Linrad DVB is free software under GNU GPL version 3 only (GPL-3.0-only). "
+        "You may use, modify and redistribute it under those terms. "
+        "Provided without warranty. Bundled components retain their own license notices.",NULL);
+    about_link(box,"Project source and documentation","https://github.com/pe1itr/sdr-dvb-pipelines");
+    about_link(box,"GNU General Public License version 3","https://www.gnu.org/licenses/gpl-3.0.html");
     /* Compiler timestamps identify this executable, not the date it is opened. */
     about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
     about_label(box,"Receiver controls","about-heading");
@@ -2605,7 +2613,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "and automatic acquisition/processing based on symbol rate: up to 333 ksym/s, "
         "continuous search and low latency; above that, normal search and throughput. "
         "Manual overrides are available. W saves these settings.",NULL);
-    about_label(box,"Renderer: embedded video, UDP, external player or MPEG-TS file. "
+    about_label(box,"Renderer: embedded video, UDP, SRT, external player or MPEG-TS file. "
+        "Configure SRT output under [srt] in the INI file. "
         "Spectrum controls: IQ filter, IQ recording, TSscatterFix, USB / FM / FM-DATA, "
         "Service info / EPG / Teletext. In DAB, TII opens the transmitter-code table; "
         "green indicates received codes, and a green check marks an ensemble/TII combination "
@@ -2616,6 +2625,15 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "keep running. Terug in venster, or closing FFplay, returns to embedded VLC. "
         "Requires an FFplay build with CUDA and Vulkan/libplacebo support. "
         "DAB uses its own audio player and station slideshow.",NULL);
+    about_label(box,"Reception log and station settings","about-heading");
+    about_label(box,"The Log button beside FM-DATA opens a reception entry for review and saving. "
+        "In DAB, use TII to log a confirmed transmitter code. Nothing is logged automatically. "
+        "Log → RX log lets you view, sort and edit the CSV log, then export selected or all "
+        "receptions as ADIF (SWL records).",NULL);
+    about_label(box,"Log → My Station saves My Callsign and My Locator for new receptions. "
+        "Log → Bearing calculates approximate distance and initial antenna bearing from "
+        "My Locator to another Maidenhead locator, measured clockwise from true north. "
+        "Log → Application log opens receiver and decoder diagnostics (Alt+L).",NULL);
     about_label(box,"Keyboard shortcuts","about-heading");
     GtkWidget *grid=gtk_grid_new();
     gtk_widget_set_name(grid,"about-shortcuts");
@@ -2695,7 +2713,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "HackRF, RFSPACE, RTL-SDR, SDRplay and Airspy support.",NULL);
     about_label(box,"Source provenance, local changes and license texts are included under "
         "third_party/ and components/ (ORIGIN, component READMEs and DVB-T2 UPSTREAM.json). "
-        "make package copies the bundled decoder/recovery licenses into build/.","about-meta");
+        "See LICENSE, NOTICE and docs/credits.md for licensing and acknowledgements. "
+        "make package copies the project and bundled decoder/recovery licenses into build/.","about-meta");
     /* Focusing a credit link would scroll past the introduction on opening. */
     gtk_widget_grab_focus(gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog),GTK_RESPONSE_CLOSE));
     gtk_widget_show_all(dialog);

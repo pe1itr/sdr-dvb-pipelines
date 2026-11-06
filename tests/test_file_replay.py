@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 from pathlib import Path
+import select
 import signal
 import struct
 import subprocess
@@ -74,9 +75,22 @@ class FileReplayTests(unittest.TestCase):
                                  stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             try:
                 p.stdin.write(b'bandwidth 5000\n'); p.stdin.flush()
-                time.sleep(.15)
+                # Wait for the first applied change: under load startup can take
+                # longer than a fixed sleep, and queued controls keep only the latest value.
+                log = b''
+                deadline = time.monotonic() + 3
+                while b'IQ filter width 5000' not in log:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not select.select([p.stderr], [], [], remaining)[0]:
+                        break
+                    chunk = os.read(p.stderr.fileno(), 4096)
+                    if not chunk:
+                        break
+                    log += chunk
+                self.assertIn(b'IQ filter width 5000', log)
                 p.stdin.write(b'bandwidth 0\n'); p.stdin.flush()
-                _, log = p.communicate(timeout=3)
+                _, tail = p.communicate(timeout=3)
+                log += tail
                 self.assertEqual(p.returncode, 0, log)
                 self.assertIn(b'IQ filter width 5000', log)
                 self.assertIn(b'IQ filter width 0', log)

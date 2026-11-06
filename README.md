@@ -15,20 +15,27 @@ development are maintained together here.
 
 ## What it does
 
-Linrad DVB turns raw radio samples (IQ) into digital television. It tunes a
-supported SDR, or accepts samples from Linrad or an IQ recording, synchronizes
-and decodes the DVB signal, and produces an MPEG transport stream. You can watch
+Linrad DVB turns raw radio samples (IQ) into digital television and DAB+ radio.
+It tunes a supported SDR, or accepts samples from Linrad or an IQ recording.
+For DVB, it synchronizes and decodes the signal into an MPEG transport stream. You can watch
 the received programme in the same window while checking signal strength,
-spectrum, constellation and decoder errors.
+spectrum, constellation and decoder errors. In DAB mode, it identifies the
+ensemble and services, plays a selected DAB+ station and displays transmitted
+text and MOT slideshow images. DAB+ audio requires FAAD2 support; legacy
+DAB/MP2 audio is not decoded.
 
 Use DVB-S/S2 and narrowband DVB-T for amateur digital television and weak-signal
 experiments; use DVB-T2 for supported 8 MHz broadcast multiplexes. You can also
 save a reception, replay it later, or forward the decoded stream to another
 player. TSscatterFix provides a separate image-recovery view for incomplete
-receptions. A headless mode runs the receiver without the graphical interface.
+receptions. A manual reception log records stations and confirmed DAB TII codes,
+with editing and ADIF export. Your saved station locator also supports distance
+and antenna-bearing calculations. A headless mode runs the receiver without
+the graphical interface.
 
 ```text
 SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network output
+                          -> DAB decoder -> DAB+ audio, text, slideshow and ensemble/TII info
 ```
 
 ## Videos
@@ -39,14 +46,33 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 ## Features
 
 - Receive IQ from Linrad over UDP, a supported SDR, or a recorded IQ file.
-- DAB Band III channel selection, clickable DAB+ stations, MOT slideshow and TII logging.
+- Live spectrum, waterfall, constellation and decoder status, with an adjustable
+  IQ bandpass filter, receiver/converter offsets and PNG screenshots.
+- DAB Band III or free-frequency tuning, clickable DAB+ stations, dynamic text,
+  MOT slideshow, ensemble/country information and confirmed TII logging.
+- Normal, weak-signal/DX and aircraft-scatter DAB profiles; optional B210 fixed-IF mixer support.
 - Built-in DVB decoders, with parallel LDPC decoding for DVB-S2 and DVB-T2.
 - Embedded VLC playback, service selection, EIT programme information and teletext.
 - Switch live DVB video to external FFplay with NVIDIA CUDA decoding and Vulkan rendering.
 - TSscatterFix image recovery from incomplete transport streams.
-- IQ and MPEG-TS recording, UDP transport-stream output and headless SRT output.
+- IQ and MPEG-TS recording, IQ replay, UDP transport-stream output and SRT output.
 - Parallel USB, FM and FM-DATA audio monitoring, TCI and optional PCM UDP output.
-- Manual digital reception log: UTC time, RF frequency, service/provider and mode in CSV.
+- Editable CSV reception log: UTC time, RF frequency, service/provider, mode,
+  decoder settings and DAB TII, with selected/all ADIF export as reception (SWL) records.
+- My Station callsign/locator settings and a Maidenhead distance/bearing calculator.
+- Headless operation and command-line pipeline inspection for automated receiver setups.
+
+Linux input profiles cover HackRF One, USRP B210, RFspace SDR-IQ, AFEDRI Net,
+RTL-SDR, FUNcube Pro+, LimeSDR Mini v1.2, SDRplay RSP1A/RSP1B, Airspy R2 and
+Airspy HF+ Dual Port (VHF). Available receive modes depend on the device's
+frequency range and sample rate; some integrations still need live hardware
+validation. See [receiver setup and test status](docs/receivers.md).
+
+The complete receiver is supported on Linux. DVB-T2 is limited to the supported
+8 MHz broadcast modes; DAB audio supports DAB+ with EEP-A/B protection. The
+[Windows port](docs/windows.md) is experimental, does not yet enable DAB reception
+and has a more limited hardware set. See [decoder details](docs/decoders.md) and
+[DAB limitations](components/dab/README.md) before choosing a receive mode.
 
 For GPU video playback, select **Renderer → Embedded player** and click
 **Extern op GPU** below **Received video** during reception. **Terug in venster**
@@ -279,18 +305,21 @@ programs in `build/` supply IQ to the application and can also be used directly.
 | Path | Contents |
 | --- | --- |
 | `src/` | Application, GTK interface, hardware inputs and component adapters |
-| `components/` | Maintained DVB-T, DVB-T2 and TSscatterFix components |
+| `components/` | Maintained DVB-T, DVB-T2, DAB and TSscatterFix components |
 | `third_party/` | Bundled LeanSDR and LDPC sources, licenses and provenance |
 | `tests/` | Regression tests, fixtures and hardware simulators |
-| `tools/` | Bash scripts for Linux and ODROID-N2 builds |
+| `tools/` | Linux/ODROID-N2 build scripts and Windows cross-build/dependency tools |
 | `dev/` | Source packaging, test fixtures and decoder experiments |
-| `benchmarks/` | Decoder measurement reports |
+| `benchmarks/` | Decoder and IQ-filter measurement reports |
 | `docs/` | Detailed documentation and the README screenshot |
 | `*.example.ini`, `direwolf-pcm.conf` | Example receiver and audio configurations |
 
 The retired shell pipeline and its Python input helpers are no longer shipped.
 Local settings, recordings, builds, logs and other screenshots are excluded by
 `.gitignore`. The application and its tests do not depend on those retired files.
+Repository paths in published benchmark reports are relative to the repository root;
+`../` identifies optional neighbouring research checkouts. The referenced local
+IQ recordings are not included and are not needed to build the application.
 
 ## Development and source packages
 

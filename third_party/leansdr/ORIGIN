@@ -1,7 +1,7 @@
 LeanSDR / LeanDVB by pabr@pabr.org
 Upstream: https://github.com/pabr/leansdr/tree/work
 Snapshot: 84c59e1c7a1a79338d5722d63f28640cc9d350f3
-Copied from /home/rhardenb/repos/leansdr; original checkout is unchanged.
+Copied from a local leansdr checkout; original checkout is unchanged.
 License: GPL-3.0-or-later (LICENSE.txt and source headers).
 
 Local integration changes:

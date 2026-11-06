@@ -29,7 +29,7 @@
   "cases": [
     {
       "name": "dl4fbn",
-      "path": "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+      "path": "recordings/fbn2.raw",
       "rate": 1010526,
       "header_bytes": 41,
       "sr": 125000,
@@ -43,7 +43,7 @@
     },
     {
       "name": "1291-fast",
-      "path": "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+      "path": "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
       "rate": 6000000,
       "header_bytes": 0,
       "sr": 5000000,
@@ -121,7 +121,7 @@
       "case": "dl4fbn",
       "label": "profile",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -154,9 +154,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+        "recordings/fbn2.raw",
         "--sample-rate",
         "1010526",
         "--input-format",
@@ -224,7 +224,7 @@
       "case": "dl4fbn",
       "label": "baseline",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -257,9 +257,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+        "recordings/fbn2.raw",
         "--sample-rate",
         "1010526",
         "--input-format",
@@ -300,7 +300,7 @@
       "case": "dl4fbn",
       "label": "candidate1",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -333,9 +333,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/fbn2.raw",
+        "recordings/fbn2.raw",
         "--sample-rate",
         "1010526",
         "--input-format",
@@ -377,7 +377,7 @@
       "case": "1291-fast",
       "label": "baseline",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -409,9 +409,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -452,7 +452,7 @@
       "case": "1291-fast",
       "label": "profile",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -484,9 +484,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -549,7 +549,7 @@
       "case": "1291-fast",
       "label": "candidate1",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -581,9 +581,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -624,7 +624,7 @@
       "case": "1291-fast",
       "label": "baseline2",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -656,9 +656,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -700,7 +700,7 @@
       "case": "1291-fast",
       "label": "candidate2",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -732,9 +732,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -776,7 +776,7 @@
       "case": "1291-fast",
       "label": "profile-candidate",
       "command": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/linrad_dvb",
+        "build/linrad_dvb",
         "--decoder-worker=leansdr",
         "--s16",
         "-f",
@@ -808,9 +808,9 @@
         "6"
       ],
       "feeder": [
-        "/home/rhardenb/repos/sdr-dvb-pipelines/build/iq_file_to_stdout",
+        "build/iq_file_to_stdout",
         "--in",
-        "/home/rhardenb/repos/sdr-dvb-pipelines/recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+        "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
         "--sample-rate",
         "6000000",
         "--input-format",
@@ -1374,9 +1374,9 @@
           "-mavx2",
           "-Wno-unused-variable",
           "-Wno-unused-parameter",
-          "-I/home/rhardenb/repos/sdr-dvb-pipelines/third_party/ldpc",
+          "-Ithird_party/ldpc",
           "/tmp/linrad-ldpc-investigation/medium.cc",
-          "/home/rhardenb/repos/sdr-dvb-pipelines/build/ldpc_tables.o",
+          "build/ldpc_tables.o",
           "-o",
           "/tmp/linrad-ldpc-investigation/medium"
         ],
@@ -1389,9 +1389,9 @@
           "-mavx2",
           "-Wno-unused-variable",
           "-Wno-unused-parameter",
-          "-I/home/rhardenb/repos/sdr-dvb-pipelines/third_party/ldpc",
+          "-Ithird_party/ldpc",
           "/tmp/linrad-ldpc-investigation/single16.cc",
-          "/home/rhardenb/repos/sdr-dvb-pipelines/build/ldpc_tables.o",
+          "build/ldpc_tables.o",
           "-o",
           "/tmp/linrad-ldpc-investigation/single16"
         ],
@@ -1404,9 +1404,9 @@
           "-mavx2",
           "-Wno-unused-variable",
           "-Wno-unused-parameter",
-          "-I/home/rhardenb/repos/sdr-dvb-pipelines/third_party/ldpc",
+          "-Ithird_party/ldpc",
           "/tmp/linrad-ldpc-investigation/packing.cc",
-          "/home/rhardenb/repos/sdr-dvb-pipelines/build/ldpc_tables.o",
+          "build/ldpc_tables.o",
           "-o",
           "/tmp/linrad-ldpc-investigation/packing"
         ]
@@ -1425,9 +1425,9 @@
           "-mavx2",
           "-Wno-unused-variable",
           "-Wno-unused-parameter",
-          "-I/home/rhardenb/repos/sdr-dvb-pipelines/third_party/ldpc",
+          "-Ithird_party/ldpc",
           "/tmp/linrad-ldpc-investigation/single16-plain.cc",
-          "/home/rhardenb/repos/sdr-dvb-pipelines/build/ldpc_tables.o",
+          "build/ldpc_tables.o",
           "-o",
           "/tmp/linrad-ldpc-investigation/single16-plain"
         ]
@@ -1446,9 +1446,9 @@
           "-mavx2",
           "-Wno-unused-variable",
           "-Wno-unused-parameter",
-          "-I/home/rhardenb/repos/sdr-dvb-pipelines/third_party/ldpc",
+          "-Ithird_party/ldpc",
           "/tmp/linrad-ldpc-investigation/profile.cc",
-          "/home/rhardenb/repos/sdr-dvb-pipelines/build/ldpc_tables.o",
+          "build/ldpc_tables.o",
           "-o",
           "/tmp/linrad-ldpc-investigation/profile"
         ]
