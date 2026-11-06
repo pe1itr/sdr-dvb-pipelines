@@ -112,6 +112,7 @@ static GtkWidget *name_field(GtkWidget *grid, int row, const char *name) {
     gtk_label_set_max_width_chars(GTK_LABEL(value),12);
     gtk_grid_attach(GTK_GRID(grid),caption,0,row,1,1);
     gtk_grid_attach(GTK_GRID(grid),value,1,row,5,1);
+    g_object_set_data(G_OBJECT(value),"caption",caption);
     return value;
 }
 
@@ -166,6 +167,9 @@ GtkWidget *decoder_view_create(DecoderView *v) {
     v->rs_errors=field(grid,3,9,"RS errors","",TRUE);
     v->cc_errors=field(grid,0,10,"CC errors","",TRUE);
     v->margin=field(grid,3,10,"D margin","dB",TRUE);
+    v->country=name_field(grid,11,"Country");
+    gtk_widget_set_no_show_all(v->country,TRUE);
+    gtk_widget_set_no_show_all(g_object_get_data(G_OBJECT(v->country),"caption"),TRUE);
     return row;
 }
 
@@ -273,16 +277,25 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     gboolean fresh=active && v->status_time && g_get_monotonic_time()-v->status_time<STATUS_AGE;
     DecoderStatus *s=&v->status;
     gboolean satellite=!strcmp(mode,"DVB-S") || !strcmp(mode,"DVB-S2");
+    gboolean dab=!strcmp(mode,"DAB");
+    gtk_widget_set_visible(v->country,dab);
+    gtk_widget_set_visible(g_object_get_data(G_OBJECT(v->country),"caption"),dab);
     gboolean t2=!strcmp(mode,"DVB-T2");
     gboolean s2=!strcmp(mode,"DVB-S2");
     update_margin(v,fresh,mode);
+    GtkWidget *fields[]={v->service,v->provider,v->pilot,v->buffer,v->video_codec,v->packets,v->written,v->rs_ok,v->rs_errors,v->cc_errors,v->margin};
+    const char *dab_names[]={"Ensemble","Station","CP lock","Capture","Slideshow","FIB OK","Audio","FIGs","FIB errors","IQ drops","MER"};
+    const char *dvb_names[]={"Service","Provider","Pilot","Buffer","Video codec","TS","Output","RS OK","RS errors","CC errors","D margin"};
+    for (unsigned i=0;i<G_N_ELEMENTS(fields);++i)
+        gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(fields[i]),"caption")),dab ? dab_names[i] : dvb_names[i]);
+    if (dab) measurement(v->margin,"%.1f",fresh ? s->mer_db : NAN);
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption")),satellite ? "MER" : "SNR");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),satellite ? "Pilots" : "Pilot");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),dab ? "CP lock" : satellite ? "Pilots" : "Pilot");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"units")),satellite ? "" : "%");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->guard),"caption")),satellite ? "Frame" : "GI");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),(s2 || t2) ? "BCH OK" : "RS OK");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),(s2 || t2) ? "BCH errors" : "RS errors");
-    gtk_widget_set_tooltip_text(v->buffer,t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),dab ? "FIGs" : (s2 || t2) ? "BCH OK" : "RS OK");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),dab ? "FIB errors" : (s2 || t2) ? "BCH errors" : "RS errors");
+    gtk_widget_set_tooltip_text(v->buffer,dab ? "Progress of the current 8-second FIC/TII capture" : t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
     if (satellite || t2) {
         s->lock_valid |= DECODER_SERVICE;
         if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
@@ -294,9 +307,10 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     if (t2 && fresh) g_snprintf(text,sizeof(text),"DVB-T2 · PLP %d · IQ lost: %" G_GUINT64_FORMAT " · FEC frames lost: %" G_GUINT64_FORMAT,
         s->plp_id,s->input_dropped,s->fec_frames_dropped);
     gtk_label_set_text(GTK_LABEL(v->state),text);
-    const char *names[]={satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", "FEC", "TS", "Service"};
+    const char *names[]={dab ? "Sync" : satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", dab ? "FIC" : "FEC", dab ? "Ensemble" : "TS", dab ? "Audio" : "Service"};
     for (int i=0;i<4;++i) {
-        const char *color=(!fresh || (satellite && !(s->lock_valid & (1u<<i)))) ? "#888888" : (s->locks & (1u<<i)) ? "#36d866" : "#e05a55";
+        unsigned lock=dab && i>=2 ? (i==2 ? DECODER_SERVICE : DECODER_TS) : (1u<<i);
+        const char *color=(!fresh || ((satellite || dab) && !(s->lock_valid & lock))) ? "#888888" : (s->locks & lock) ? "#36d866" : "#e05a55";
         g_snprintf(text,sizeof(text),"<span foreground=\"%s\">●</span> %s",color,names[i]);
         gtk_label_set_markup(GTK_LABEL(v->lamps[i]),text);
     }

@@ -24,6 +24,7 @@ Bundled code retains its own copyright notices and license terms:
 - third_party/leansdr: GPL-3.0-or-later; see LICENSE.txt and ORIGIN there.
 - third_party/ldpc: 0BSD; see LICENSE and ORIGIN there.
 - components/dvbt2: GPL version 3; see LICENSE and UPSTREAM.json there.
+- components/dab/lib: libdabsdr 4.0.1, MIT, Petr Kopecký; see lib/LICENSE.
 - components/tsscatterfix: MIT; see LICENSE there.
 
 The earlier MIT notice for project-owned code is retained in

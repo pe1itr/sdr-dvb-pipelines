@@ -37,6 +37,8 @@ JSON_CFLAGS := $(shell pkg-config --cflags json-c)
 JSON_LIBS := $(shell pkg-config --libs json-c)
 
 
+include components/dab/component.mk
+
 # Pinned LeanDVB C++ backend; all GUI code remains compiled as C.
 LEAN_DIR := third_party/leansdr
 LEAN_FLAGS := -I$(LEAN_DIR)/src -Isrc -DLEANSDR_EXTENSIONS -DVERSION=\"linrad-leansdr-84c59e1\" -Wno-sign-compare -Wno-unused-variable -Wno-unused-parameter -Wno-missing-field-initializers
@@ -87,8 +89,8 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
-GUI_SOURCES += src/program_view.c src/srt_output.c
-GUI_HEADERS += src/program_view.h src/srt_output.h
+GUI_SOURCES += src/program_view.c src/srt_output.c src/dab_view.c
+GUI_HEADERS += src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
 GUI_HEADERS += src/decoder_margin.h
 GUI_HEADERS += src/signal_meter.h
 GUI_HEADERS += src/reception_log.h
@@ -116,7 +118,7 @@ all: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout $(BUILD_DIR)/sdr_
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
+$(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(BUILD_DIR)/dab_worker $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -ldl -lstdc++ $(LDLIBS)
 
 $(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
@@ -134,6 +136,7 @@ package: all
 	cp $(LEAN_DIR)/LICENSE.txt $(BUILD_DIR)/leansdr-LICENSE.txt
 	cp $(LDPC_DIR)/LICENSE $(BUILD_DIR)/ldpc-LICENSE.txt
 	cp $(DVBT_DIR)/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
+	cp $(DAB_DIR)/lib/LICENSE $(BUILD_DIR)/dabsdr-LICENSE.txt
 	cp $(DVBT2_DIR)/LICENSE $(BUILD_DIR)/dvbt2-LICENSE.txt
 	cp $(SCATTER_DIR)/LICENSE $(BUILD_DIR)/tsscatterfix-LICENSE.txt
 	@echo "Start: ./build/linrad_dvb (config: linrad-dvb.ini)"
@@ -141,10 +144,13 @@ package: all
 $(BUILD_DIR)/gui_smoke: tests/gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -ldl -lstdc++ $(LDLIBS)
 
+$(BUILD_DIR)/dab_gui_smoke: tests/dab_gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -ldl -lstdc++ $(LDLIBS)
+
 $(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GTK_CFLAGS) $(SCATTER_CFLAGS) tests/video_smoke.c src/video_view.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
 
-test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/video_smoke
+test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke $(BUILD_DIR)/video_smoke
 	python3 tests/test_linrad.py
 	python3 tests/test_soapy_inputs.py
 
@@ -157,7 +163,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 SDR_SOURCES := src/sdr_to_stdout.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
-$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(LIME_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
@@ -360,3 +366,5 @@ test-srt: all
 	python3 tests/test_srt_output.py
 
 test: test-srt
+
+test: test-dab

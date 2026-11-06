@@ -1,0 +1,78 @@
+#pragma once
+
+#include "dynamic_label.hpp"
+#include "mot_slideshow.hpp"
+
+#include <complex>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace dab {
+
+struct DabPlusService {
+    std::uint32_t service_id = 0;
+    std::uint8_t component_id = 0;
+    std::string label;
+    std::uint16_t bitrate_kbps = 0;
+    bool primary = false;
+};
+
+// Build the MPEG-4 AudioSpecificConfig required for one DAB+ access unit.
+// audio_header_raw uses the bit layout published by libdabsdr.
+std::vector<std::uint8_t> dab_plus_audio_specific_config(
+    std::uint8_t audio_header_raw);
+
+// A persistent libdabsdr MSC session for interactive, single-channel DAB+
+// listening. It deliberately remains separate from the block-oriented DX
+// decoder API: dropping radio audio must never change DX evidence or logging.
+class DabPlusRadioSession {
+public:
+    DabPlusRadioSession(std::string station_selector,
+                        std::string alsa_device = "default",
+                        bool playback_enabled = true);
+    ~DabPlusRadioSession();
+
+    DabPlusRadioSession(const DabPlusRadioSession&) = delete;
+    DabPlusRadioSession& operator=(const DabPlusRadioSession&) = delete;
+
+    void start(std::uint32_t frequency_khz);
+    void stop() noexcept;
+    void set_muted(bool muted);
+    void select_station(const std::string& station_selector);
+    void push_samples(const std::complex<float>* samples, std::size_t count);
+    void check_error() const;
+
+    std::vector<DabPlusService> services() const;
+    std::size_t services_generation() const;
+    bool dab_signal_synced() const;
+    bool fic_synced() const;
+    bool service_list_received() const;
+    std::string ensemble_label() const;
+    bool discovery_complete() const;
+    bool station_available() const;
+    bool station_selected() const;
+    std::string selected_station() const;
+    std::size_t dropped_iq_blocks() const;
+    std::size_t dropped_audio_frames() const;
+    std::size_t decoded_audio_frames() const;
+    std::size_t decoded_slides() const;
+    std::optional<MotSlide> take_slide();
+    std::optional<DynamicLabel> take_dynamic_label();
+
+    // Callback entry points used by the C-only libdabsdr ABI.
+    void supply_input(float output[], std::uint16_t count);
+    void handle_notification(void* notification);
+    void handle_audio(void* audio);
+    void handle_dynamic_label(void* dynamic_label);
+    void handle_data_group(void* data_group);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+} // namespace dab

@@ -34,6 +34,8 @@
 #include "usb_receiver.h"
 #include "srt_output.h"
 #include "reception_log.h"
+#include "dab_view.h"
+#include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
        SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_FILE = 12 };
@@ -51,6 +53,9 @@ typedef struct {
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_plp_box;
+    DabView dab;
+    GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
+    GtkWidget *video_frame, *dab_previous, *dab_next;
     GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
@@ -85,7 +90,7 @@ typedef struct {
     GtkWidget *pcm_udp_enabled, *pcm_udp_host, *pcm_udp_port;
 } App;
 
-static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2"};
+static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2", "DAB"};
 static const char *constellations[] = {"QPSK", "8PSK"};
 static const char *s2_latency_modes[] = {"auto", "low", "throughput"};
 static const char *s2_acquisition_modes[] = {"auto", "fast", "normal"};
@@ -98,7 +103,7 @@ static const unsigned modcods[2][G_N_ELEMENTS(fecs)] = {
 };
 static gboolean valid_fec(App *a, int fec) {
     if (fec < 0 || fec >= (int)G_N_ELEMENTS(fecs)) return FALSE;
-    if (a->standard == 3) return fec == 0; /* automatic L1 signalling */
+    if (a->standard >= 3) return fec == 0; /* automatic L1 signalling */
     if (a->standard == 1) return modcods[a->constellation][fec] != 0;
     if (a->standard == 2) return fec < 3 || !strcmp(fecs[fec], "5/6") || !strcmp(fecs[fec], "7/8");
     return fec < 3;
@@ -110,15 +115,21 @@ static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP, RENDER_SRT };
 static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts", "embedded", "udp", "srt"};
-static gboolean internal_player(App *a) { return a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP; }
+static gboolean internal_player(App *a) { return a->standard != 4 && (a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP); }
 static gboolean udp_output(App *a) {
-    return a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
-        g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL));
+    return a->standard != 4 && (a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
+        g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL)));
 }
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
-static gboolean use_scatter(App *a) { return a->scatter; }
+static gboolean use_scatter(App *a) { return a->standard != 4 && a->scatter; }
 static const int airspyr2_rates[] = {2500000, 10000000};
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
+static const int dab_rates[] = {1536000};
+static const char *dab_profiles[] = {"normal", "weak", "aircraft"};
+static int dab_channel(App *a) {
+    char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
+    int index=dab_channel_index(name);g_free(name);return index<0 ? 30 : index;
+}
 static const int t2_rates[] = {8000000};
 static const int terrestrial_rates[] = {150000, 250000, 40000, 35000, 333000, 500000};
 
@@ -177,8 +188,41 @@ static double receiver_offset(App *a) {
     if (error) { g_error_free(error); return NAN; }
     return offset;
 }
-static double channel_bandwidth(App *a) { return a->standard >= 2 ? a->sr : a->sr*1.35; }
+static double channel_bandwidth(App *a) { return a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
 static const char *receiver_offset_problem(App *a) {
+    if (a->standard == 4) {
+#ifdef _WIN32
+        return "DAB reception currently requires the Linux DAB worker.";
+#endif
+        char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
+        int index=dab_channel_index(name);g_free(name);
+        if (index<0) return "DAB: unknown Band III channel in [dab] channel.";
+        char *profile=g_key_file_get_string(a->config,"dab","profile",NULL);
+        gboolean known=profile && (!strcmp(profile,"normal") || !strcmp(profile,"weak") || !strcmp(profile,"aircraft"));g_free(profile);
+        if (!known) return "DAB profile must be normal, weak or aircraft.";
+        double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
+        if (!isfinite(rate) || rate<2048000 || rate>100000000 || (a->source==2 && rate<4000000))
+            return "DAB: select at least 2.048 MS/s, or 4 MS/s for B210, within the selected SDR limits.";
+        if (hardware_source(a) && g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)!=0)
+            return "DAB: set converter LO offset to zero; use the B210 fixed IF option for the external mixer.";
+        if (g_key_file_get_boolean(a->config,sources[a->source],"filter_enabled",NULL) &&
+            g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL)<1536000)
+            return "DAB: disable the narrow IQ filter or select at least 1.536 MHz.";
+        if (receiver_offset(a)!=0) return "DAB: set receiver offset to zero; select the channel in Mode.";
+        if (a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL)) {
+            double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
+            if (!isfinite(intermediate) || intermediate<46000000 || intermediate>dab_channels[0].hz-48500000)
+                return "DAB mixer IF must be 46..126.428 MHz, keeping the low-side LO within the board tuning range.";
+            char *input=g_key_file_get_string(a->config,"dab","rx_input",NULL);
+            char *port=g_key_file_get_string(a->config,"dab","lo_port",NULL);
+            gboolean valid=input && (!strcmp(input,"TRX1") || !strcmp(input,"RX1") || !strcmp(input,"TRX2") || !strcmp(input,"RX2")) &&
+                port && (!strcmp(port,"TRX1") || !strcmp(port,"TRX2"));
+            gboolean collision=!g_strcmp0(input,port) && g_key_file_get_boolean(a->config,"dab","lo_output_enabled",NULL);
+            g_free(input);g_free(port);
+            if (!valid) return "DAB: invalid B210 input or LO port.";
+            if (collision) return "DAB: IF receive input and LO output must use separate physical ports.";
+        }
+    }
     if (a->standard == 3) {
         const char *section=sources[a->source];
         double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
@@ -299,6 +343,12 @@ static void build_pipeline(App *a) {
         integer_setting(a, "renderer", "udp_port", 1, 65535);
     }
     clear_stages(a);
+    if (a->standard==4) {
+        if (!a->dab.directory) {
+            a->dab.directory=g_dir_make_tmp("linrad-dab-XXXXXX",NULL);
+            if (!a->dab.directory) fatal("Cannot create private DAB state directory");
+        }
+    }
     int sample_rate = integer_setting(a, "linrad", "sample_rate", 1, 100000000);
     char *format = setting(a, "linrad", "format"), *ip = setting(a, "linrad", "ip");
     struct in_addr addr;
@@ -337,6 +387,7 @@ static void build_pipeline(App *a) {
         if (strcmp(format, "s16") && strcmp(format, "u8")) fatal("Invalid SDR format");
         s = new_stage(a, "sdr");
         add(s, "--source"); add(s, section);
+        if (a->standard==4) {add(s,"--dab-state-dir");add(s,a->dab.directory);}
         if (a->window) add(s, "--control-stdin");
         add(s, "--format"); add(s, format);
         add_number(s, "--sample-rate", sample_rate);
@@ -346,6 +397,15 @@ static void build_pipeline(App *a) {
                 add(s, "--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
             }
             add(s, "--channel-bandwidth"); add(s,g_ascii_dtostr(value,sizeof(value),channel_bandwidth(a)));
+        }
+        if (a->standard==4 && a->source==2) {
+            char *input=setting(a,"dab","rx_input");add(s,"--b210-input");add(s,input);g_free(input);
+            if (g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL)) {
+                add_number(s,"--dab-if",integer_setting(a,"dab","if_hz",46000000,126428000));
+                if (g_key_file_get_boolean(a->config,"dab","lo_output_enabled",NULL)) {
+                    add(s,"--dab-lo-output");char *port=setting(a,"dab","lo_port");add(s,"--dab-lo-port");add(s,port);g_free(port);
+                }
+            }
         }
         const char *keys[] = {"frequency", "gain", "args", "images", "antenna"};
         const char *flags[] = {"--frequency", "--gain", "--args", "--images", "--antenna"};
@@ -362,6 +422,18 @@ static void build_pipeline(App *a) {
         if (width < sample_rate/256.0 || width > sample_rate*.95)
             fatal("IQ filter width must be between max(10, sample-rate/256) and 0.95*sample-rate");
         add_number(s, "--filter-bandwidth", width);
+    }
+    if (a->standard == 4) {
+        s=new_stage(a,"dab");
+        add(s,"--state-dir");add(s,a->dab.directory);
+        add(s,"--channel");add(s,dab_channels[dab_channel(a)].name);
+        add(s,"--input-format");add(s,format);add_number(s,"--sample-rate",sample_rate);
+        char *profile=setting(a,"dab","profile"), *device=setting(a,"dab","audio_device");
+        add(s,"--profile");add(s,profile);add(s,"--audio-device");add(s,device);g_free(profile);g_free(device);
+        if (g_key_file_get_boolean(a->config,"dab","channel_filter",NULL)) add(s,"--channel-filter");
+        g_free(format);g_free(ip);
+        for (int i=0;i<a->stage_count;++i) g_ptr_array_add(a->stages[i].args,NULL);
+        return;
     }
     if (a->standard == 3) {
         if (a->sr != 8000000 || sample_rate < 8000000 || sample_rate > 20000000)
@@ -496,7 +568,7 @@ static char *describe(App *a) {
             g_free(host);
         }
     }
-    if (a->renderer == RENDER_FILE) {
+    if (a->standard != 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory), *quoted = g_shell_quote(resolved);
         g_string_append_printf(text, "\n  > %s  (new MPEG-TS file)", quoted);
@@ -614,9 +686,30 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 
 static void scatter_refresh(App *a) {
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
-    if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, !use_scatter(a));
+    if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
+    if (a->dab.info) {
+        gboolean dab=a->standard==4;
+        if (!dab) {a->dab.active=FALSE;gtk_widget_hide(a->dab.tii_dialog);}
+        gtk_widget_set_visible(a->dab.image_frame,dab);
+        gtk_widget_set_visible(a->dab.stations_frame,dab);gtk_widget_set_visible(a->video_frame,!dab);
+        gtk_widget_set_visible(a->dab.tii_button,dab);
+        gtk_widget_set_visible(a->scatter_box,!dab);
+        for (unsigned i=0;i<G_N_ELEMENTS(a->information.buttons);++i) {
+            gtk_widget_set_visible(a->information.buttons[i],!dab);
+            if (dab) gtk_widget_hide(a->information.dialogs[i]);
+        }
+        gtk_widget_set_visible(a->dab_previous,dab);gtk_widget_set_visible(a->dab_next,dab);
+        gtk_widget_set_sensitive(a->dab_previous,!a->stopping && hardware_source(a) && dab_channel(a)>0);
+        gtk_widget_set_sensitive(a->dab_next,!a->stopping && hardware_source(a) && dab_channel(a)+1<(int)DAB_CHANNEL_COUNT);
+    }
+    if (a->dab_channel_box) {
+        GtkWidget *widgets[]={a->dab_channel_box,a->dab_profile_box,a->dab_filter_box};
+        for (unsigned i=0;i<G_N_ELEMENTS(widgets);++i) gtk_widget_set_sensitive(widgets[i],a->standard==4);
+        GtkWidget *mixer[]={a->dab_mixer_box,a->dab_if_box,a->dab_input_box,a->dab_lo_box,a->dab_lo_port_box};
+        for (unsigned i=0;i<G_N_ELEMENTS(mixer);++i) gtk_widget_set_sensitive(mixer[i],a->standard==4 && a->source==2);
+    }
     if (!a->scatter_box) return;
-    gtk_widget_set_sensitive(a->scatter_box, !a->stopping);
+    gtk_widget_set_sensitive(a->scatter_box, a->standard!=4 && !a->stopping);
     gtk_widget_set_tooltip_text(a->scatter_box, a->stopping ? "Waiting for reception to stop." :
         a->scatter ? "TSscatterFix on · click to turn off." : "TSscatterFix off · click to turn on.");
 }
@@ -644,6 +737,7 @@ static void power_refresh(App *a) {
     gtk_widget_set_sensitive(a->power_button, !a->stopping && !problem);
 }
 
+static void start_pipeline(App *a);
 static void finish_if_stopped(App *a) {
     if (!a->stopping || a->kill_timer) return;
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
@@ -658,7 +752,7 @@ static void finish_if_stopped(App *a) {
         gtk_widget_set_sensitive(a->controls, TRUE);
         gtk_widget_set_sensitive(a->hardware, TRUE);
         gtk_widget_set_sensitive(a->renderer_panel, TRUE);
-        gtk_widget_set_sensitive(a->frequency_box, hardware_source(a));
+        gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && hardware_source(a));
     }
     power_refresh(a);
     if (a->headless) g_main_loop_quit(a->loop);
@@ -682,6 +776,7 @@ static gboolean force_stop(gpointer data) {
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
     a->stopping = TRUE;
+    if (a->standard==4) dab_view_tick(&a->dab,FALSE);
     usb_receiver_source(a->usb_receiver,a->iq_view.center,a->iq_view.rate,FALSE);
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
@@ -757,6 +852,7 @@ static void start_pipeline(App *a) {
     a->record_log_used = 0;
     a->afedri_receiving = FALSE;
     build_pipeline(a); a->exit_code = 0;
+    if (a->standard==4) {dab_view_reset(&a->dab);dab_view_mute(&a->dab,a->video_view.muted);}
     if (internal_player(a) && !a->video_view.area) {
         a->exit_code = 1;
         status(a, "Embedded/UDP playback requires the GUI; use --renderer cvlc, ffplay or mpegts with --run.");
@@ -782,7 +878,7 @@ static void start_pipeline(App *a) {
         g_free(found);
     }
     int pipes[2][2], scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
-    if (a->renderer == RENDER_FILE) {
+    if (a->standard != 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory);
         output_fd = open(resolved, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
@@ -797,7 +893,7 @@ static void start_pipeline(App *a) {
         if (!g_unix_open_pipe(tune_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(tune_pipe[1], TRUE, NULL)) goto pipe_error;
     }
-    for (; made < (a->renderer == RENDER_FILE ? 1 : 2); ++made)
+    for (; made < (a->standard == 4 || a->renderer == RENDER_FILE ? 1 : 2); ++made)
         if (!g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
     if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -822,7 +918,7 @@ static void start_pipeline(App *a) {
             a->exit_code = 1; goto pipe_error;
         }
     }
-    {
+    if (a->standard != 4) {
         /* Keep the TS relay available so recovery can be toggled live. */
         GError *error = NULL;
         scatter_view_reset(&a->scatter_view);
@@ -846,8 +942,8 @@ static void start_pipeline(App *a) {
     for (int i = a->stage_count - 1; i >= 0; --i) {
         int in = i == 0 ? nullfd : pipes[i - 1][0];
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
-        int out = i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
-        if (i == 1) out = scatter_pipe[1];
+        int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
+        if (i == 1) out = a->standard==4 ? nullfd : scatter_pipe[1];
         GError *error = NULL; Stage *s = &a->stages[i];
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
@@ -900,7 +996,7 @@ static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
     char *text = g_strdup_printf("%s · %s %d%s · FEC %s",
         standards[a->standard], a->standard >= 2 ? "BW" : "Symb/s", a->sr,
-        a->standard >= 2 ? " Hz" : "", a->standard == 3 ? "auto" : fecs[a->fec]);
+        a->standard >= 2 ? " Hz" : "", a->standard >= 3 ? "auto" : fecs[a->fec]);
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
     scatter_refresh(a);
 }
@@ -928,9 +1024,19 @@ static void tuning_refresh(App *a) {
         char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
-    gtk_widget_set_sensitive(a->offset_box, hardware_source(a));
-    gtk_widget_set_sensitive(a->receiver_offset_box, hardware_source(a));
-    gtk_widget_set_sensitive(a->step_box, hardware_source(a));
+    gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
+    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && hardware_source(a));
+    gtk_widget_set_sensitive(a->step_box, a->standard!=4 && hardware_source(a));
+    if (a->standard==4) {
+        int channel=dab_channel(a);
+        char *label=g_strdup_printf("%s · %.6f MHz",dab_channels[channel].name,dab_channels[channel].hz/1e6);
+        gtk_label_set_text(GTK_LABEL(a->frequency_display),label);g_free(label);
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL) ?
+            "DAB external mixer: fixed IF input; low-side LO = channel frequency − IF. Configure ports in Mode." :
+            hardware_source(a) ? "DAB: select a channel in Mode; ← / → selects the previous / next channel." :
+            "DAB: set the IQ input to the selected channel and sample rate; channel labels do not retune Linrad or files.");
+        return;
+    }
     if (a->source==SOURCE_FILE) {
         double frequency=g_key_file_get_double(a->config,"file","frequency",NULL);
         char *text=g_strdup_printf("%.6f MHz",frequency/1e6);
@@ -993,6 +1099,24 @@ static void tune_step(App *a, int direction) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double next = frequency + direction*step;
+    if (a->standard==4) {
+        int index=dab_channel(a)+direction;
+        if (index<0 || index>=(int)DAB_CHANNEL_COUNT) return;
+        if (a->running && !dab_view_retune(&a->dab,a->tune_fd,dab_channels[index].name,dab_channels[index].hz)) {
+            status(a,"DAB tuning command not sent; try again");return;
+        }
+        g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
+        next=dab_channels[index].hz;
+        g_key_file_set_double(a->config,section,"frequency",next);
+        if (a->dab_channel_box) {
+            g_signal_handlers_block_matched(a->dab_channel_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_channel_box),index);
+            g_signal_handlers_unblock_matched(a->dab_channel_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+        }
+        tuning_refresh(a);power_refresh(a);
+        if (!a->running) refresh_preview(a);
+        return;
+    }
     if (!rx_tuning_valid(section,next,receiver_offset(a))) {
         status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return;
     }
@@ -1067,6 +1191,9 @@ static void filter_refresh(App *a) {
 static void filter_apply(App *a, int width, gboolean enabled) {
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
+    if (enabled && a->standard==4 && width<1536000) {
+        status(a,"DAB IQ filter must pass at least 1.536 MHz.");filter_refresh(a);return;
+    }
     if (enabled && a->standard == 3 && (width < 8000000 ||
         width > .95*g_key_file_get_double(a->config,section,"sample_rate",NULL))) {
         status(a,"DVB-T2 IQ filter needs at least 8 MHz within 95% of the sample rate; use 10 Msps or leave the filter off.");
@@ -1091,6 +1218,7 @@ static void filter_changed(GtkWidget *widget, gpointer data) {
     App *a = data; (void)widget;
     int width = g_key_file_get_integer(a->config, sources[a->source], "filter_bandwidth", NULL);
     if (a->standard == 3) width = MAX(width,8000000);
+    if (a->standard == 4) width = MAX(width,1536000);
     filter_apply(a, width, gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->filter_box)));
 }
 static void filter_step(App *a, int direction) {
@@ -1099,8 +1227,8 @@ static void filter_step(App *a, int direction) {
     int rate = integer_setting(a, section, "sample_rate", 1, 100000000);
     int low = MAX(10, (rate+255)/256), high = MAX(low, (int)(rate*.95));
     int width = g_key_file_get_integer(a->config, section, "filter_bandwidth", NULL);
-    if (a->standard == 3) {
-        low = MAX(low,8000000);
+    if (a->standard >= 3) {
+        low = MAX(low,a->standard==4 ? 1536000 : 8000000);
         if (high < low) { filter_apply(a,low,TRUE); return; }
         width = MAX(width,low);
     }
@@ -1197,6 +1325,39 @@ static char *reception_log_path(App *a) {
     char *path=g_canonicalize_filename(configured && *configured ? configured : "reception-log.csv",a->directory);
     g_free(configured); return path;
 }
+static void show_reception_editor(App *a,char **row,int edit_index);
+/* Return the saved TII codes for this ensemble; NULL means the log could not be read. */
+static GHashTable *dab_logged_tii(const char *ensemble,gpointer data) {
+    char *path=reception_log_path(data);
+    GPtrArray *rows=reception_log_read(path,NULL);g_free(path);
+    if (!rows) return NULL;
+    GHashTable *codes=g_hash_table_new_full(g_str_hash,g_str_equal,g_free,NULL);
+    for (unsigned i=0;i<rows->len;++i) {
+        char **row=g_ptr_array_index(rows,i);
+        if (g_ascii_strcasecmp(row[LOG_MODE],"DAB") || strcmp(row[LOG_SERVICE],ensemble)) continue;
+        /* Accept the compact code and the spaced form used in older displays. */
+        char code[5]={0};unsigned n=0;
+        for (const char *p=row[LOG_TII];*p;++p) {
+            if (g_ascii_isspace(*p)) continue;
+            if (!g_ascii_isdigit(*p) || n==4) {n=0;break;}
+            code[n++]=*p;
+        }
+        if (n==4) g_hash_table_add(codes,g_strdup(code));
+    }
+    g_ptr_array_unref(rows);return codes;
+}
+static void dab_log_reception(const DabReception *entry,gpointer data) {
+    App *a=data;
+    if (a->reception_dialog) {gtk_window_present(GTK_WINDOW(a->reception_dialog));return;}
+    GDateTime *when=g_date_time_new_from_unix_utc(entry->observed);
+    if (!when) return;
+    char *stamp=g_date_time_format(when,"%Y-%m-%dT%H:%M:%SZ");
+    char hz[G_ASCII_DTOSTR_BUF_SIZE];g_ascii_formatd(hz,sizeof(hz),"%.0f",entry->frequency);
+    char *row[LOG_COLUMNS+1]={stamp,hz,(char *)entry->ensemble,"","DAB",(char *)entry->tii,
+        (char *)sources[a->source],"","1536000","auto","","",NULL};
+    show_reception_editor(a,row,-1);g_free(stamp);g_date_time_unref(when);
+}
+
 static void logbook_refresh(App *a);
 
 static void reception_entry_free(gpointer data) {
@@ -1249,6 +1410,7 @@ static void reception_response(GtkDialog *dialog, gint response, gpointer data) 
         char *message=g_strdup_printf("Reception %s: %s",entry->edit_index>=0 ? "updated" : "logged",entry->path);
         status(entry->app,message); g_free(message);
         logbook_refresh(entry->app);
+        dab_view_refresh_tii(&entry->app->dab);
     }
     gtk_widget_destroy(GTK_WIDGET(dialog));
 }
@@ -1332,11 +1494,17 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
         g_strlcpy(service,a->decoder_view.status.service,sizeof(service));
         g_strlcpy(provider,a->decoder_view.status.provider,sizeof(provider));
     }
+    if (a->standard==4) {
+        const char *ensemble=dab_view_text(&a->dab,"radio_ensemble");
+        if (!*ensemble) ensemble=dab_view_text(&a->dab,"ensemble");
+        g_strlcpy(service,ensemble,sizeof(service));provider[0]=0;
+    }
     const char *source=sources[a->source];
     double hz=g_key_file_get_double(a->config,source,"frequency",NULL)+receiver_offset(a);
     if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
+    if (a->standard==4) hz=dab_channels[dab_channel(a)].hz;
     g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
-    const char *fec=a->standard==3 ? "auto" : fecs[a->fec];
+    const char *fec=a->standard>=3 ? "auto" : fecs[a->fec];
     if (a->decoder_view.status_time && g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
         (a->decoder_view.status.locks & (DECODER_FEC | DECODER_TS)) && a->decoder_view.status.fec[0])
         fec=a->decoder_view.status.fec;
@@ -1628,6 +1796,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
     case GDK_KEY_m:
         video_view_set_muted(&a->video_view, !a->video_view.muted);
         usb_receiver_set_muted(a->usb_receiver,a->video_view.muted);
+        if (a->standard==4) dab_view_mute(&a->dab,a->video_view.muted);
         return TRUE;
     case GDK_KEY_r:
         if (a->running && !a->stopping && a->scatter && a->scatter_backend) {
@@ -1664,6 +1833,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
     if (a->running) return;
     a->source = gtk_combo_box_get_active(GTK_COMBO_BOX(a->source_box));
     const char *section = sources[a->source];
+    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_channels[dab_channel(a)].hz);
     if (widget == a->source_box) {
         g_signal_handlers_block_by_func(a->format_box, source_changed, a);
         char *fmt = setting(a, section, "format");
@@ -1709,12 +1879,12 @@ static void source_changed(GtkWidget *widget, gpointer data) {
             atoi(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box))) :
             gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)));
         if (hardware_source(a)) {
-            g_key_file_set_double(a->config, section, "frequency", gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
+            g_key_file_set_double(a->config, section, "frequency", a->standard==4 ? dab_channels[dab_channel(a)].hz : gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
     gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
     gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
-    gtk_widget_set_sensitive(a->frequency_box, hardware_source(a));
+    gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && hardware_source(a));
     gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE);
     if (a->hardware_stack) gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), section);
     if (a->file_path) file_controls_refresh(a);
@@ -1759,8 +1929,8 @@ static void scatter_changed(GtkWidget *widget, gpointer data) {
 
 static void populate_rates(App *a) {
     if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard >= 2 ? "BW (Hz)" : "Symbol rate (sym/s)");
-    const int *rates = a->standard == 3 ? t2_rates : a->standard == 2 ? terrestrial_rates : sat_rates;
-    int count = a->standard == 3 ? 1 : a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
+    const int *rates = a->standard == 4 ? dab_rates : a->standard == 3 ? t2_rates : a->standard == 2 ? terrestrial_rates : sat_rates;
+    int count = a->standard >= 3 ? 1 : a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
     g_signal_handlers_block_by_func(a->sr_box, selection_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->sr_box));
     for (int i = 0; i < count; ++i) {
@@ -1768,7 +1938,7 @@ static void populate_rates(App *a) {
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->sr_box), label); g_free(label);
         if (rates[i] == a->sr) active = i;
     }
-    if (active < 0 && a->standard != 3 && a->source==SOURCE_FILE && a->sr>0) {
+    if (active < 0 && a->standard < 3 && a->source==SOURCE_FILE && a->sr>0) {
         char *label=g_strdup_printf("%d",a->sr);
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->sr_box),label); g_free(label);
         active=count;
@@ -1776,7 +1946,7 @@ static void populate_rates(App *a) {
     if (active < 0) active = a->standard >= 2 ? 0 : 2;
     if (active<count) a->sr = rates[active];
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), active);
-    if (a->standard == 3) { a->gi=3; gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),3); }
+    if (a->standard >= 3) { a->gi=3; gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),3); }
     gtk_widget_set_sensitive(a->gi_box, a->standard == 2);
     g_signal_handlers_unblock_by_func(a->sr_box, selection_changed, a);
 }
@@ -1804,11 +1974,11 @@ static void populate_fecs(App *a) {
     for (int i = 0; i < (int)G_N_ELEMENTS(fecs); ++i) {
         if (!valid_fec(a, i)) continue;
         char *id = g_strdup_printf("%d", i);
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, a->standard == 3 ? "auto (L1)" : fecs[i]);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, a->standard == 4 ? "auto (FIC)" : a->standard == 3 ? "auto (L1)" : fecs[i]);
         if (i == a->fec) gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), id);
         g_free(id);
     }
-    gtk_widget_set_sensitive(a->fec_box, a->standard != 3);
+    gtk_widget_set_sensitive(a->fec_box, a->standard < 3);
     g_signal_handlers_block_by_func(a->constellation_box, constellation_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->constellation_box));
     if (a->standard == 3) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto (L1)");
@@ -1843,8 +2013,23 @@ static void t2_plp_changed(GtkWidget *widget, gpointer data) {
 static void standard_changed(GtkWidget *widget, gpointer data) {
     App *a = data; a->standard = gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
     if (a->standard != 1) a->constellation = 0;
-    if (a->standard == 3) a->gi = 3;
-    populate_rates(a); populate_fecs(a); refresh_preview(a);
+    if (a->standard >= 3) a->gi = 3;
+    if (a->standard==4) {
+        const char *section=sources[a->source];
+        if (hardware_source(a)) {
+            g_key_file_set_double(a->config,section,"frequency",dab_channels[dab_channel(a)].hz);
+            g_key_file_set_double(a->config,section,"receiver_offset",0);
+            g_key_file_set_double(a->config,section,"lo_offset",0);
+            g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
+            double minimum=a->source==2 ? 4000000 : 2048000;
+            if (g_key_file_get_double(a->config,section,"sample_rate",NULL)<minimum)
+                g_key_file_set_double(a->config,section,"sample_rate",a->source==2 ? 4096000 : a->source==SOURCE_AIRSPYR2 ? 2500000 : 2048000);
+        }
+        tuning_refresh(a);
+    }
+    populate_rates(a); populate_fecs(a);
+    if (a->standard==4 && a->source_box) source_changed(a->source_box,a);
+    refresh_preview(a);
 }
 static void power_clicked(GtkWidget *w, gpointer data) {
     (void)w; App *a = data;
@@ -1887,6 +2072,10 @@ static void select_program(guint16 service, gpointer data) {
 
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
+    if (a->standard==4) {
+        dab_view_tick(&a->dab,a->running && !a->stopping);scatter_refresh(a);
+        return G_SOURCE_CONTINUE;
+    }
     ts_info_view_tick(&a->information, a->running && !a->stopping && a->scatter_backend ?
         a->scatter_backend->information : NULL);
     if (!a->stopping) scatter_view_tick(&a->scatter_view, a->scatter_backend);
@@ -1986,6 +2175,16 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    const char *dk[]={"channel","profile","channel_filter","audio_device","mixer_enabled","lo_output_enabled","if_hz","rx_input","lo_port"};
+    const char *dv[]={"12C","normal","true","default","false","false","53000000","RX1","TRX1"};
+    for (unsigned i=0;i<G_N_ELEMENTS(dk);++i)
+        if (!g_key_file_has_key(a->config,"dab",dk[i],NULL)) g_key_file_set_string(a->config,"dab",dk[i],dv[i]);
+    if (!g_key_file_has_key(a->config,"paths","dab",NULL)) {
+        char *exe=g_file_read_link("/proc/self/exe",NULL);
+        char *dir=exe ? g_path_get_dirname(exe) : g_strdup("build");
+        char *worker=g_build_filename(dir,"dab_worker",NULL);
+        g_key_file_set_string(a->config,"paths","dab",worker);g_free(worker);g_free(dir);g_free(exe);
+    }
     if (!g_key_file_has_key(a->config,"dvbt2","plp",NULL))
         g_key_file_set_integer(a->config,"dvbt2","plp",-1);
     const char *srt_keys[] = {"url", "loss_timeout_ms", "retry_interval_ms", "fps", "video_bitrate_kbps", "x264_preset", "video_threads", "filter_threads"};
@@ -2316,7 +2515,12 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_container_add(GTK_CONTAINER(scroll),box);
     about_label(box,"linrad_dvb","about-title");
     about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
-        "amateur television under weak signal conditions.",NULL);
+        "amateur television under weak signal conditions, broadcast DVB-T2 and DAB/DAB+ radio.",NULL);
+    about_label(box,"DAB is implemented as a separate receiver component, developed from "
+        "Rob Hardenberg / PE1ITR's own dab-monitor. It provides Band III channel tuning, "
+        "DAB+ audio, station selection, MOT slideshow, constellation and ensemble information, "
+        "country identification and TII reception logging. Normal, weak-signal and aircraft-scatter "
+        "profiles and the B210 fixed-IF / LO-output option are available.",NULL);
     about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
         "elements in static test patterns from fragments of the received "
         "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
@@ -2325,14 +2529,22 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
     about_label(box,"Receiver controls","about-heading");
     about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
-        "Mode: DVB-S/S2/T/T2, symbol rate or bandwidth, FEC, constellation and guard interval. "
+        "Mode: DVB-S/S2/T/T2 or DAB, with the corresponding decoder and channel settings. "
         "For DVB-S2, choose Soft-decision LDPC or Bit-flipping, 1–8 LDPC workers, "
         "and automatic acquisition/processing based on symbol rate: up to 333 ksym/s, "
         "continuous search and low latency; above that, normal search and throughput. "
         "Manual overrides are available. W saves these settings.",NULL);
     about_label(box,"Renderer: embedded video, UDP, external player or MPEG-TS file. "
         "Spectrum controls: IQ filter, IQ recording, TSscatterFix, USB / FM / FM-DATA, "
-        "Service info / EPG / Teletext. TCI: monitor audio and control connection.",NULL);
+        "Service info / EPG / Teletext. In DAB, TII opens the transmitter-code table; "
+        "green indicates received codes, and a green check marks an ensemble/TII combination "
+        "already saved in the reception log. TCI: monitor audio and control connection.",NULL);
+    about_label(box,"GPU video playback: select Embedded player in Renderer, then click "
+        "Extern op GPU below Received video during DVB reception. This switches to external "
+        "FFplay with NVIDIA CUDA decoding and Vulkan rendering while the SDR and DVB decoder "
+        "keep running. Terug in venster, or closing FFplay, returns to embedded VLC. "
+        "Requires an FFplay build with CUDA and Vulkan/libplacebo support. "
+        "DAB uses its own audio player and station slideshow.",NULL);
     about_label(box,"Keyboard shortcuts","about-heading");
     GtkWidget *grid=gtk_grid_new();
     gtk_widget_set_name(grid,"about-shortcuts");
@@ -2341,13 +2553,13 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"Key","Description"},
         {"Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A","Open Input / Mode / Renderer / TCI / Application log / About"},
         {"R","Reset TSscatterFix reconstruction"},
-        {"M","Mute / unmute speakers (DVB and USB / FM / FM-DATA); TCI audio continues"},
+        {"M","Mute / unmute speakers (DVB, DAB and USB / FM / FM-DATA); TCI audio continues"},
         {"U","USB receiver (3 kHz), speaker and TCI on/off"},
         {"F","FM receiver (12.5 kHz), speaker and TCI on/off"},
         {"D","FM-DATA receiver (20 kHz), flat audio to speaker and TCI on/off"},
         {"Page Up / Page Down","Tune monitor down / up: USB 100 Hz, FM / FM-DATA 2.5 kHz"},
         {"Click spectrum","Tune the active USB / FM / FM-DATA monitor at the clicked frequency"},
-        {"← / →","Decrease / increase receive frequency"},
+        {"← / →","Decrease / increase receive frequency; previous / next channel in DAB"},
         {"↑ / ↓","Increase / decrease gain"},
         {"[ / ]","Narrow / widen the IQ bandpass filter"},
         {"W","Save settings, including spectrum and waterfall"},
@@ -2378,6 +2590,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"Command-line reference","about-heading");
     about_label(box,"./build/linrad_dvb --help\n"
         "./build/linrad_dvb --source linrad --standard DVB-S2 --sr 125000 --fec 1/2 --print-pipeline\n"
+        "./build/linrad_dvb --source b210 --standard DAB --print-pipeline\n"
         "./build/linrad_dvb --config linrad-dvb.ini --run\n"
         "./build/linrad_dvb --decoder-worker=leansdr --help\n"
         "./build/linrad_dvb --decoder-worker=dvbt --help\n"
@@ -2391,17 +2604,22 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"LeanSDR / LeanDVB: pabr@pabr.org, DVB-S/S2 demodulation (GPL-3.0-or-later). "
         "LDPC: Ahmet Inan (xdsopl), with the external decoder adaptation by pabr@pabr.org (0BSD). "
         "DVB-S2 acquisition corrections: Ondřej OK1CDJ, LeanDVB issue #41. "
-        "rbdvbt and TSscatterFix: Rob Hardenberg, PE1ITR.",NULL);
+        "rbdvbt, TSscatterFix, dab-monitor and DAB integration: Rob Hardenberg, PE1ITR.",NULL);
     about_label(box,"DVB-T2: based on the OnAir receiver by adswill and contributors, "
         "including its C++ receiver core and Rust FEC code (GPL-3.0). "
+        "DAB also reuses OnAir's generic polyphase resampler and DSP support. "
         "Integration and local optimizations are maintained in this project.",NULL);
+    about_label(box,"DAB+ radio decoding: libdabsdr 4.0.1 from AbracaDABra, "
+        "Petr Kopecký (MIT). AAC audio decoding: Fraunhofer FDK-AAC. "
+        "Audio output uses ALSA; sample-rate conversion also uses libsamplerate.",NULL);
     about_link(box,"LeanSDR / LeanDVB · pabr","https://github.com/pabr/leansdr");
     about_link(box,"LDPC · Ahmet Inan (xdsopl)","https://github.com/xdsopl/LDPC");
     about_link(box,"LDPC helper adaptation · pabr","https://github.com/pabr/xdsopl-LDPC-pabr");
     about_link(box,"Acquisition patch · Ondřej OK1CDJ (issue #41)","https://github.com/pabr/leansdr/issues/41");
-    about_link(box,"OnAir · DVB-T2 receiver","https://github.com/adswill/OnAir");
+    about_link(box,"OnAir · DVB-T2 receiver and shared DAB resampler","https://github.com/adswill/OnAir");
+    about_link(box,"AbracaDABra · Petr Kopecký · libdabsdr","https://github.com/KejPi/AbracaDABra");
     about_label(box,"Also built on Linrad, GTK / GLib, libVLC, FFmpeg, FFTW, libzvbi, "
-        "ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
+        "FDK-AAC, ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
         "Thanks also to the SoapySDR driver and device-library authors, including "
         "HackRF, RFSPACE, RTL-SDR, SDRplay and Airspy support.",NULL);
     about_label(box,"Source provenance, local changes and license texts are included under "
@@ -2712,7 +2930,7 @@ static gboolean apply_renderer(App *a) {
         g_key_file_set_string(a->config, "paths", "custom_renderer", program);
         g_key_file_set_string(a->config, "renderer", "args", args);
     }
-    if (a->renderer == RENDER_FILE) g_key_file_set_string(a->config, "renderer", "output_file", file);
+    if (a->standard != 4 && a->renderer == RENDER_FILE) g_key_file_set_string(a->config, "renderer", "output_file", file);
     gtk_label_set_text(GTK_LABEL(a->renderer_error), "");
     refresh_preview(a); return TRUE;
 }
@@ -2737,8 +2955,30 @@ static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
     if (!a->running) refresh_preview(a);
 }
 
+static void dab_settings_changed(GtkWidget *widget,gpointer data) {
+    (void)widget;App *a=data;if (a->running) return;
+    int index=gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_channel_box));
+    int profile=gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_profile_box));
+    if (index<0 || profile<0) return;
+    g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
+    g_key_file_set_string(a->config,"dab","profile",dab_profiles[profile]);
+    g_key_file_set_boolean(a->config,"dab","channel_filter",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_filter_box)));
+    g_key_file_set_boolean(a->config,"dab","mixer_enabled",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box)));
+    g_key_file_set_boolean(a->config,"dab","lo_output_enabled",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dab_lo_box)));
+    g_key_file_set_integer(a->config,"dab","if_hz",(int)(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->dab_if_box))*1e6));
+    char *input=gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->dab_input_box));
+    char *port=gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->dab_lo_port_box));
+    g_key_file_set_string(a->config,"dab","rx_input",input);g_key_file_set_string(a->config,"dab","lo_port",port);
+    g_free(input);g_free(port);
+    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,sources[a->source],"frequency",dab_channels[index].hz);
+    tuning_refresh(a);refresh_preview(a);
+}
+static void dab_step_clicked(GtkButton *button,gpointer data) {
+    App *a=data;tune_step(a,GTK_WIDGET(button)==a->dab_previous ? -1 : 1);
+}
+
 static void create_mode_renderer(App *a) {
-    a->mode_dialog = settings_dialog(a, "Mode · DVB settings", &a->controls);
+    a->mode_dialog = settings_dialog(a, "Mode · Receiver settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, G_N_ELEMENTS(standards), a->standard);
     a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
     GList *rate_cells=gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(a->sr_box));
@@ -2768,6 +3008,37 @@ static void create_mode_renderer(App *a) {
     GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
     gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
     gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,11,2,1);
+    const char *channels[DAB_CHANNEL_COUNT];
+    for (unsigned i=0;i<DAB_CHANNEL_COUNT;++i) channels[i]=dab_channels[i].name;
+    a->dab_channel_box=combo(a->controls,"DAB channel",12,channels,DAB_CHANNEL_COUNT,dab_channel(a));
+    char *profile=setting(a,"dab","profile");
+    int selected=!strcmp(profile,"aircraft") ? 2 : !strcmp(profile,"weak") ? 1 : 0;g_free(profile);
+    a->dab_profile_box=combo(a->controls,"DAB reception",13,(const char *[]){"Normal","Weak signal / DX","Aircraft scatter"},3,selected);
+    a->dab_filter_box=gtk_check_button_new_with_label("DAB channel filter (before decimation)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_filter_box),g_key_file_get_boolean(a->config,"dab","channel_filter",NULL));
+    gtk_grid_attach(GTK_GRID(a->controls),a->dab_filter_box,0,14,2,1);
+    a->dab_mixer_box=gtk_check_button_new_with_label("B210 external mixer / fixed IF");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box),g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL));
+    gtk_grid_attach(GTK_GRID(a->controls),a->dab_mixer_box,0,15,2,1);
+    a->dab_if_box=spin(a->controls,"B210 IF (MHz)",16,46,126.428,0.001);
+    gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->dab_if_box),3);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dab_if_box),g_key_file_get_double(a->config,"dab","if_hz",NULL)/1e6);
+    char *input=setting(a,"dab","rx_input");
+    int rx=!strcmp(input,"TRX1") ? 0 : !strcmp(input,"RX1") ? 1 : !strcmp(input,"TRX2") ? 2 : 3;g_free(input);
+    a->dab_input_box=combo(a->controls,"B210 receive port",17,(const char *[]){"TRX1","RX1","TRX2","RX2"},4,rx);
+    a->dab_lo_box=gtk_check_button_new_with_label("Enable conducted mixer LO output");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),g_key_file_get_boolean(a->config,"dab","lo_output_enabled",NULL));
+    gtk_widget_set_tooltip_text(a->dab_lo_box,"Connect this port to the external mixer LO input. 0 dB gain, IQ level 0.05; 2.5 MHz tone at 8.192 MS/s, as in dab-monitor.");
+    gtk_grid_attach(GTK_GRID(a->controls),a->dab_lo_box,0,18,2,1);
+    char *port=setting(a,"dab","lo_port");
+    a->dab_lo_port_box=combo(a->controls,"B210 mixer LO port",19,(const char *[]){"TRX1","TRX2"},2,!strcmp(port,"TRX2"));g_free(port);
+    GtkWidget *dab_hint=gtk_label_new("Weak/DX: adaptive FIC, PRS candidates and partial identity accumulation.\nAircraft scatter: adds temporal ranking and six 2.5 s windows per 8 s capture.\nTII candidates remain separate from confirmed transmitter observations.");
+    gtk_label_set_xalign(GTK_LABEL(dab_hint),0);gtk_grid_attach(GTK_GRID(a->controls),dab_hint,0,20,2,1);
+    GtkWidget *dab_combos[]={a->dab_channel_box,a->dab_profile_box,a->dab_input_box,a->dab_lo_port_box};
+    for (unsigned i=0;i<G_N_ELEMENTS(dab_combos);++i) g_signal_connect(dab_combos[i],"changed",G_CALLBACK(dab_settings_changed),a);
+    GtkWidget *dab_checks[]={a->dab_filter_box,a->dab_mixer_box,a->dab_lo_box};
+    for (unsigned i=0;i<G_N_ELEMENTS(dab_checks);++i) g_signal_connect(dab_checks[i],"toggled",G_CALLBACK(dab_settings_changed),a);
+    g_signal_connect(a->dab_if_box,"value-changed",G_CALLBACK(dab_settings_changed),a);
     g_signal_connect(a->ldpc_mode_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
@@ -2790,6 +3061,9 @@ static void create_mode_renderer(App *a) {
     gtk_widget_set_sensitive(a->udp_host, internal_player(a));
     gtk_widget_set_sensitive(a->udp_port, internal_player(a));
     GtkWidget *hint = gtk_label_new("Embedded player: fixed panel; video scales to fit without changing its shape.\n"
+        "During DVB reception, click Extern op GPU below Received video for NVIDIA CUDA/Vulkan playback.\n"
+        "Terug in venster or closing FFplay returns to embedded playback; reception continues.\n"
+        "GPU playback requires FFplay with CUDA and Vulkan/libplacebo support. DAB uses its own audio player.\n"
         "UDP works alongside the embedded player. In VLC, open udp://@:1234 (default port).\n"
         "Custom program: MPEG-TS on stdin; {input} becomes -.\n"
         "TSscatterFix receives a parallel copy; all outputs keep the original stream.\n"
@@ -2825,7 +3099,7 @@ static void gui(App *a) {
 #endif
     apply_receiver_theme();
     a->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(a->window), "Linrad DVB · PE1ITR");
+    gtk_window_set_title(GTK_WINDOW(a->window), "Linrad DVB - PE1ITR - For the weak-signal digital amateur television DXer");
     GdkDisplay *display = gdk_display_get_default();
     GdkMonitor *monitor = gdk_display_get_primary_monitor(display);
     if (!monitor) monitor = gdk_display_get_monitor(display, 0);
@@ -2892,6 +3166,13 @@ static void gui(App *a) {
     gtk_widget_set_name(a->frequency_display, "frequency-display");
     gtk_widget_set_tooltip_text(a->frequency_display, "Receive frequency · ← / → to tune; when using Linrad, tune in Linrad.");
     gtk_box_pack_start(GTK_BOX(top_bar), a->frequency_display, FALSE, FALSE, 8);
+    a->dab_previous=gtk_button_new_with_label("◀");a->dab_next=gtk_button_new_with_label("▶");
+    gtk_widget_set_tooltip_text(a->dab_previous,"Previous DAB channel (←)");
+    gtk_widget_set_tooltip_text(a->dab_next,"Next DAB channel (→)");
+    gtk_box_pack_start(GTK_BOX(top_bar),a->dab_previous,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(top_bar),a->dab_next,FALSE,FALSE,0);
+    g_signal_connect(a->dab_previous,"clicked",G_CALLBACK(dab_step_clicked),a);
+    g_signal_connect(a->dab_next,"clicked",G_CALLBACK(dab_step_clicked),a);
     a->gain_display = gtk_label_new("");
     gtk_widget_set_name(a->gain_display, "gain-display");
     gtk_widget_set_tooltip_text(a->gain_display, "↑ / ↓ increase / decrease gain · direct SDR input only.");
@@ -2978,6 +3259,9 @@ static void gui(App *a) {
     GtkWidget *receiver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(receiver_row, GTK_ALIGN_START);
     GtkWidget *decoder=decoder_view_create(&a->decoder_view);
+    dab_view_create(&a->dab,&a->decoder_view,GTK_WINDOW(a->window),dab_log_reception,dab_logged_tii,a);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->dab.tii_button,FALSE,FALSE,0);
+    gtk_box_reorder_child(GTK_BOX(a->iq_view.filter_controls),a->dab.tii_button,1);
     GtkWidget *service_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
     g_object_ref(a->decoder_view.service_frame);
     gtk_container_remove(GTK_CONTAINER(decoder),a->decoder_view.service_frame);
@@ -3003,7 +3287,7 @@ static void gui(App *a) {
     g_object_unref(a->decoder_view.service_frame);
     gtk_box_pack_start(GTK_BOX(receiver_row),decoder,FALSE,FALSE,0);
     GtkWidget *video_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
-    GtkWidget *video_frame = video_view_create(&a->video_view);
+    GtkWidget *video_frame = video_view_create(&a->video_view);a->video_frame=video_frame;
     char *gpu_program = setting(a, "ffplay", "gpu_program"), *gpu_device = setting(a, "ffplay", "gpu_device");
     video_view_set_gpu_player(&a->video_view, gpu_program, gpu_device);
     g_free(gpu_program); g_free(gpu_device);
@@ -3013,13 +3297,16 @@ static void gui(App *a) {
     GtkSizeGroup *panel_size = gtk_size_group_new(GTK_SIZE_GROUP_BOTH);
     gtk_size_group_add_widget(panel_size, a->decoder_view.service_frame);
     gtk_size_group_add_widget(panel_size, video_frame);
+    gtk_size_group_add_widget(panel_size, a->dab.image_frame);
     g_object_unref(panel_size);
     gtk_box_pack_start(GTK_BOX(video_column),video_frame,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(video_column),a->dab.image_frame,FALSE,FALSE,0);
     GtkWidget *meter=signal_meter_create(&a->iq_view.meter,a->config);
     gtk_box_pack_start(GTK_BOX(video_column),meter,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(receiver_row),video_column,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(receiver_row), scatter_view_create(&a->scatter_view), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(receiver_row), program_view_create(&a->programs, select_program, a), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(receiver_row),a->dab.stations_frame,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(a->lower), receiver_row, FALSE, FALSE, 0);
     create_mode_renderer(a);
     create_tci(a,usb_error ? usb_error->message : NULL);
@@ -3049,7 +3336,7 @@ static void gui(App *a) {
     g_signal_connect(a->window, "delete-event", G_CALLBACK(window_close), a);
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
     guint decoder_timer = g_timeout_add(50, decoder_tick, a);
-    monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); gtk_main();
+    monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); scatter_refresh(a); gtk_main();
     g_source_remove(decoder_timer);
     g_source_remove(a->iq_view.timer);
     usb_receiver_free(a->usb_receiver); a->usb_receiver=NULL;
@@ -3063,6 +3350,7 @@ static void gui(App *a) {
     gtk_widget_destroy(a->tci_dialog);
     gtk_widget_destroy(a->diagnostics_dialog);
     gtk_widget_destroy(a->config_dialog);
+    dab_view_destroy(&a->dab);
     gtk_widget_destroy(a->window);
 }
 
@@ -3088,8 +3376,8 @@ static void load_session(App *a) {
         *values[i] = choice(value, lists[i], counts[i], keys[i]); g_free(value);
     }
     a->sr = g_key_file_has_key(a->config, "session", "sr", NULL) ?
-        integer_setting(a, "session", "sr", 1, 100000000) : (a->standard == 3 ? 8000000 : a->standard == 2 ? 150000 : 125000);
-    if (a->standard == 3) { a->fec=0; a->gi=3; a->constellation=0; }
+        integer_setting(a, "session", "sr", 1, 100000000) : (a->standard == 4 ? 1536000 : a->standard == 3 ? 8000000 : a->standard == 2 ? 150000 : 125000);
+    if (a->standard >= 3) { a->fec=0; a->gi=3; a->constellation=0; }
     if (g_key_file_has_key(a->config, "session", "scatterfix", NULL)) {
         GError *error = NULL;
         a->scatter = g_key_file_get_boolean(a->config, "session", "scatterfix", &error);
@@ -3119,7 +3407,7 @@ int main(int argc, char **argv) {
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2 or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
-        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T or DVB-T2", "MODE"},
+        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
         {"plp", 0, 0, G_OPTION_ARG_INT, &plp, "DVB-T2 PLP ID (-1 = automatic, 0..255 = explicit)", "ID"},
         {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC supported by the standard/constellation (e.g. 3/4)", "FEC"},
@@ -3181,7 +3469,7 @@ int main(int argc, char **argv) {
         int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standard");
         if (selected != a.standard) {
             a.standard = selected; a.constellation = 0; a.fec = 0;
-            a.sr = a.standard == 3 ? 8000000 : a.standard == 2 ? 150000 : 125000;
+            a.sr = a.standard == 4 ? 1536000 : a.standard == 3 ? 8000000 : a.standard == 2 ? 150000 : 125000;
         }
     }
     if (constellation) {
@@ -3190,9 +3478,9 @@ int main(int argc, char **argv) {
     }
     g_free(constellation);
     if (a.constellation && a.standard != 1) fatal("8PSK requires DVB-S2");
-    if (a.standard == 3) {
+    if (a.standard >= 3) {
         if ((fec && strcmp(fec,"auto")) || (gi && strcmp(gi,"auto")))
-            fatal("DVB-T2 detects FEC and guard interval automatically; use auto");
+            fatal("This mode detects FEC and guard interval automatically; use auto");
         a.fec = 0; a.gi = 3;
     } else if (fec) a.fec = choice(fec, fecs, G_N_ELEMENTS(fecs), "FEC");
     if (plp != -2) {
@@ -3202,14 +3490,17 @@ int main(int argc, char **argv) {
     if (!valid_fec(&a, a.fec)) fatal("Invalid FEC for the selected standard/constellation");
     if (gi) a.gi = choice(gi, guards, 4, "guard interval");
     if (sr != -1) a.sr = sr;
-    const int *rates = a.standard == 3 ? t2_rates : a.standard == 2 ? terrestrial_rates : sat_rates;
+    const int *rates = a.standard == 4 ? dab_rates : a.standard == 3 ? t2_rates : a.standard == 2 ? terrestrial_rates : sat_rates;
     gboolean valid = FALSE;
-    for (int i = 0; i < (a.standard == 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
+    for (int i = 0; i < (a.standard >= 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !(a.standard != 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (!valid && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
     if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;
+    if (a.standard==4 && hardware_source(&a)) {
+        g_key_file_set_double(a.config,sources[a.source],"frequency",dab_channels[dab_channel(&a)].hz);
+    }
     a.headless = run;
     g_free(source); g_free(iq_file);
     const char *offset_problem=receiver_offset_problem(&a);
@@ -3228,6 +3519,7 @@ int main(int argc, char **argv) {
         } else gui(&a);
         g_source_remove(sigint); g_source_remove(sigterm);
     }
+    if (a.dab.directory) dab_view_destroy(&a.dab);
     clear_stages(&a); g_key_file_unref(a.config); g_free(a.config_path); g_free(a.directory);
     g_free(config); g_free(standard); g_free(fec); g_free(gi); g_option_context_free(context);
     return a.exit_code;

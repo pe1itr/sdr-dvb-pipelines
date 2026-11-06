@@ -962,6 +962,54 @@ class LifecycleTests(PipelineTests):
                 self.cleanup_process(p, tmp)
 
     @unittest.skipUnless(shutil.which("broadwayd"), "GTK Broadway daemon not installed")
+    def test_dab_gui_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, path = self.fixture(tmp)
+            source = Path(tmp, "fake-dab-source")
+            source.write_text(r"""#!/usr/bin/env python3
+import os,time,sys,select
+from pathlib import Path
+Path(__file__+'.pid').write_text(str(os.getpid()))
+directory=Path(sys.argv[sys.argv.index('--dab-state-dir')+1])
+written=0
+commands=b''
+while True:
+ if select.select([0],[],[],0)[0]:
+  commands+=os.read(0,4096)
+  while b'\n' in commands:
+   line,commands=commands.split(b'\n',1)
+   parts=line.split()
+   if len(parts)==3 and parts[0]==b'dab':
+    temporary=directory/'tuned.tmp'
+    temporary.write_text(f'{int(parts[1])} {int(parts[2])} {written}\n')
+    temporary.replace(directory/'tuned')
+ written+=os.write(1,bytes(65536))
+ time.sleep(.01)
+""")
+            source.chmod(0o755)
+            cfg["paths"]["sdr"] = str(source)
+            self.write_config(cfg, path)
+            display = free_port()
+            env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",
+                       XDG_RUNTIME_DIR=tmp, NO_AT_BRIDGE="1")
+            daemon = subprocess.Popen(["broadwayd", "--address", "127.0.0.1", "--port", str(free_port()),
+                                       f":{display}"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                time.sleep(0.2)
+                p = subprocess.run([ROOT / "build/dab_gui_smoke", path], env=env,
+                                   capture_output=True, timeout=15)
+                self.assertEqual(p.returncode, 0, p.stderr.decode())
+                self.assertNotIn(b"CRITICAL", p.stderr)
+            finally:
+                daemon.terminate()
+                daemon.communicate(timeout=3)
+                for pidfile in Path(tmp).glob("*.pid"):
+                    try:
+                        os.kill(int(pidfile.read_text()), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
+    @unittest.skipUnless(shutil.which("broadwayd"), "GTK Broadway daemon not installed")
     def test_gui_controls_stop_restart_and_close(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.fixture(tmp)

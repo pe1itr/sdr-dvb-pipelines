@@ -1,0 +1,12 @@
+DAB DSP and radio code: local dab-monitor, revision ec7ced2e9619eab2c55c97ca59aaea9aa2aef4f5.
+Imported 2026-11-06; maintained here as a project component.
+The source repository has no standalone LICENSE; these are the user-owned project sources.
+libdabsdr 4.0.1 binaries and headers: AbracaDABra/lib, MIT, see lib/LICENSE.
+No external reference receiver sources were imported.
+
+AbracaDABra source revision: 399306727a12a0eb3875118c42726b34397df01b
+Upstream: https://github.com/KejPi/AbracaDABra
+SHA-256 lib/linux_x86_64/libdabsdr.so.4.0.1:
+  d26bb57ae4740095262a2059e8e6bbcfe5c7d421a113915697f91df1ed15a4a6
+SHA-256 lib/linux_aarch64/libdabsdr.so.4.0.1:
+  6bec09c95890443754c1b6bc594a5050fd98fc268a413812523b37eeacb8a737

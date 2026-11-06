@@ -52,6 +52,21 @@ class SoapyInputTests(unittest.TestCase):
                         self.assertIn(b'MOCK agc 0', result.stderr)
                         self.assertIn(b'MOCK gain aggregate 41' if source == 'airspyr2' else b'MOCK gain IFGR 41', result.stderr)
 
+    def test_dab_retune_acknowledges_without_reopening_stream(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env=dict(os.environ,LD_PRELOAD=self.library,MOCK_MODEL="Airspy",MOCK_CONTINUOUS="1")
+            result=subprocess.run([ROOT/"build/sdr_to_stdout","--source","airspyr2",
+                "--sample-rate","2500000","--frequency","206352000","--gain","30",
+                "--control-stdin","--dab-state-dir",tmp],input=b"dab 3 209936000\n",
+                env=env,capture_output=True,timeout=5)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual(result.stderr.count(b"MOCK open"),1)
+            self.assertEqual(result.stderr.count(b"MOCK streaming"),1)
+            self.assertIn(b"MOCK frequency 209936000",result.stderr)
+            self.assertEqual((Path(tmp)/"tuned").read_text(),"3 209936000 0\n")
+            self.assertGreater(len(result.stdout),0)
+            self.assertEqual(len(result.stdout)%4,0)
+
     def test_wrong_model_driver_and_coerced_rate_do_not_stream(self):
         for result in (self.receiver('rsp1b', model='RSP1A'),
                        self.receiver('rsp1a', model='RSPdx'),

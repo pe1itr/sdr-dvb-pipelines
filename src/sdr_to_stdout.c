@@ -4,6 +4,8 @@
 #include <SoapySDR/Errors.h>
 #include <SoapySDR/Version.h>
 #include <uhd.h>
+#include "b210_mixer.h"
+#include "../components/dab/channels.h"
 #include "iq_output.h"
 #include "iq_convert.h"
 #include "iq_shift.h"
@@ -62,17 +64,25 @@ int main(int argc, char **argv) {
     double bandwidth = 0, receiver_offset = 0, channel_bandwidth = 0;
     const char *ip = "192.168.0.118", *bind_ip = "0.0.0.0";
     double port = 50005;
-    int control_stdin = 0;
+    int control_stdin = 0, dab_lo=0;
+    double dab_if=0;
+    const char *b210_port="", *lo_port="TRX1", *dab_state_dir="";
+    B210Mixer mixer={0};
     IQRecord capture = {0};
     TuneControl control = {.command=iq_record_command, .command_data=&capture};
     for (int i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--dab-lo-output")) {dab_lo=1;continue;}
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2 --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2 --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--b210-input TRX1|RX1|TRX2|RX2] [--dab-if Hz --dab-lo-output --dab-lo-port TRX1|TRX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
         if (!strcmp(key, "--source")) source = v;
+        else if (!strcmp(key,"--dab-state-dir")) dab_state_dir=v;
+        else if (!strcmp(key,"--dab-if")) dab_if=number(v);
+        else if (!strcmp(key,"--b210-input")) b210_port=v;
+        else if (!strcmp(key,"--dab-lo-port")) lo_port=v;
         else if (!strcmp(key, "--ip")) ip = v;
         else if (!strcmp(key, "--bind")) bind_ip = v;
         else if (!strcmp(key, "--port")) port = number(v);
@@ -87,6 +97,14 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--frequency")) freq = number(v);
         else if (!strcmp(key, "--gain")) gain = number(v);
         else { fprintf(stderr, "Unknown option: %s\n", key); return 2; }
+    }
+    size_t channel=0;
+    if ((*b210_port || dab_if || dab_lo) && strcmp(source,"b210")) {
+        fprintf(stderr,"B210 input / DAB mixer options require --source b210\n");return 2;
+    }
+    if (*b210_port && b210_input(b210_port,&channel,&antenna)) {fprintf(stderr,"Unknown B210 physical input\n");return 2;}
+    if ((dab_if || dab_lo) && (!b210_mixer_valid(freq,dab_if,b210_port,lo_port,dab_lo) || receiver_offset)) {
+        fprintf(stderr,"Invalid DAB mixer IF, RF or physical ports; LO and IF input must be separate\n");return 2;
     }
     int rsp = rx_rsp(source), airspyhf = rx_airspyhf(source), airspyr2 = rx_airspyr2(source);
     int lime = !strcmp(source, "lime");
@@ -150,7 +168,7 @@ int main(int argc, char **argv) {
     IQBandFilter *filter = iq_bandfilter_create(rate, bandwidth);
     if (!filter) { fprintf(stderr, "Cannot create IQ bandfilter\n"); return 1; }
     unsigned long overflows = 0;
-    size_t channel = 0;
+
     /* Blocks are kept large to amortize pipe and driver overhead at 10+ MS/s. */
     int16_t iq[65536 * 2]; unsigned char packed[65536 * 2];
     float float_iq[2048 * 2];
@@ -273,16 +291,22 @@ int main(int argc, char **argv) {
         }
         U(uhd_usrp_make(&usrp, args));
         U(uhd_usrp_set_clock_source(usrp, "internal", 0));
-        U(uhd_usrp_set_rx_rate(usrp, rate, 0));
-        U(uhd_usrp_get_rx_rate(usrp, 0, &actual));
-        U(uhd_usrp_set_rx_bandwidth(usrp, rate, 0));
-        U(uhd_usrp_set_rx_antenna(usrp, antenna, 0));
-        uhd_tune_request_t tune = {.target_freq=freq, .rf_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO,
+        U(uhd_usrp_set_rx_rate(usrp, rate, channel));
+        U(uhd_usrp_get_rx_rate(usrp, channel, &actual));
+        U(uhd_usrp_set_rx_bandwidth(usrp, rate, channel));
+        U(uhd_usrp_set_rx_antenna(usrp, antenna, channel));
+        uhd_tune_request_t tune = {.target_freq=dab_if ? dab_if : freq, .rf_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO,
             .dsp_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO, .args=""};
         uhd_tune_result_t tuned;
-        U(uhd_usrp_set_rx_freq(usrp, &tune, 0, &tuned));
-        U(uhd_usrp_set_rx_gain(usrp, gain, 0, ""));
-        U(uhd_usrp_get_rx_gain(usrp, 0, "", &gain));
+        U(uhd_usrp_set_rx_freq(usrp, &tune, channel, &tuned));
+        U(uhd_usrp_set_rx_gain(usrp, gain, channel, ""));
+        U(uhd_usrp_get_rx_gain(usrp, channel, "", &gain));
+        if (dab_lo && b210_mixer_open(&mixer,usrp,lo_port,freq,dab_if)) {
+            fprintf(stderr,"Cannot configure B210 mixer LO\n");goto done;
+        }
+        U(uhd_usrp_get_rx_rate(usrp,channel,&actual));
+        double tuned_rx=0;U(uhd_usrp_get_rx_freq(usrp,channel,&tuned_rx));
+        if (fabs(tuned_rx-(dab_if ? dab_if : freq))>2) {fprintf(stderr,"B210 RX frequency coerced\n");goto done;}
         U(uhd_rx_streamer_make(&rx)); U(uhd_rx_metadata_make(&md));
         uhd_stream_args_t config = {.cpu_format="sc16", .otw_format="sc16", .args="", .channel_list=&channel, .n_channels=1};
         U(uhd_usrp_get_rx_stream(usrp, &config, rx));
@@ -304,10 +328,27 @@ int main(int argc, char **argv) {
     else if (soapy) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
     else if (!fcdpp) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
+    if (dab_lo) {
+        int index=dab_channel_nearest(freq), direction=index>=2 ? -1 : 1;
+        int path[]={index,index+direction,index+2*direction,index+direction,index};
+        for (unsigned p=0;p<sizeof(path)/sizeof(path[0]) && !stopped;++p) {
+            if (b210_mixer_tune(&mixer,usrp,dab_channels[path[p]].hz,dab_if)) goto done;
+            double until=monotonic_seconds()+.25;
+            while (monotonic_seconds()<until && !stopped) {
+                size_t got=0;void *buffers[]={iq};
+                U(uhd_rx_streamer_recv(rx,buffers,65536,&md,.1,false,&got));
+                if (atomic_load(&mixer.failed)) goto done;
+            }
+        }
+        fprintf(stderr,"B210 mixer full-duplex startup conditioning complete\n");
+    }
     double last_report = monotonic_seconds();
     IQOutputStats previous = {0};
     capture.rate = actual;
+    uint64_t dab_generation=0;
+    size_t dab_settle=0;
     while (!stopped) {
+        if (dab_lo && atomic_load(&mixer.failed)) goto done;
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
@@ -319,7 +360,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[SDR] Ignoring tune outside model/input range\n");
             changed &= ~1;
         }
-        if ((changed & 1) && requested != freq) {
+        if ((changed & 1) && (requested != freq || (control.tune_generation && *dab_state_dir))) {
             if (lime) {
                 if (lime_rx_frequency(mini, requested)) goto done;
             } else if (fcdpp) {
@@ -328,13 +369,20 @@ int main(int argc, char **argv) {
                 if (afedri_frequency(net, requested)) goto done;
             } else if (dev) {
                 S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, requested, NULL));
-            } else {
+            } else if (!dab_if) {
                 uhd_tune_request_t tune = {.target_freq=requested, .rf_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO,
                     .dsp_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO, .args=""};
                 uhd_tune_result_t tuned;
-                U(uhd_usrp_set_rx_freq(usrp, &tune, 0, &tuned));
+                U(uhd_usrp_set_rx_freq(usrp, &tune, channel, &tuned));
             }
+            if (dab_lo && b210_mixer_tune(&mixer,usrp,requested,dab_if)) goto done;
             freq = requested;
+            if (*dab_state_dir && control.tune_generation) {
+                dab_generation=control.tune_generation;
+                dab_settle=(size_t)(rate*.05); /* discard tuner/driver settling IQ, keep streaming */
+                iq_bandfilter_destroy(filter);filter=iq_bandfilter_create(rate,bandwidth);
+                if (!filter) goto done;
+            }
             fprintf(stderr, "[SDR] Tuned to %.0f Hz; decoder may need to reacquire\n", freq);
         }
         if ((changed & 2) && requested_gain != gain) {
@@ -358,8 +406,8 @@ int main(int argc, char **argv) {
                 S(SoapySDRDevice_setGain(dev, SOAPY_SDR_RX, 0, requested_gain));
                 gain = SoapySDRDevice_getGain(dev, SOAPY_SDR_RX, 0);
             } else {
-                U(uhd_usrp_set_rx_gain(usrp, requested_gain, 0, ""));
-                U(uhd_usrp_get_rx_gain(usrp, 0, "", &gain));
+                U(uhd_usrp_set_rx_gain(usrp, requested_gain, channel, ""));
+                U(uhd_usrp_get_rx_gain(usrp, channel, "", &gain));
             }
             fprintf(stderr, "[SDR] RX gain %.1f %s (requested %.1f)\n", gain, airspyr2 ? "(setting)" : "dB", requested_gain);
         }
@@ -416,6 +464,22 @@ int main(int argc, char **argv) {
                 char msg[512]; uhd_rx_metadata_strerror(md, msg, sizeof(msg));
                 fprintf(stderr, "SDR receive: %s (decoder/USB may not keep up)\n", msg); goto done;
             }
+        }
+        if (dab_settle) {
+            if (got<dab_settle) {dab_settle-=got;continue;}
+            dab_settle=0;
+            /* accepted counts precisely the bytes preceding this retune in the
+             * output stream, including queued bytes. No drain/reopen is needed. */
+            IQOutputStats boundary;iq_output_stats(output,&boundary);
+            char path[4096],temporary[4096];
+            if (snprintf(path,sizeof(path),"%s/tuned",dab_state_dir)>=(int)sizeof(path) ||
+                snprintf(temporary,sizeof(temporary),"%s/tuned.tmp",dab_state_dir)>=(int)sizeof(temporary)) goto done;
+            FILE *ack=fopen(temporary,"w");
+            if (!ack) goto done;
+            int wrote=fprintf(ack,"%llu %.0f %llu\n",(unsigned long long)dab_generation,freq,(unsigned long long)boundary.accepted);
+            int closed=fclose(ack);
+            if (wrote<0 || closed || rename(temporary,path)) goto done;
+            continue;
         }
         if (float_stream) iq_cf32_to_s16(float_iq, iq, got);
         iq_record_feed(&capture, (hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq, got, (hackrf || rtlsdr) && u8 ? 2 : 0);
@@ -474,6 +538,7 @@ done:
     if (dev) SoapySDRDevice_unmake(dev);
     if (md) uhd_rx_metadata_free(&md);
     if (rx) uhd_rx_streamer_free(&rx);
+    b210_mixer_close(&mixer);
     if (usrp) uhd_usrp_free(&usrp);
     return stopped ? 0 : result;
 }

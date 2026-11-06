@@ -69,6 +69,11 @@ int SoapySDRDevice_activateStream(SoapySDRDevice *d, SoapySDRStream *s, int flag
 }
 int SoapySDRDevice_readStream(SoapySDRDevice *d, SoapySDRStream *s, void *const *buffers,
         size_t n, int *flags, long long *time, long timeout) {
+    if (getenv("MOCK_CONTINUOUS") && reads++<100) {
+        memset(buffers[0],0,n*2*(native_s16 ? sizeof(int16_t) : sizeof(float)));
+        struct timespec delay={.tv_nsec=1000000};nanosleep(&delay,NULL);
+        return n;
+    }
     if (reads++) {
         /* Give the output queue time to drain before stopping. */
         struct timespec delay={.tv_nsec=50000000}; nanosleep(&delay,NULL);

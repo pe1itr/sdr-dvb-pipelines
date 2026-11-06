@@ -1,12 +1,12 @@
 # Linrad DVB
 
-A Linux SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T and 8 MHz DVB-T2**,
+A Linux SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2 and DAB/DAB+**,
 with a GTK interface for live spectrum, waterfall, constellation, decoder status
 and television playback. Developed by **Rob Hardenberg / PE1ITR** for amateur
 DATV, weak-signal experiments and broadcast reception.
 
 This is the main development repository for **linrad_dvb**, the **DVB-T receiver
-(rbdvbt)** and **TSscatterFix**. Their source code, integration, tests and future
+(rbdvbt)** and **TSscatterFix**, with DAB reception in its own [component](components/dab/README.md). Their source code, integration, tests and future
 development are maintained together here.
 
 ![Linrad DVB receiving an 8 MHz DVB-T2 multiplex, with spectrum, constellation, service information and live video](docs/images/linrad-dvb-dvbt2.png)
@@ -39,12 +39,21 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 ## Features
 
 - Receive IQ from Linrad over UDP, a supported SDR, or a recorded IQ file.
+- DAB Band III channel selection, clickable DAB+ stations, MOT slideshow and TII logging.
 - Built-in DVB decoders, with parallel LDPC decoding for DVB-S2 and DVB-T2.
 - Embedded VLC playback, service selection, EIT programme information and teletext.
+- Switch live DVB video to external FFplay with NVIDIA CUDA decoding and Vulkan rendering.
 - TSscatterFix image recovery from incomplete transport streams.
 - IQ and MPEG-TS recording, UDP transport-stream output and headless SRT output.
 - Parallel USB, FM and FM-DATA audio monitoring, TCI and optional PCM UDP output.
 - Manual digital reception log: UTC time, RF frequency, service/provider and mode in CSV.
+
+For GPU video playback, select **Renderer → Embedded player** and click
+**Extern op GPU** below **Received video** during reception. **Terug in venster**
+or closing FFplay returns to embedded VLC while reception continues. This needs
+FFplay with CUDA and Vulkan/libplacebo support; see the
+[GPU player instructions](docs/usage.md#tijdens-ontvangst-overschakelen-naar-de-nvidia-speler).
+DAB uses its own audio player and MOT slideshow.
 
 Click **Log**, directly beside **FM-DATA**, while receiving to capture the current
 digital service. Review the service and provider names (together identifying the
@@ -55,8 +64,17 @@ Existing entries are preserved, and each saved entry is flushed and closed.
 Frequency includes converter LO and digital receiver offset. With Linrad input,
 check the manually configured frequency; it can be corrected in the log dialog.
 IQ replay is marked `source=file`, with the current logging time.
-The CSV also reserves a `tii` field for DAB transmitter identifiers. It is empty
-for DVB; live DAB/TII logging requires the future DAB receiver integration.
+The CSV `tii` field holds DAB transmitter identifiers and stays empty for DVB.
+In DAB mode the main Log button captures the ensemble. Open **TII** in
+the spectrum button row and use the **Log** button beside a confirmed code to capture that
+transmitter, its ensemble, RF frequency and observation time. Candidates and
+ambiguous codes remain visible but cannot be logged as confirmed detections.
+The TII button turns green when the latest capture contains codes. The popup
+aligns code, confidence, hits, detection status and log history in columns.
+**✓ Logged** matches the ensemble name and TII against the saved reception log;
+**New** identifies combinations not yet saved. Cancelling the editor does not
+mark a transmitter as logged. **Country** in Service info uses the received
+ensemble ECC and EId country bits; its tooltip shows both identifiers.
 
 Open **Log → RX log** in the top menu to view and sort saved receptions, including
 while the receiver is stopped. Double-click a row or choose **Edit selected** to
@@ -92,6 +110,46 @@ DVB-T2 currently supports **8 MHz broadcast channels**, starting at 10 Msps IQ
 input. MISO, inter-frame interleaving and type-2/sub-sliced PLPs are not supported.
 See the [DVB-T2 component](components/dvbt2/README.md) for the supported scope.
 
+## DAB reception
+
+Select **Mode → DAB**, then a Band III channel. The display shows, for example,
+`12C · 227.360000 MHz`; **← / →** and the on-screen arrow buttons move one
+channel at a time without restarting the SDR or worker. Sample rates follow the
+selected hardware: **4096000 samples/s for B210** is the default when a lower
+rate was configured; **2048000 for RTL-SDR** is supported. Wider rates such as
+**8, 10 or 20 MS/s**, including non-integer multiples of 2.048 MS/s, are accepted
+within the SDR's limits. The full sampled band remains visible in the spectrum;
+only the decoder input is reduced to 2.048 MS/s. The connected device must
+accept the requested rate; a coerced rate is reported instead of silently used.
+Direct reception tunes the channel RF frequency. IQ replay and Linrad input
+must already contain the selected channel; their channel labels do not retune
+an external source.
+
+The constellation and Service info panels keep their existing positions.
+Service info shows the ensemble, station, Sync/FIC/Audio/Ensemble locks,
+SNR, CP correlation, CFO, IQ levels, MER and FIC/audio counters. FIC counters
+refer to the most recent DX capture. **TII** occupies the button row;
+TSscatterFix, EIT and Teletext are hidden in DAB mode. The first discovered
+DAB+ station starts automatically; click another station to switch.
+Transmitted MOT slides replace the video panel and dynamic text appears
+beneath the image. **M** mutes audio. No substitute station image is fabricated
+when no slideshow is broadcast. DAB uses its own audio output; the DVB MPEG-TS
+renderer and TSscatterFix do not apply.
+
+**Normal**, **Weak signal / DX** and **Aircraft scatter** profiles are available.
+The latter two reuse dab-monitor's PRS fallback and partial FIC accumulation;
+aircraft scatter also enables temporal ranking and subscans. TII decoding runs
+on eight-second captures, separately from continuous station audio. See the
+[DAB component](components/dab/README.md) for processing details and limitations.
+
+For the B210 Kintex-7 external mixer, Mode also offers **fixed IF**, receive-port
+selection and a separate **conducted LO output** switch/port. Both mixer and LO
+output default to off. With 53 MHz IF and channel 12D, the requested LO is
+176.072 MHz. The LO port connects to the mixer LO input; receive and LO cannot
+use the same physical connector. The measured dab-monitor clock/tone settings
+and startup conditioning are preserved. Hardware validation of this integration
+is still required; the software tests use IQ recordings and UHD mocks.
+
 ## Build and run
 
 The complete application builds on Linux. You need:
@@ -100,6 +158,9 @@ The complete application builds on Linux. You need:
 - Development libraries for GTK 3, GLib, json-c, single-precision FFTW3,
   SoapySDR, UHD, ALSA, libsamplerate, libVLC 3, libzvbi and FFmpeg
   (`libavcodec`, `libavformat`, `libavutil`, `libswscale`).
+- For DAB+ audio and slideshow: FDK-AAC development files (`pkg-config fdk-aac`).
+  The MIT libdabsdr 4.0.1 binaries for Linux x86_64/aarch64 are bundled; without
+  these audio dependencies only independent FIC/TII decoding is built.
 - VLC codec plugins for playback and the drivers/firmware for your SDR.
   Native LimeSDR Mini support additionally requires LimeSuite at build time.
 

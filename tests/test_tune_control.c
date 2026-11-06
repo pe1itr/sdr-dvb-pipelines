@@ -40,6 +40,15 @@ int main(void) {
     send_text(fds[1], "bandwidth 0\n");
     assert(tune_control_read(&control, fds[0], 500, 30000000, &frequency, -20, 10, 10, &gain, 111111, &bandwidth) == 4);
     assert(bandwidth == 0);
+    send_text(fds[1], "dab 1 28000100\ndab 2 28000200\n");
+    assert(tune_control_read(&control,fds[0],500,30000000,&frequency,-20,10,10,&gain,111111,&bandwidth)==1);
+    assert(control.tune_generation==2 && frequency==28000200);
+    send_text(fds[1], "dab 0 28000300\ndab -1 28000300\ndab 3 99999999\ndab bad 28000300\n");
+    assert(!tune_control_read(&control,fds[0],500,30000000,&frequency,-20,10,10,&gain,111111,&bandwidth));
+    assert(control.tune_generation==2 && frequency==28000200);
+    send_text(fds[1], "28000000\n");
+    assert(tune_control_read(&control,fds[0],500,30000000,&frequency,-20,10,10,&gain,111111,&bandwidth)==1);
+    assert(control.tune_generation==0);
     close(fds[1]);
     assert(!tune_control_read(&control, fds[0], 500, 30000000, &frequency, -20, 10, 10, &gain, 111111, &bandwidth));
     close(fds[0]);

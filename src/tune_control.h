@@ -1,6 +1,7 @@
 #ifndef TUNE_CONTROL_H
 #define TUNE_CONTROL_H
 #include <errno.h>
+#include <stdint.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,6 +9,7 @@
 
 typedef struct {
     char line[256]; unsigned used; int discard;
+    uint64_t tune_generation; /* DAB retune acknowledgement, zero for ordinary tuning. */
     void (*command)(void *data, const char *line);
     void *command_data;
 } TuneControl;
@@ -33,6 +35,13 @@ static inline int tune_control_read(TuneControl *c, int fd, double low, double h
             int is_gain = !strncmp(c->line, "gain ", 5);
             int is_filter = !strncmp(c->line, "bandwidth ", 10);
             char *number = c->line + (is_filter ? 10 : is_gain ? 5 : 0);
+            uint64_t generation=0;
+            if (!strncmp(c->line,"dab ",4)) {
+                char *after;errno=0;
+                generation=strtoull(c->line+4,&after,10);
+                if (c->line[4]<'0' || c->line[4]>'9' || !generation || errno || after==c->line+4 || *after!=' ') c->discard=1;
+                else number=after+1;
+            }
             double value = strtod(number, &end);
             if (!c->discard && !errno && end != number && !*end && isfinite(value)) {
                 if (is_filter) {
@@ -45,7 +54,7 @@ static inline int tune_control_read(TuneControl *c, int fd, double low, double h
                         *gain = value; changed |= 2;
                     }
                 } else if (value >= low && value <= high) {
-                    *frequency = value; changed |= 1;
+                    *frequency = value; c->tune_generation=generation; changed |= 1;
                 }
             }
             c->used = 0; c->discard = 0;
