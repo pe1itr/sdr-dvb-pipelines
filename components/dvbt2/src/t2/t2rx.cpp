@@ -3,7 +3,8 @@
 namespace dect2 {
 
 std::string t2rxProfile() {
-    const double* v = StageClock::g();
+    double v[9];
+    for (int i = 0; i < 9; ++i) v[i] = StageClock::g()[i].load(std::memory_order_relaxed) * 1e-9;
     char b[300];
     snprintf(b, sizeof b, "receiver stages (s): resampler %.2f, P1 search %.2f, guard check %.2f, symbols %.2f (including FFT %.2f and data stage %.2f; CP/timing %.2f, display %.2f, P2 stage %.2f)", v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
     return b;
@@ -12,24 +13,80 @@ std::string t2rxProfile() {
 void T2Receiver::Impl::stageLoop() {
     setThreadPriority(ThreadPriority::Realtime);
     for (;;) {
-        std::pair<uint64_t, std::vector<cf32>> item;
+        StageItem item;
         {
             std::unique_lock<std::mutex> lk(stage.mu);
             stage.cvIn.wait(lk, [&] { return stage.stop || !stage.in.empty(); });
             if (stage.stop) return;
             item = std::move(stage.in.front());
             stage.in.pop_front();
+            stage.busy = true;
         }
-        stage.cvSpace.notify_all();
-        std::vector<cf32> res;
         {
             std::lock_guard<std::mutex> rl(stage.rsMu);
-            StageClock sc(0);
-            if (item.second.empty()) resampler.reset();   // a gap marker: the filter history from before the gap is of no use
-            else resampler.process(item.second.data(), item.second.size(), res);
+            bool current;
+            { std::lock_guard<std::mutex> lk(stage.mu); current = item.gen == stage.gen && !stage.stop; }
+            // A reset can overtake a popped chunk before it obtains rsMu.
+            // Such a chunk must not restore pre-reset filter history.
+            if (current) {
+                StageClock sc(0);
+                if (item.gap) resampler.reset();
+                else {
+                    std::vector<cf32> res;
+                    resampler.process(item.samples.data(), item.samples.size(), res);
+                    item.samples = std::move(res);
+                }
+            }
         }
-        std::lock_guard<std::mutex> lk(stage.mu);
-        if (item.first == stage.gen) stage.out.emplace_back(item.first, std::move(res));
+        {
+            std::lock_guard<std::mutex> lk(stage.mu);
+            if (item.gen == stage.gen && !stage.stop) stage.out.push_back(std::move(item));
+            stage.busy = false;
+        }
+        stage.cvSpace.notify_all();
+    }
+}
+
+void T2Receiver::Impl::stageDrain() {
+    for (;;) {
+        StageItem item;
+        {
+            std::lock_guard<std::mutex> lk(stage.mu);
+            if (stage.out.empty()) break;
+            item = std::move(stage.out.front());
+            stage.out.pop_front();
+        }
+        stage.cvSpace.notify_all();
+        if (item.gap) gapReset(item.skipped);
+        else if (!item.samples.empty()) {
+            { StageClock sc(0); append(item.samples.data(), item.samples.size()); }
+            run();
+        }
+    }
+}
+
+void T2Receiver::Impl::stageEnqueue(StageItem item) {
+    for (;;) {
+        std::unique_lock<std::mutex> lk(stage.mu);
+        if (stage.stop) return;
+        // Bound the entire pipeline, including work in flight and completed
+        // output. The caller is also the output consumer: drain before waiting.
+        if (stage.in.size() + stage.out.size() + stage.busy < kStageMaxPending) {
+            item.gen = stage.gen;
+            stage.in.push_back(std::move(item));
+            lk.unlock();
+            stage.cvIn.notify_one();
+            return;
+        }
+        if (!stage.out.empty()) {
+            lk.unlock();
+            stageDrain();
+        } else {
+            stage.cvSpace.wait(lk, [&] {
+                return stage.stop || !stage.out.empty() ||
+                    stage.in.size() + stage.busy < kStageMaxPending;
+            });
+        }
     }
 }
 
@@ -255,30 +312,10 @@ void T2Receiver::reset() {
 void T2Receiver::feed(const cf32* x, size_t n) {
     Impl& I = *p_;
     if (!I.rateOk || I.fn <= 0) return;
+    if (!n) return;
     if (I.pipelined && I.decimate) {
-        {
-            std::unique_lock<std::mutex> lk(I.stage.mu);
-            I.stage.cvSpace.wait(lk, [&] { return I.stage.in.size() < Impl::kStageMaxIn || I.stage.stop; });
-            I.stage.in.emplace_back(I.stage.gen, std::vector<cf32>(x, x + n));
-        }
-        I.stage.cvIn.notify_one();
-        for (;;) {   // process what the stage has finished, in order
-            std::vector<cf32> res;
-            {
-                std::lock_guard<std::mutex> lk(I.stage.mu);
-                if (I.stage.out.empty()) break;
-                res = std::move(I.stage.out.front().second);
-                I.stage.out.pop_front();
-            }
-            if (res.empty()) {   // a gap marker
-                size_t skipped = 0;
-                { std::lock_guard<std::mutex> lk(I.stage.mu); if (!I.stage.gaps.empty()) { skipped = I.stage.gaps.front(); I.stage.gaps.pop_front(); } }
-                I.gapReset(skipped);
-                continue;
-            }
-            { StageClock sc(0); I.append(res.data(), res.size()); }
-            I.run();
-        }
+        I.stageEnqueue({0, std::vector<cf32>(x, x + n), false, 0});
+        I.stageDrain();
         return;
     }
     if (I.decimate) { StageClock sc(0); I.rsOut.clear(); I.resampler.process(x, n, I.rsOut); I.append(I.rsOut.data(), I.rsOut.size()); }
@@ -289,14 +326,8 @@ void T2Receiver::feed(const cf32* x, size_t n) {
 void T2Receiver::markGap(size_t skippedSamples) {
     Impl& I = *p_;
     if (!I.rateOk || I.fn <= 0) return;
-    if (I.pipelined && I.decimate) {   // goes through the resampler thread so that it lands between the right two chunks
-        {
-            std::unique_lock<std::mutex> lk(I.stage.mu);
-            I.stage.cvSpace.wait(lk, [&] { return I.stage.in.size() < Impl::kStageMaxIn || I.stage.stop; });
-            I.stage.in.emplace_back(I.stage.gen, std::vector<cf32>());
-            I.stage.gaps.push_back(skippedSamples);
-        }
-        I.stage.cvIn.notify_one();
+    if (I.pipelined && I.decimate) {   // preserve the gap's position among the sample chunks
+        I.stageEnqueue({0, {}, true, skippedSamples});
         return;
     }
     if (I.decimate) { std::lock_guard<std::mutex> rl(I.stage.rsMu); I.resampler.reset(); }
@@ -310,8 +341,11 @@ void T2Receiver::setPipelined(bool on) {
     I.pipelined = on;
 }
 
-int T2Receiver::pending() const { return p_->plpDec.pending(); }
-void T2Receiver::poll() { p_->pollPlp(); }
+int T2Receiver::pending() const {
+    std::lock_guard<std::mutex> lk(p_->stage.mu);
+    return p_->plpDec.pending() + (int)(p_->stage.in.size() + p_->stage.out.size()) + p_->stage.busy;
+}
+void T2Receiver::poll() { p_->stageDrain(); p_->pollPlp(); }
 
 void T2Receiver::selectPlp(int id) { p_->plpSelect = id; }
 void T2Receiver::setComputeMode(int m) { p_->plpDec.setMode(m); }

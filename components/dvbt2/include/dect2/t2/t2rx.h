@@ -119,12 +119,14 @@ public:
     // `skippedSamples` input samples were thrown away between the last feed() and the next one (the receiver could not keep up): drop the
     // frame in flight and carry the frame timeline across the gap, so the next P1 is found where it is expected.
     void markGap(size_t skippedSamples);
-    // Host EOF drain: includes queued/running FEC work; telemetry collects results.
+    // Host EOF drain: includes queued/running resampling and FEC work.
+    // Call poll() until pending() is zero, then collect final telemetry.
     int pending() const;
-    // Collect completed FEC/TS without copying display arrays on every IQ block.
+    // Process completed resampling and FEC/TS without copying display arrays.
     void poll();
     // For live radios: the resampler runs on its own thread, a little ahead of the rest of the receiver, and feed() returns without waiting
-    // for the samples to be processed (they are, in order, by a later call). Off (the default) feed() is synchronous: file sources and
+    // for all samples to be processed (later feed()/poll() calls drain them in order).
+    // The queue is bounded and feed() applies backpressure when full. Off (the default) feed() is synchronous: file sources and
     // tests see everything processed when it returns.
     void setPipelined(bool on);
     bool telemetry(RxTelemetry& out, uint64_t lastSeq);

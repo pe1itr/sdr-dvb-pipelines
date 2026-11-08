@@ -119,11 +119,20 @@ AVX2/FMA blijven runtime geselecteerd; er is geen globale AVX2-eis en geen
 `input_dropped` van de decoder: een lege SDR-uitvoerwachtrij sluit verlies in
 de interne decoderwachtrij niet uit.
 
-Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd: bij een B210-test
-bleven zowel hardware-overflows als interne IQ-verliezen optreden na de
-`-O3`-wijziging. De geslaagde vertraagde IQ-replay en FEC/L1-tests bewijzen
-decodeercorrectheid, geen realtime doorvoer. Vergelijk voor verder onderzoek
-de live CPU-profielen op Linux en Windows bij dezelfde ontvangstinstellingen.
+De DVB-T2-worker laat resampling nu op een eigen thread lopen, tegelijk met
+OFDM-demodulatie. De extra wachtrij is begrensd tot 32 blokken (circa 210 ms
+bij 10 MS/s); samplegaten blijven op hun plek en bij bestandseinde worden
+ook de laatste resamplerblokken verwerkt. De opstartregel meldt
+`DVB-T2 frontend: pipelined`. Voor een vergelijking met de oorspronkelijke
+verwerking kan in dezelfde opdrachtprompt `set LINRAD_DVBT2_FRONTEND=sync`
+worden ingesteld; `set LINRAD_DVBT2_FRONTEND=` herstelt de standaard.
+
+Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
+profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
+verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor
+demodulatie te maken, maar het effect op live Windows-ontvangst moet nog
+worden gecontroleerd. Vertraagde IQ-replay en FEC/L1-tests controleren de
+decodeeruitkomst, niet de realtime doorvoer.
 
 Het pakket bevat ook de librsvg-pixbuf-loader voor de ingebouwde SVG-iconen
 van GTK's Adwaita-thema. Een melding `Could not load a pixbuf` met een pad

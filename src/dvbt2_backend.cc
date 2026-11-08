@@ -83,8 +83,13 @@ int dvbt2_backend_main(int argc, char** argv) {
     const int monitor = monitorSocket();
     std::thread decoder([&] {
         T2Receiver rx; rx.configure(rate, 8); rx.selectPlp((int)plp); rx.setComputeMode(0);
-        // Synchronous front end on this thread; the stdin thread always drains.
-        // The core's FEC thread has a separate bounded queue.
+        // Resampling can overlap demodulation, instead of both occupying the
+        // one thread that drains the input queue. Keep a synchronous fallback
+        // for comparisons with recordings and platform regressions.
+        const char* frontend = getenv("LINRAD_DVBT2_FRONTEND");
+        const bool pipelined = !frontend || strcmp(frontend, "sync") != 0;
+        rx.setPipelined(pipelined);
+        fprintf(stderr, "DVB-T2 frontend: %s\n", pipelined ? "pipelined" : "synchronous");
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;
@@ -108,6 +113,7 @@ int dvbt2_backend_main(int argc, char** argv) {
         std::string previousUnsupported;
         std::string previousPlps;
         auto report = [&](bool final) {
+            rx.poll(); // drain completed resampling, then FEC/TS
             rx.telemetry(t, 0); // also collects FEC results and emits TS
             DecoderStatus s{};
             s.magic = DECODER_MONITOR_MAGIC; s.type = DECODER_STATUS;
@@ -192,12 +198,12 @@ int dvbt2_backend_main(int argc, char** argv) {
             }
             if (Clock::now() - lastStatus >= std::chrono::milliseconds(200)) report(false);
         }
-        // EOF only: drain asynchronous FEC, without inventing more IQ samples.
+        // EOF only: drain resampling and FEC, without inventing more IQ samples.
         const auto deadline = Clock::now() + std::chrono::seconds(10);
         while (rx.pending() && Clock::now() < deadline) {
             report(false); std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        if (rx.pending()) { fprintf(stderr, "DVB-T2: FEC drain timed out\n"); failed = true; }
+        if (rx.pending()) { fprintf(stderr, "DVB-T2: receiver drain timed out\n"); failed = true; }
         report(true);
     });
     uint64_t received = 0;

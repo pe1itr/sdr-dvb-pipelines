@@ -46,8 +46,8 @@ struct StageClock {
     int which;
     prof::Scope ps;
     explicit StageClock(int w) : t0(std::chrono::steady_clock::now()), which(w), ps(stage(w)) {}
-    ~StageClock() { g()[which] += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
-    static double* g() { static double v[9] = {}; return v; }
+    ~StageClock() { g()[which].fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(), std::memory_order_relaxed); }
+    static std::atomic<uint64_t>* g() { static std::atomic<uint64_t> v[9] = {}; return v; }
     static prof::Stage& stage(int w) {
         static prof::Stage s[9] = {prof::Stage("t2.resample"), prof::Stage("t2.p1"), prof::Stage("t2.guard"), prof::Stage("t2.symbol"), prof::Stage("t2.fft"),
                                    prof::Stage("t2.chanest+eq"), prof::Stage("t2.cp-track"), prof::Stage("t2.display"), prof::Stage("t2.p2+l1")};
@@ -108,20 +108,27 @@ struct T2Receiver::Impl {
     void steerSro(double corr, int64_t from = -1);
 
     // ---- optional resampler stage on its own thread (live radios): input chunks go in, resampled chunks come back in the same order
+    struct StageItem {
+        uint64_t gen = 0;
+        std::vector<cf32> samples;
+        bool gap = false;
+        size_t skipped = 0;
+    };
     struct Stage {
         std::thread th;
         std::mutex mu;      // the queues
         std::mutex rsMu;    // the resampler: held by the worker while it resamples, and by whoever reconfigures or resets it
         std::condition_variable cvIn, cvSpace;
-        std::deque<std::pair<uint64_t, std::vector<cf32>>> in, out;
+        std::deque<StageItem> in, out;
         uint64_t gen = 0;   // bumped by a reset: chunks of an earlier generation are dropped
-        std::deque<size_t> gaps;   // sizes of the gaps whose (empty) marker chunks are queued, in the same order
-        bool stop = false;
+        bool stop = false, busy = false;
     } stage;
-    static constexpr size_t kStageMaxIn = 32;
+    static constexpr size_t kStageMaxPending = 32;
     bool pipelined = false;
 
     void stageLoop();
+    void stageDrain();
+    void stageEnqueue(StageItem item);
     void gapReset(size_t skippedIn);   // `skippedIn` input samples were thrown away: forget the frames in flight and look for the next P1 where the frame cadence puts it
     void stageStart() {
         { std::lock_guard<std::mutex> lk(stage.mu); stage.stop = false; }
@@ -129,14 +136,14 @@ struct T2Receiver::Impl {
     }
     void stageStop() {
         if (!stage.th.joinable()) return;
-        { std::lock_guard<std::mutex> lk(stage.mu); stage.stop = true; stage.gen++; stage.in.clear(); stage.out.clear(); stage.gaps.clear(); }
+        { std::lock_guard<std::mutex> lk(stage.mu); stage.stop = true; stage.gen++; stage.in.clear(); stage.out.clear(); }
         stage.cvIn.notify_all();
         stage.cvSpace.notify_all();
         stage.th.join();
     }
     void stageFlush() {   // forget everything that is queued or being resampled
         std::lock_guard<std::mutex> lk(stage.mu);
-        stage.gen++; stage.in.clear(); stage.out.clear(); stage.gaps.clear();
+        stage.gen++; stage.in.clear(); stage.out.clear();
         stage.cvSpace.notify_all();
     }
     ~Impl() { stageStop(); }

@@ -43,6 +43,10 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_dvbt2_pipeline(self):
+        p = run("test_dvbt2_pipeline", timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
     def test_default_config_created_once_and_preserved(self):
         personal_b210 = (PACKAGE / "uhd-images/kintex7").exists()
         with tempfile.TemporaryDirectory(prefix="Windows config é ", dir=ROOT / "build") as tmp:
