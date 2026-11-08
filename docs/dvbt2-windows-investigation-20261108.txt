@@ -237,3 +237,73 @@ delivery reports 0.387907 s wall versus 0.037848 s CPU, with identical output.
 An idle receiver HTTP check verifies fresh buffer_valid=true, buffer_percent=0.
 Artifacts: build/t2-bench/wall-profile-*.json/.log. This validates diagnostic
 behavior only; native Windows live diagnosis is still needed.
+
+Follow-up: clock-correction bottleneck and x86 implementation (2026-11-09)
+----------------------------------------------------------------------
+At actual UHD RX rate 9,142,857 samples/s (8 MHz channel), gain 53 dB,
+DECT2_THREADS=4, the saved native Windows 68.25 s interval produced 950,208
+TS packets and dropped 15,269,888 input samples (2.447% of nominal input).
+No FEC-frame or SDR output-queue drops were added; hardware overflow messages
+also remained present. Artifacts:
+build/t2-bench/windows-native-rate-live-profile-20261109.json
+build/t2-bench/windows-native-rate-frontend-analysis-20261109.json
+
+The serial input/OFDM path accounted for 64.406 CPU seconds and 66.727
+exclusive wall seconds. t2.resample consumed 26.5 CPU seconds despite the
+initial rational resampler being bypassed at the native channel rate: buffer
+append/DC work and the sample-clock corrector remain. FFT used 10.219 s,
+eqloop 8.563 s and channel estimation/equalization 7.766 s. TS delivery was
+only 0.969 CPU / 0.923 wall seconds. This identifies frontend CPU headroom as
+a concrete target; it does not prove that every sample loss has one cause.
+Background LDPC/pool time overlaps the serial frontend and must not be added
+to its elapsed time. The Linux host is a different, higher-core-count CPU.
+
+Clock-specific comparison of pinned open-source implementations:
+
+1. OnAir revision 25034214fa91adcdfd7ec843c51f9d79285472d8:
+   core/src/dsp/clock_correct.cpp was byte-identical to our pre-change file.
+   It uses a 24-tap, 512-phase Kaiser-windowed sinc bank, nearest phase, an
+   explicit two-output ARM NEON kernel and a generic eight-lane accumulation
+   loop. There is no explicit x86 AVX kernel here. Generic code may still be
+   compiler-vectorized; this is not a claim that it runs entirely scalar.
+   https://github.com/adswill/OnAir/blob/25034214fa91adcdfd7ec843c51f9d79285472d8/core/src/dsp/clock_correct.cpp
+
+2. Oleg-Malyutin/sdr_receiver_dvb_t2 revision
+   332e9704c29d16940a7322b9f49a11a6f5c04437:
+   src/DVB_T2/dvbt2_demodulator.h selects interpolator_farrow_4pt_3rd, a
+   four-point third-order Hermite/Farrow interpolator. upsample equals
+   DECIMATION_STEP (2). The interpolated stream then passes through a
+   64-tap FIR decimator with explicit AVX vectors in DSP/filter_decimator.h.
+   This is a different filter chain, not a drop-in four-tap replacement for
+   our 24-tap clock filter. Comparing tap counts alone omits the decimator;
+   replacing the chain would require frequency-response and weak-signal
+   validation. No native performance comparison of those applications on
+   the user's Windows PC has been performed, and no Oleg code was copied.
+   https://github.com/Oleg-Malyutin/sdr_receiver_dvb_t2/blob/332e9704c29d16940a7322b9f49a11a6f5c04437/src/DVB_T2/dvbt2_demodulator.h
+   https://github.com/Oleg-Malyutin/sdr_receiver_dvb_t2/blob/332e9704c29d16940a7322b9f49a11a6f5c04437/src/DSP/interpolator_farrow.hh
+   https://github.com/Oleg-Malyutin/sdr_receiver_dvb_t2/blob/332e9704c29d16940a7322b9f49a11a6f5c04437/src/DSP/filter_decimator.h
+
+Local change: runtime-dispatched x86 AVX2 clock kernel, two output samples per
+iteration. It retains the original coefficients, phases, positions and exact
+eight-lane reduction order. FMA contraction is deliberately disabled in the
+kernel. Baseline/ARM paths and clock-loop gains remain unchanged. The existing
+AVX2/FMA feature gate is reused; startup prints the selected backend. Setting
+DECT2_CLOCK_GENERIC=1 before process startup restores the generic x86 path.
+
+Native Linux streaming checks cover 0, +/-3.7, +/-100 and +/-500 ppm, varied
+chunk sizes, empty input and history resets. Generic and AVX2 paths produce
+1,834,765 samples with identical checksum 2e5c26d1d11d65f3, also matching the
+pre-change executable. Three alternating short component measurements over
+4,194,304 samples each gave median 0.155083 s generic versus 0.037619 s AVX2
+(4.12x) on Ryzen 7 5800H. This is NOT a whole-receiver speedup or a native
+Windows measurement. Artifact: clock-avx-microbenchmark-20261109.json in
+build/t2-bench/. Native Windows live benefit remains to be measured with
+the same sample rate, gain, workers and player settings.
+
+Windows-under-Wine clock equivalence, sample-gap recovery and pipeline tests
+all pass, with the AVX2 backend confirmed in replay logs. Four quarter-speed
+recording replays (Linux/Windows, synchronous/pipelined) again each produce
+46,257 TS packets, BCH 1,801/212, zero input/FEC drops and the pre-change TS
+SHA-256 5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e.
+Artifacts: build/t2-bench/clock-avx-correctness-*.json/.log and
+clock-avx-windows-tests.log. These verify decoder output, not live capacity.

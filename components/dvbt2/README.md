@@ -71,6 +71,17 @@ before LDPC. `test_dvbt2_gap_clock` reproduces this with a zero-clock-error
 synthetic signal and an absent PLP (no LDPC work). This fixes recovery after
 loss; it does not prevent the original input queue overflow.
 
+On x86 with AVX2/FMA support, clock correction uses a runtime-selected AVX2
+kernel for two output samples at a time. The 24 taps, 512 phases, sample
+positions and generic floating-point accumulation order are preserved; the
+kernel deliberately uses separate multiplication and addition. Other x86
+processors retain the baseline implementation, and ARM retains its NEON path.
+Startup logs `DVB-T2 clock correction: avx2` when selected. For an x86 A/B
+comparison, set `DECT2_CLOCK_GENERIC=1` before starting the process to select
+the original path. The streaming regression compares exact output checksums
+across clock changes, small input blocks and history resets on Linux and
+Windows. This optimization does not change the clock recovery loop itself.
+
 Partial reads are retained across sample boundaries; truncated samples and
 nonfinite float samples fail the worker. EOF drains submitted FEC work, with a
 10-second timeout, and flushes TS without fabricating additional IQ. Incomplete

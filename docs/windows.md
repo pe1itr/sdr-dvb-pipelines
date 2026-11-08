@@ -163,6 +163,20 @@ ook in het statusendpoint. Acceptatie van de API-aanroep bewijst niet dat het
 IQ-verlies is opgelost; vergelijk daarvoor twee verse metingen bij dezelfde
 ontvangstinstellingen en spelerinstelling. Start via `start-dvbt2-profile.cmd`.
 
+De klokcorrectie kiest op geschikte x86-processors automatisch een AVX2-pad.
+Het opstartlog meldt `DVB-T2 clock correction: avx2`. De filtercoëfficiënten,
+sampleposities en klokregeling blijven gelijk. Voor een vergelijking met het
+oude rekenpad start je vanuit dezelfde opdrachtprompt:
+
+```bat
+set DECT2_CLOCK_GENERIC=1
+start-dvbt2-profile.cmd
+```
+
+Met `set DECT2_CLOCK_GENERIC=` en opnieuw starten wordt AVX2 weer automatisch
+gekozen. Dit versnelt één onderdeel; een live meting moet uitwijzen hoeveel
+ruimte dit op de Windows-ontvanger oplevert en of het IQ-verlies afneemt.
+
 Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
 profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
 verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor

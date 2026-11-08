@@ -43,6 +43,16 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_dvbt2_clock_correct(self):
+        checksums = []
+        for generic in ("1", "0"):
+            with patch.dict(ENV, {"DECT2_CLOCK_GENERIC": generic}):
+                p = run("test_dvbt2_clock_correct")
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+            line = next(line for line in p.stdout.splitlines() if line.startswith(b"clock hash="))
+            checksums.append(line)
+        self.assertEqual(checksums[0], checksums[1])
+
     def test_dvbt2_stage_profile(self):
         p = run("test_dvbt2_stage_prof")
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace") + p.stdout.decode(errors="replace"))

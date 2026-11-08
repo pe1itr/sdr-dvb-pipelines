@@ -34,10 +34,11 @@ $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.o: $(DVBT2_DIR)/src/t2/t2ldpc.cp
 -include $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.d
 $(BUILD_DIR)/test_dvbt2_ldpc_generic: tests/dvbt2_ldpc_equivalence.cpp $(filter-out $(BUILD_DIR)/components/dvbt2/t2/t2ldpc.o,$(DVBT2_OBJECTS)) $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.o $(DVBT2_RUST)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
-test-dvbt2: $(BUILD_DIR)/test_dvbt2_stage_prof $(BUILD_DIR)/test_dvbt2_ldpc $(BUILD_DIR)/test_dvbt2_ldpc_generic $(BUILD_DIR)/test_dvbt2_pipeline $(BUILD_DIR)/test_dvbt2_gap_clock
+test-dvbt2: $(BUILD_DIR)/test_dvbt2_clock_correct $(BUILD_DIR)/test_dvbt2_stage_prof $(BUILD_DIR)/test_dvbt2_ldpc $(BUILD_DIR)/test_dvbt2_ldpc_generic $(BUILD_DIR)/test_dvbt2_pipeline $(BUILD_DIR)/test_dvbt2_gap_clock
 test-dvbt2: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/dvbt2_fixture $(BUILD_DIR)/test_dvbt2_fec $(BUILD_DIR)/test_dvbt2_l1
 	./$(BUILD_DIR)/test_dvbt2_ldpc
 	./$(BUILD_DIR)/test_dvbt2_ldpc_generic
+	python3 tests/test_dvbt2_clock_correct.py
 	./$(BUILD_DIR)/test_dvbt2_stage_prof
 	./$(BUILD_DIR)/test_dvbt2_pipeline
 	./$(BUILD_DIR)/test_dvbt2_gap_clock

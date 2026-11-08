@@ -12,6 +12,7 @@ class ClockCorrector {
 public:
     static constexpr int kTaps = 24, kPhases = 512;
     ClockCorrector();
+    static const char* backendName(); // selected at runtime; for diagnostic logs
     void setStep(double s) { step_ = s; }
     void setPpm(double ppm) { step_ = 1.0 + ppm * 1e-6; }   // the clock runs ppm fast (positive) or slow
     double step() const { return step_; }

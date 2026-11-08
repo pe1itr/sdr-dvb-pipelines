@@ -1,14 +1,81 @@
 #include "dect2/dsp/clock_correct.h"
 #include "dect2/common/window.h"
+#include "dect2/dsp/simd.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#if defined(DECT2_X86_DISPATCH)
+#include <immintrin.h>
+#endif
 #if defined(__ARM_NEON) && !defined(DECT2_NO_SIMD)
 #include <arm_neon.h>
 #endif
 
 namespace dect2 {
 
+#if defined(DECT2_X86_DISPATCH)
+static bool useClockAvx2() {
+    static const bool fast = [] {
+        const char* generic = std::getenv("DECT2_CLOCK_GENERIC");
+        return cpuHasAvx2() && !(generic && *generic && *generic != '0');
+    }();
+    return fast;
+}
+
+#endif
+
+const char* ClockCorrector::backendName() {
+#if defined(DECT2_X86_DISPATCH)
+    return useClockAvx2() ? "avx2" : "generic";
+#elif defined(__ARM_NEON) && !defined(DECT2_NO_SIMD)
+    return "neon";
+#else
+    return "generic";
+#endif
+}
+
+
 static double bessel0(double x) { return dect2::window::besselI0(x, 40, 0.0); }
+
+#if defined(DECT2_X86_DISPATCH)
+// Keep the generic eight-lane accumulation and reduction order. In particular,
+// do not fuse multiply/add: the baseline x86 path rounds those separately.
+__attribute__((target("avx2,no-fma"), always_inline))
+static inline float joinClockLanes(__m256 sum) {
+    __m128 pairs = _mm_add_ps(_mm256_castps256_ps128(sum), _mm256_extractf128_ps(sum, 1));
+    pairs = _mm_hadd_ps(pairs, pairs);
+    return _mm_cvtss_f32(_mm_hadd_ps(pairs, pairs));
+}
+
+__attribute__((target("avx2,no-fma")))
+static double clockAvx2(const float* R, const float* I, const float* B,
+                        long avail, double pos, double step, std::vector<cf32>& out) {
+    constexpr int taps = ClockCorrector::kTaps, phases = ClockCorrector::kPhases;
+    static_assert(taps % 8 == 0);
+    // Two independent outputs hide accumulation latency without moving the
+    // sample positions, changing filter phases or reordering any float sum.
+    for (;;) {
+        const long iA = (long)pos, bA = iA - (taps / 2 - 1);
+        const double posB = pos + step;
+        const long iB = (long)posB, bB = iB - (taps / 2 - 1);
+        if (bA + taps > avail || bB + taps > avail) break;
+        const float* hA = B + (size_t)((int)((pos - (double)iA) * phases + 0.5)) * taps;
+        const float* hB = B + (size_t)((int)((posB - (double)iB) * phases + 0.5)) * taps;
+        __m256 ar = _mm256_setzero_ps(), ai = ar, br = ar, bi = ar;
+        for (int t = 0; t < taps; t += 8) {
+            const __m256 h = _mm256_loadu_ps(hA + t), g = _mm256_loadu_ps(hB + t);
+            ar = _mm256_add_ps(ar, _mm256_mul_ps(_mm256_loadu_ps(R + bA + t), h));
+            ai = _mm256_add_ps(ai, _mm256_mul_ps(_mm256_loadu_ps(I + bA + t), h));
+            br = _mm256_add_ps(br, _mm256_mul_ps(_mm256_loadu_ps(R + bB + t), g));
+            bi = _mm256_add_ps(bi, _mm256_mul_ps(_mm256_loadu_ps(I + bB + t), g));
+        }
+        out.emplace_back(joinClockLanes(ar), joinClockLanes(ai));
+        out.emplace_back(joinClockLanes(br), joinClockLanes(bi));
+        pos = posB + step;
+    }
+    return pos;
+}
+#endif
 
 ClockCorrector::ClockCorrector() {
     // Kaiser-windowed sinc, cut-off at half the rate: the signals it serves fill at most 0.42 of it on each side (a T2 8 MHz channel at
@@ -50,6 +117,9 @@ void ClockCorrector::process(const cf32* in, size_t n, std::vector<cf32>& out) {
     const float* B = bank_.data();
     out.reserve(out.size() + (size_t)((double)n / step_) + 2);
     double pos = pos_;
+#if defined(DECT2_X86_DISPATCH)
+    if (useClockAvx2()) pos = clockAvx2(R, I, B, avail, pos, step_, out);
+#endif
 #if defined(__ARM_NEON) && !defined(DECT2_NO_SIMD)
     // Two outputs per pass with NEON: lane j of the first / second register of each sum is ar[j] / ar[4 + j] of the loop below (fused
     // multiply-adds, as the compiler makes of it), and the lanes are added in the same order, so the values are the same bit for bit; the

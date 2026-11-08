@@ -69,7 +69,7 @@ def main():
         programs["windows_media"] = ["tests/windows_media.c"]
         programs["test_pluto_rx"] = ["tests/test_pluto_rx.c", "src/pluto_rx.c"]
         programs["test_lime_rx"] = ["tests/test_lime_rx.c", "src/lime_rx.c"]
-        for name in ("fec", "l1", "pipeline", "gap_clock", "stage_prof"):
+        for name in ("fec", "l1", "pipeline", "gap_clock", "stage_prof", "clock_correct"):
             programs[f"test_dvbt2_{name}"] = [f"components/dvbt2/tests/test_{name}.cpp"] + [s for s in gui_sources if s.startswith("components/dvbt2/")]
             if name == "gap_clock":
                 programs[f"test_dvbt2_{name}"].append("components/dvbt2/src/t2/t2gen.cpp")

@@ -5,6 +5,7 @@
 #include "dect2/tv/bbunpack.h"
 #include "dect2/common/stage_prof.h"
 #include "dect2/common/threadpool.h"
+#include "dect2/dsp/clock_correct.h"
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <atomic>
@@ -93,6 +94,7 @@ int dvbt2_backend_main(int argc, char** argv) {
         fprintf(stderr, "DVB-T2 frontend: %s\n", pipelined ? "pipelined" : "synchronous");
         fprintf(stderr, "DVB-T2 runtime: logical_processors=%u configured_workers=%d profile=%d\n",
             std::thread::hardware_concurrency(), configuredThreads(), prof::stageProfEnabled());
+        fprintf(stderr, "DVB-T2 clock correction: %s\n", ClockCorrector::backendName());
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;
