@@ -17,12 +17,17 @@
 #include <cstring>
 #include <cmath>
 #include <fstream>
+#include <sstream>
+#include "snapshot_file.h"
 #include <iostream>
 #include <mutex>
 #include <poll.h>
 #include <stdexcept>
 #include <thread>
 #include <unistd.h>
+#ifdef _WIN32
+#include <glib/gstdio.h>
+#endif
 
 namespace {
 volatile sig_atomic_t interrupted=0;
@@ -34,11 +39,34 @@ void str(json_object *o,const char *key,const std::string& value) {
 void num(json_object *o,const char *key,double value) {
     json_object_object_add(o,key,std::isfinite(value) ? json_object_new_double(value) : nullptr);
 }
-void atomic_file(const std::string& path,const void *data,size_t count) {
-    std::string tmp=path+".tmp";
-    std::ofstream file(tmp,std::ios::binary|std::ios::trunc);
-    file.write(static_cast<const char*>(data),count); file.close();
-    if (!file || std::rename(tmp.c_str(),path.c_str())) throw std::runtime_error("Cannot write "+path);
+std::istringstream read_command(const std::string& path) {
+#ifdef _WIN32
+    FILE *file=g_fopen(path.c_str(),"rb");
+#else
+    FILE *file=fopen(path.c_str(),"rb");
+#endif
+    char contents[4096];size_t count=0;
+    if (file) {count=fread(contents,1,sizeof(contents),file);fclose(file);}
+    return std::istringstream(std::string(contents,count));
+}
+bool atomic_file(const std::string& path,const void *data,size_t count) {
+    int result=snapshot_write(path.c_str(),data,count);
+    if (result<0) {
+#ifdef _WIN32
+        throw std::runtime_error("Cannot write "+path+" (Windows error "+std::to_string(GetLastError())+")");
+#else
+        throw std::runtime_error("Cannot write "+path+": "+strerror(errno));
+#endif
+    }
+    if (result>0) {
+        static auto warning=std::chrono::steady_clock::time_point{};
+        auto now=std::chrono::steady_clock::now();
+        if (now-warning>std::chrono::seconds(10)) {
+            std::cerr<<"DAB: snapshot temporarily locked; reception continues; retrying "<<path<<"\n";
+            warning=now;
+        }
+    }
+    return result==0;
 }
 struct Diagnostics {
     std::mutex mutex;
@@ -164,6 +192,10 @@ void scope_worker(Diagnostics& d) {
 }
 
 int main(int argc,char **argv) {
+#ifdef _WIN32
+    /* CRT argv uses the ANSI code page; control/snapshot paths are UTF-8. */
+    argv=g_win32_get_command_line();
+#endif
     std::string directory, format="s16", channel="12C", profile="normal", device="default";
     unsigned rate=2048000; bool status_stdout=false, audio=true, filter=false, explicit_channel=false, explicit_frequency=false;
     std::string frequency;
@@ -223,6 +255,7 @@ int main(int argc,char **argv) {
 #endif
         auto input_time=std::chrono::steady_clock::time_point{};
         std::string selected, dynamic_label; unsigned slide_generation=0;
+        std::vector<unsigned char> pending_slide;
         auto next=std::chrono::steady_clock::now(),next_control=next;
         auto submit=[&] {
             std::lock_guard<std::mutex> lock(diagnostics.mutex);
@@ -237,7 +270,7 @@ int main(int argc,char **argv) {
             num(root,"rms",input_live ? rms : NAN);num(root,"peak",input_live ? peak : NAN);num(root,"capture_percent",100.0*capture.size()/capture_size);
             str(root,"channel",channel); num(root,"frequency",hz); str(root,"profile",profile);
 #ifdef HAVE_DAB_RADIO
-            std::ifstream command(directory+"/station"); std::string requested;
+            auto command=read_command(directory+"/station"); std::string requested;
             if (!(command>>requested) && selected.empty()) {
                 const auto services=radio->services();
                 if (!services.empty()) {
@@ -249,12 +282,18 @@ int main(int argc,char **argv) {
             // override the listener's explicit station choice.
             if (!requested.empty() && requested!=selected) {
                 radio->select_station(requested); selected=requested;
-                dynamic_label.clear(); slide_generation=0; unlink((directory+"/slide").c_str());
+                dynamic_label.clear(); slide_generation=0;pending_slide.clear();
+#ifdef _WIN32
+                g_unlink((directory+"/slide").c_str());
+#else
+                unlink((directory+"/slide").c_str());
+#endif
             }
-            std::ifstream mute_file(directory+"/mute");int muted=0;mute_file>>muted;radio->set_muted(muted!=0);
+            auto mute_file=read_command(directory+"/mute");int muted=0;mute_file>>muted;radio->set_muted(muted!=0);
             radio->check_error();
-            if (auto slide=radio->take_slide()) {
-                atomic_file(directory+"/slide",slide->encoded.data(),slide->encoded.size()); ++slide_generation;
+            if (auto slide=radio->take_slide()) pending_slide.assign(slide->encoded.begin(),slide->encoded.end());
+            if (!pending_slide.empty() && atomic_file(directory+"/slide",pending_slide.data(),pending_slide.size())) {
+                ++slide_generation;pending_slide.clear();
             }
             if (auto label=radio->take_dynamic_label()) dynamic_label=label->text;
             str(root,"radio_ensemble",radio->ensemble_label()); str(root,"station",radio->selected_station());
@@ -341,7 +380,7 @@ int main(int argc,char **argv) {
             if (tuning || std::chrono::steady_clock::now()>=next_control) {
                 next_control=std::chrono::steady_clock::now()+std::chrono::milliseconds(20);
                 uint64_t requested_generation=0;std::string requested_channel;
-                std::ifstream request(directory+"/channel");request>>requested_generation>>requested_channel;
+                auto request=read_command(directory+"/channel");request>>requested_generation>>requested_channel;
                 int requested_index=dab_channel_index(requested_channel.c_str());
                 uint64_t requested_hz=requested_index>=0 ? dab_channels[requested_index].hz : 0;
                 if (requested_channel=="free") {
@@ -359,9 +398,13 @@ int main(int argc,char **argv) {
                         diagnostics.decode_ms=NAN;
                     }
                     tuning=true;used=0;input_samples=0;capture.clear();scope_capture.clear();resampler.reset();if (fir) fir->reset();
-                    selected.clear();dynamic_label.clear();slide_generation=0;rms=peak=NAN;
+                    selected.clear();dynamic_label.clear();slide_generation=0;pending_slide.clear();rms=peak=NAN;
                     input_time={};
+#ifdef _WIN32
+                    g_unlink((directory+"/station").c_str());g_unlink((directory+"/slide").c_str());
+#else
                     unlink((directory+"/station").c_str());unlink((directory+"/slide").c_str());
+#endif
 #ifdef HAVE_DAB_RADIO
                     audio_frames=0;audio_time={};
                     radio.reset();radio=std::make_unique<dab::DabPlusRadioSession>("0x0",device,audio);radio->start(hz/1000);
@@ -370,17 +413,26 @@ int main(int argc,char **argv) {
                 }
                 if (tuning) {
                     uint64_t ack_generation=0,ack_boundary=0,ack_hz=0;
-                    std::ifstream ack(directory+"/tuned");
+                    auto ack=read_command(directory+"/tuned");
                     if (ack>>ack_generation>>ack_hz>>ack_boundary && ack_generation==generation && ack_hz==hz) {
                         boundary=ack_boundary;tuning=false;
                     }
                 }
             }
+#ifdef _WIN32
+            struct linrad_pollfd fd{STDIN_FILENO,POLLIN,0};
+            int result=lw_poll(&fd,1,100);
+#else
             struct pollfd fd{STDIN_FILENO,POLLIN,0};
             int result=poll(&fd,1,100);
+#endif
             if (result<0 && errno!=EINTR) throw std::runtime_error("DAB IQ poll failed");
             if (result>0) {
+#ifdef _WIN32
+                ssize_t count=lw_read(STDIN_FILENO,raw.data()+used,raw.size()-used);
+#else
                 ssize_t count=read(STDIN_FILENO,raw.data()+used,raw.size()-used);
+#endif
                 if (count<0 && errno!=EINTR) throw std::runtime_error("DAB IQ read failed");
                 if (!count) break;
                 if (count>0) {used+=count;total_bytes+=count;}

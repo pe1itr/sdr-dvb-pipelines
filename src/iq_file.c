@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "iq_file.h"
+#include <glib/gstdio.h>
 #include <json-c/json.h>
 #include <errno.h>
 #include <math.h>
@@ -61,8 +62,8 @@ static char *sidecar(const char *path) {
     g_free(candidate); return NULL;
 }
 static json_object *read_json(const char *path, GError **error) {
-    struct stat st;
-    if (stat(path,&st) || !S_ISREG(st.st_mode) || st.st_size>1024*1024) {
+    GStatBuf st;
+    if (g_stat(path,&st) || !S_ISREG(st.st_mode) || st.st_size>1024*1024) {
         invalid(error,"JSON file is missing, is not a regular file or exceeds 1 MiB"); return NULL;
     }
     char *data=NULL; gsize length;
@@ -145,8 +146,8 @@ static gboolean dvb_metadata(json_object *obj, IQFileInfo *info, GError **error)
 }
 gboolean iq_file_read_info(const char *path, IQFileInfo *info, GError **error) {
     memset(info,0,sizeof(*info)); info->path=g_canonicalize_filename(path,NULL);
-    struct stat st;
-    if (stat(info->path,&st) || !S_ISREG(st.st_mode) || !st.st_size) {
+    GStatBuf st;
+    if (g_stat(info->path,&st) || !S_ISREG(st.st_mode) || !st.st_size) {
         invalid(error,"Select an existing, non-empty IQ file"); goto fail;
     }
     from_filename(info->path,info);
@@ -200,11 +201,11 @@ fail:
 gboolean iq_file_validate(const char *path, const char *format, int header_bytes, guint64 *samples, GError **error) {
     int stride=!strcmp(format,"s16") ? 4 : !strcmp(format,"u8") ? 2 : !strcmp(format,"cf32") ? 8 : 0;
     if (!stride || header_bytes<0) return invalid(error,"Invalid IQ format or header length");
-    struct stat st;
-    if (stat(path,&st) || !S_ISREG(st.st_mode)) return invalid(error,"IQ file not found or not a regular file");
+    GStatBuf st;
+    if (g_stat(path,&st) || !S_ISREG(st.st_mode)) return invalid(error,"IQ file not found or not a regular file");
     if (st.st_size<=header_bytes || (st.st_size-header_bytes)%stride)
         return invalid(error,"IQ file is empty or contains an incomplete I/Q sample");
-    FILE *file=fopen(path,"rb");
+    FILE *file=g_fopen(path,"rb");
     if (!file) { g_set_error(error,file_error(),errno,"Cannot read IQ file: %s",g_strerror(errno)); return FALSE; }
     fclose(file);
     *samples=(st.st_size-header_bytes)/stride; return TRUE;

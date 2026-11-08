@@ -103,7 +103,7 @@ int dvbt2_backend_main(int argc, char** argv) {
             }
         });
         RxTelemetry t;
-        auto lastStatus = Clock::now(), lastLog = lastStatus;
+        auto lastStatus = Clock::now(), lastLog = lastStatus, lastProfile = lastStatus;
         float rms = NAN, peak = NAN;
         std::string previousUnsupported;
         std::string previousPlps;
@@ -145,6 +145,16 @@ int dvbt2_backend_main(int argc, char** argv) {
             for (const auto& p : t.plpList) plps += std::to_string(p.id) + (p.supported ? " " : "(unsupported) ");
             if (plps != previousPlps && !plps.empty()) fprintf(stderr, "DVB-T2 available PLPs: %s\n", plps.c_str());
             previousPlps = plps;
+            // Live diagnostics must reach the GUI/HTTP log while the worker
+            // is running: stopping the live pipeline may terminate it at once.
+            if (prof::stageProfEnabled() && (final || Clock::now() - lastProfile >= std::chrono::seconds(5))) {
+                auto stages = prof::stageProfSnapshot();
+                std::sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
+                for (const auto& stage : stages)
+                    fprintf(stderr, "DVB-T2 profile: %s cpu=%.6f calls=%llu\n", stage.first.c_str(),
+                        stage.second.first, (unsigned long long)stage.second.second);
+                lastProfile = Clock::now();
+            }
             if (final || Clock::now() - lastLog >= std::chrono::seconds(1)) {
                 fprintf(stderr, "DVB-T2%s: PLP=%d L1=%d/%d BCH=%llu/%llu TS=%llu input_dropped=%llu fec_frames_dropped=%llu RMS=%.1f SNR=%.1f CFO=%.0f %s %s GI=%s\n",
                     final ? " final" : "", t.plpSelectedId, t.l1preOk, t.l1postOk,
@@ -189,13 +199,6 @@ int dvbt2_backend_main(int argc, char** argv) {
         }
         if (rx.pending()) { fprintf(stderr, "DVB-T2: FEC drain timed out\n"); failed = true; }
         report(true);
-        if (prof::stageProfEnabled()) {
-            auto stages = prof::stageProfSnapshot();
-            std::sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
-            for (const auto& stage : stages)
-                fprintf(stderr, "DVB-T2 profile: %s cpu=%.6f calls=%llu\n", stage.first.c_str(),
-                    stage.second.first, (unsigned long long)stage.second.second);
-        }
     });
     uint64_t received = 0;
     bool eof = false;

@@ -19,13 +19,14 @@ def main():
     parser.add_argument("--cargo", default=os.getenv("CARGO", "cargo"))
     parser.add_argument("--rust-target", default="x86_64-pc-windows-gnu")
     parser.add_argument("--tests", action="store_true", help="Also build native GTK/video and DVB-T2 tests")
+    parser.add_argument("--rebuild", action="store_true", help="Recompile every source, even when timestamps were preserved")
     args = parser.parse_args()
     os.chdir(ROOT)
     sdk = args.sdk.resolve()
     build = args.build_dir.resolve()
     build.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, PKG_CONFIG_LIBDIR=str(sdk / "lib/pkgconfig"), PKG_CONFIG_PATH="")
-    modules = "gtk+-3.0 json-c fftw3f libsamplerate libvlc libavcodec libavformat libavutil libswscale zvbi-0.2 SoapySDR uhd portaudio-2.0".split()
+    modules = "gtk+-3.0 json-c fftw3f libsamplerate libvlc libavcodec libavformat libavutil libswscale zvbi-0.2 SoapySDR uhd portaudio-2.0 faad2 hidapi LimeSuite libiio".split()
     # MSYS2 calls the samplerate module 'samplerate'.
     modules[3] = "samplerate"
     def pkg(option):
@@ -52,14 +53,26 @@ def main():
         "linrad_dvb": gui_sources,
         "linrad_udp_to_stdout": [f"src/{s}.c" for s in ["linrad_udp_to_stdout", "iq_bandfilter", "iq_monitor", "usb_tap", "iq_record", "iq_output"]],
         "iq_file_to_stdout": [f"src/{s}.c" for s in ["iq_file_to_stdout", "iq_file", "iq_bandfilter", "iq_monitor", "usb_tap"]],
-        "sdr_to_stdout": [f"src/{s}.c" for s in ["sdr_to_stdout", "afedri", "lime_rx", "iq_output", "iq_record", "iq_bandfilter", "iq_monitor", "usb_tap"]] + ["src/win32/funcube.c"],
+        "sdr_to_stdout": [f"src/{s}.c" for s in ["sdr_to_stdout", "afedri", "lime_rx", "pluto_rx", "iq_output", "iq_record", "iq_bandfilter", "iq_monitor", "usb_tap"]] + ["src/win32/funcube.c"],
         "ldpc_tool": ["third_party/ldpc/ldpc_tool.cc", "third_party/ldpc/tables_handler.cc"],
     }
+    dab_sources = [f"components/dab/src/{name}.cpp" for name in
+                   "libdxdabsdr dab_detector decoder_backend candidate_fic fic_identity_accumulator channel_filter mot_slideshow dynamic_label dx_msc dx_pad dab_plus_radio".split()]
+    dab_dsp = ["components/dvbt2/src/dsp/resampler.cpp", "components/dvbt2/src/dsp/dsp_compat.cpp"]
+    programs["dab_worker"] = ["src/dab_worker.cpp", *dab_sources, *dab_dsp]
     if args.tests:
         programs["windows_tls"] = ["tests/windows_tls.cpp"]
         programs["windows_gui_smoke"] = ["tests/windows_gui_smoke.c"] + [s for s in gui_sources if s != "src/linrad_dvb.c"]
+        programs["dab_gui_smoke"] = ["tests/dab_gui_smoke.c"] + [s for s in gui_sources if s != "src/linrad_dvb.c"]
+        programs["dab_fake_source"] = ["tests/dab_fake_source.c"]
+        programs["windows_snapshot"] = ["tests/windows_snapshot.c"]
+        programs["windows_media"] = ["tests/windows_media.c"]
+        programs["test_pluto_rx"] = ["tests/test_pluto_rx.c", "src/pluto_rx.c"]
+        programs["test_lime_rx"] = ["tests/test_lime_rx.c", "src/lime_rx.c"]
         for name in ("fec", "l1"):
             programs[f"test_dvbt2_{name}"] = [f"components/dvbt2/tests/test_{name}.cpp"] + [s for s in gui_sources if s.startswith("components/dvbt2/")]
+        for name in "dx_msc dx_pad stream_acquisition libdxdabsdr_tii_synthetic fic_identity_accumulator channel_filter mot_slideshow dynamic_label dab_plus_radio".split():
+            programs[f"dab_test_{name}"] = [f"components/dab/tests/{name}_test.cpp", *dab_sources]
     sources = sorted({s for group in programs.values() for s in group} | {"src/win32/platform.c"})
     objects = {}
     for source in sources:
@@ -70,16 +83,29 @@ def main():
         target = objects[source]
         stamp = build / "flags.txt"
         dependencies = target.with_suffix(".d")
-        inputs = [Path(source), stamp]
+        inputs = [Path(source), stamp, Path(__file__)]
         if dependencies.exists():
             inputs += [Path(p) for p in shlex.split(dependencies.read_text().replace("\\\n", " ").split(":", 1)[1])]
         newest = max(p.stat().st_mtime if p.exists() else float("inf") for p in inputs)
-        if target.exists() and dependencies.exists() and target.stat().st_mtime >= newest:
+        if not args.rebuild and target.exists() and dependencies.exists() and target.stat().st_mtime >= newest:
             return
         compiler = "x86_64-w64-mingw32-g++" if source.endswith((".cc", ".cpp")) else "x86_64-w64-mingw32-gcc"
         flags = ["-std=gnu++20"] if compiler.endswith("g++") else ["-std=gnu11"]
+        if source.startswith("components/dvbt2/") or source == "src/dvbt2_backend.cc":
+            # Match OnAir's Release build and our Linux CXXFLAGS: the OFDM/FEC
+            # hot loops need -O3's inlining/vectorization at broadcast rates.
+            # Keep runtime AVX2 dispatch and the existing floating-point rules.
+            flags += ["-O3"]
         if source == "src/win32/platform.c":
             flags += ["-DLINRAD_WIN32_IMPLEMENTATION"]
+        if source == "src/pluto_rx.c":
+            flags += ["-DHAVE_LIBIIO", "-DLIBIIO_STATIC"]
+        if source == "tests/test_pluto_rx.c":
+            flags += ["-DLIBIIO_STATIC"]
+        if source == "src/lime_rx.c":
+            flags += ["-DHAVE_LIME"]
+        if source in dab_sources or source == "src/dab_worker.cpp" or source.startswith("components/dab/tests/"):
+            flags += ["-DLINRAD_WIN32_IMPLEMENTATION", "-DHAVE_DAB_RADIO", "-Icomponents/dab/src"]
         if source == "third_party/leansdr/src/apps/leandvb.cc":
             flags += ["-include", "src/win32/lean_compat.h", "-Wno-unused-variable", "-Wno-missing-field-initializers"]
         print(f"Compiling {source}", flush=True)
@@ -108,11 +134,11 @@ def main():
         runtime_objects.append(str(helper))
     for name, group in programs.items():
         inputs = [str(objects[s]) for s in group] + [str(objects["src/win32/platform.c"])] + runtime_objects
-        if name in ("linrad_dvb", "windows_gui_smoke") or name.startswith("test_dvbt2_"):
+        if name in ("linrad_dvb", "windows_gui_smoke", "dab_gui_smoke") or name.startswith("test_dvbt2_"):
             inputs.append(str(rust_lib))
         print(f"Linking {name}.exe", flush=True)
         subprocess.run(["x86_64-w64-mingw32-g++", "-mcrtdll=ucrt", "-Wl,--stack,16777216", *inputs, "-o", str(build / f"{name}.exe"),
-                        *libs, "-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lwinpthread"], check=True)
+                        *libs, "-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lwinpthread", "-lsetupapi", "-lole32"], check=True)
     print(f"Built native Windows executables in {build}")
 
 

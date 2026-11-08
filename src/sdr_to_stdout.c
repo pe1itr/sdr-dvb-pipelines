@@ -14,6 +14,8 @@
 #include "funcube.h"
 #include "rtlsdr.h"
 #include "lime_rx.h"
+#include "pluto_rx.h"
+#include "snapshot_file.h"
 #include "afedri.h"
 #include "tune_control.h"
 #include "iq_bandfilter.h"
@@ -33,6 +35,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#ifdef _WIN32
+#include <glib/gstdio.h>
+#endif
 
 static volatile sig_atomic_t stopped;
 static void stop(int sig) { (void)sig; stopped = 1; }
@@ -59,6 +64,10 @@ static double number(const char *s) {
 #define S(call) do { if ((call) != 0) { fprintf(stderr, "%s: %s\n", #call, SoapySDRDevice_lastError()); goto done; } } while (0)
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    /* CRT argv uses the ANSI code page; control/snapshot paths are UTF-8. */
+    argv=g_win32_get_command_line();
+#endif
     const char *source = "", *args = "", *images = "", *antenna = "", *format = "s16";
     double rate = 10000000, freq = 437000000, gain = 30, actual = 0;
     double bandwidth = 0, receiver_offset = 0, channel_bandwidth = 0;
@@ -74,7 +83,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--dab-lo-output")) {dab_lo=1;continue;}
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2 --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--b210-input TRX1|RX1|TRX2|RX2] [--dab-if Hz --dab-lo-output --dab-lo-port TRX1|TRX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2|pluto --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--b210-input TRX1|RX1|TRX2|RX2] [--dab-if Hz --dab-lo-output --dab-lo-port TRX1|TRX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
@@ -107,6 +116,7 @@ int main(int argc, char **argv) {
         fprintf(stderr,"Invalid DAB mixer IF, RF or physical ports; LO and IF input must be separate\n");return 2;
     }
     int rsp = rx_rsp(source), airspyhf = rx_airspyhf(source), airspyr2 = rx_airspyr2(source);
+    int pluto = !strcmp(source, "pluto");
     int lime = !strcmp(source, "lime");
     if (!*antenna) antenna = lime ? "AUTO" : "TX/RX";
     int fcdpp = !strcmp(source, "fcdpp");
@@ -116,8 +126,9 @@ int main(int argc, char **argv) {
     int hackrf = !strcmp(source, "hackrf"), u8 = !strcmp(format, "u8");
     int soapy = hackrf || sdriq || rtlsdr || rsp || airspyhf || airspyr2;
     int float_stream = sdriq || rsp || airspyhf;
-    if ((!airspyr2 && !rsp && !airspyhf && !lime && !fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
-        (airspyr2 ? (!rx_airspyr2_rate_valid(rate) || !rx_frequency_valid(source,freq) || gain < 0 || gain > 45 || gain != floor(gain)) :
+    if ((!pluto && !airspyr2 && !rsp && !airspyhf && !lime && !fcdpp && !hackrf && !sdriq && !afedri && !rtlsdr && strcmp(source, "b210")) || (strcmp(format, "s16") && !u8) ||
+        (pluto ? (rate < 2083334 || rate > 61440000 || rate != floor(rate) || !rx_frequency_valid(source,freq) || gain < 0 || gain > 73) :
+         airspyr2 ? (!rx_airspyr2_rate_valid(rate) || !rx_frequency_valid(source,freq) || gain < 0 || gain > 45 || gain != floor(gain)) :
          airspyhf ? (rate < 1000 || rate > 768000 || rate != floor(rate) || !rx_frequency_valid(source,freq) || gain != 0) :
          rsp ? (rate < 62500 || rate > 10000000 || rate != floor(rate) || !rx_frequency_valid(source,freq) || gain < 20 || gain > 59 || gain != floor(gain)) :
          lime ? !lime_rx_valid(rate, freq, gain) : fcdpp ? (rate != FUNCUBE_RATE || !funcube_frequency_valid(freq) || !funcube_gain_valid(gain)) :
@@ -159,6 +170,7 @@ int main(int argc, char **argv) {
     }
     sigaction(SIGINT, &sa, NULL); sigaction(SIGTERM, &sa, NULL); signal(SIGPIPE, SIG_IGN);
     uhd_usrp_handle usrp = NULL; uhd_rx_streamer_handle rx = NULL; uhd_rx_metadata_handle md = NULL;
+    PlutoSource *pluto_rx = NULL;
     LimeRx *mini = NULL;
     Afedri *net = NULL;
     Funcube *cube = NULL;
@@ -172,12 +184,21 @@ int main(int argc, char **argv) {
     /* Blocks are kept large to amortize pipe and driver overhead at 10+ MS/s. */
     int16_t iq[65536 * 2]; unsigned char packed[65536 * 2];
     float float_iq[2048 * 2];
+    PlutoIQ pluto_iq[65536];
     /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
      * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
     size_t block_samples = lime ? (size_t)fmax(256, fmin(65536, ceil(rate/100/256)*256)) : fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : float_stream ? 2048 : rtlsdr ? 8192 : 65536;
     float *shifted=receiver_offset != 0 ? malloc(block_samples*2*sizeof(float)) : NULL;
     if (receiver_offset != 0 && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
-    if (lime) {
+    if (pluto) {
+        const char *uri = !strncmp(args,"uri=",4) ? args+4 : args;
+        PlutoConfig config = {.pluto_uri=uri, .ref="internal", .rate=rate,
+            .bandwidth=fmin(rate,56000000), .frequency=freq, .gain=gain};
+        pluto_rx = pluto_source_open(&config);
+        if (!pluto_rx) goto done;
+        actual = config.rate; gain = config.gain;
+        if (fabs(config.frequency-freq)>2) { fprintf(stderr,"Pluto RX frequency coerced\n"); goto done; }
+    } else if (lime) {
         mini = lime_rx_open(args, antenna, rate, freq, &gain, &actual);
         if (!mini) goto done;
     } else if (fcdpp) {
@@ -283,13 +304,23 @@ int main(int argc, char **argv) {
             const char *files[] = {"usrp_b210_fpga.bin", "usrp_b200_fw.hex"};
             for (int i = 0; i < 2; ++i) {
                 char path[4096]; int n = snprintf(path, sizeof(path), "%s/%s", images, files[i]);
-                if (n < 0 || n >= (int)sizeof(path) || access(path, R_OK)) {
+                if (n < 0 || n >= (int)sizeof(path) ||
+#ifdef _WIN32
+                    g_access(path, R_OK)
+#else
+                    access(path, R_OK)
+#endif
+                    ) {
                     fprintf(stderr, "Kintex-7 image missing: %s/%s\n", images, files[i]); goto done;
                 }
             }
             if (setenv("UHD_IMAGES_DIR", images, 1)) { perror("UHD_IMAGES_DIR"); goto done; }
         }
+        fprintf(stderr,"[B210 kinex7] Opening UHD receiver; images=%s; args=%s\n", *images ? images : "UHD default", args);
+        fflush(stderr);
         U(uhd_usrp_make(&usrp, args));
+        fprintf(stderr,"[B210 kinex7] Device opened; configuring RX channel %zu\n", channel);
+        fflush(stderr);
         U(uhd_usrp_set_clock_source(usrp, "internal", 0));
         U(uhd_usrp_set_rx_rate(usrp, rate, channel));
         U(uhd_usrp_get_rx_rate(usrp, channel, &actual));
@@ -326,7 +357,7 @@ int main(int argc, char **argv) {
     if (lime) { if (lime_rx_start(mini)) goto done; }
     else if (afedri) { if (afedri_start(net)) goto done; }
     else if (soapy) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
-    else if (!fcdpp) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
+    else if (!fcdpp && !pluto) { uhd_stream_cmd_t cmd = {.stream_mode=UHD_STREAM_MODE_START_CONTINUOUS, .stream_now=true}; U(uhd_rx_streamer_issue_stream_cmd(rx, &cmd)); }
     started = 1;
     if (dab_lo) {
         int index=dab_channel_nearest(freq), direction=index>=2 ? -1 : 1;
@@ -358,15 +389,18 @@ int main(int argc, char **argv) {
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
                 rx_frequency_min(source), rx_frequency_max(source), &requested,
                 rsp ? 20 : afedri ? -10 : sdriq ? -20 : 0,
-                airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
-                airspyr2 || rsp || lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
+                pluto ? 73 : airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                pluto || airspyr2 || rsp || lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
         if ((changed & 1) && (!rx_tuning_valid(source,requested,receiver_offset) ||
             (dab_if && !b210_mixer_valid(requested,dab_if,b210_port,lo_port,dab_lo)))) {
             fprintf(stderr, "[SDR] Ignoring tune outside model/input range\n");
             changed &= ~1;
         }
         if ((changed & 1) && (requested != freq || (control.tune_generation && *dab_state_dir))) {
-            if (lime) {
+            if (pluto) {
+                double tuned = requested;
+                if (pluto_source_tune(pluto_rx, &tuned, &gain) || fabs(tuned-requested)>2) goto done;
+            } else if (lime) {
                 if (lime_rx_frequency(mini, requested)) goto done;
             } else if (fcdpp) {
                 if (funcube_frequency(cube, requested)) goto done;
@@ -391,7 +425,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "[SDR] Tuned to %.0f Hz; decoder may need to reacquire\n", freq);
         }
         if ((changed & 2) && requested_gain != gain) {
-            if (lime) {
+            if (pluto) {
+                double tuned = freq;
+                gain = requested_gain;
+                if (pluto_source_tune(pluto_rx, &tuned, &gain)) goto done;
+            } else if (lime) {
                 double actual_gain = requested_gain;
                 if (lime_rx_gain(mini, &actual_gain)) goto done;
                 gain = actual_gain;
@@ -428,7 +466,17 @@ int main(int argc, char **argv) {
         int output_error = iq_output_error(output);
         if (output_error) { fprintf(stderr, "IQ output: %s\n", strerror(output_error)); goto done; }
         size_t got = 0; void *buffers[] = {float_stream ? (void *)float_iq : ((hackrf || rtlsdr) && u8 ? (void *)packed : (void *)iq)};
-        if (lime) {
+        if (pluto) {
+            int n = pluto_source_read(pluto_rx, pluto_iq, block_samples);
+            if (n == -2) { ++overflows; continue; }
+            if (n < 0) goto done;
+            if (!n) continue;
+            got = (size_t)n;
+            for (size_t k=0;k<got;++k) {
+                iq[2*k]=(int16_t)fmax(-32768,fmin(32767,pluto_iq[k].i*32768));
+                iq[2*k+1]=(int16_t)fmax(-32768,fmin(32767,pluto_iq[k].q*32768));
+            }
+        } else if (lime) {
             int n = lime_rx_read(mini, iq, block_samples);
             if (n < 0) goto done;
             if (!n) { if (lime_rx_report(mini)) goto done; continue; }
@@ -476,14 +524,14 @@ int main(int argc, char **argv) {
             /* accepted counts precisely the bytes preceding this retune in the
              * output stream, including queued bytes. No drain/reopen is needed. */
             IQOutputStats boundary;iq_output_stats(output,&boundary);
-            char path[4096],temporary[4096];
-            if (snprintf(path,sizeof(path),"%s/tuned",dab_state_dir)>=(int)sizeof(path) ||
-                snprintf(temporary,sizeof(temporary),"%s/tuned.tmp",dab_state_dir)>=(int)sizeof(temporary)) goto done;
-            FILE *ack=fopen(temporary,"w");
-            if (!ack) goto done;
-            int wrote=fprintf(ack,"%llu %.0f %llu\n",(unsigned long long)dab_generation,freq,(unsigned long long)boundary.accepted);
-            int closed=fclose(ack);
-            if (wrote<0 || closed || rename(temporary,path)) goto done;
+            char path[4096],ack[128];
+            if (snprintf(path,sizeof(path),"%s/tuned",dab_state_dir)>=(int)sizeof(path)) goto done;
+            int length=snprintf(ack,sizeof(ack),"%llu %.0f %llu\n",(unsigned long long)dab_generation,freq,(unsigned long long)boundary.accepted);
+            int wrote=snapshot_write(path,ack,(size_t)length);
+            if (wrote<0) {perror("DAB tuning acknowledgement");goto done;}
+            /* Keep discarding IQ until the ack can be published. Its byte
+             * boundary remains valid because no new IQ has been enqueued. */
+            if (wrote>0) dab_settle=1;
             continue;
         }
         if (float_stream) iq_cf32_to_s16(float_iq, iq, got);
@@ -525,6 +573,7 @@ int main(int argc, char **argv) {
     result = 0;
 done:
     free(shifted);
+    pluto_source_close(pluto_rx);
     lime_rx_close(mini);
     funcube_close(cube);
     afedri_close(net);

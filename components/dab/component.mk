@@ -16,7 +16,7 @@ $(BUILD_DIR)/dab-config: FORCE_DAB_CONFIG | $(BUILD_DIR)
 $(BUILD_DIR)/components/dab/%.o: $(DAB_DIR)/src/%.cpp $(wildcard $(DAB_DIR)/src/*.hpp) $(BUILD_DIR)/dab-config
 	mkdir -p $(@D)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DAB_FLAGS) -pthread -c $< -o $@
-$(BUILD_DIR)/dab_worker: src/dab_worker.cpp $(DAB_SHARED_DSP) $(DAB_OBJECTS) $(DAB_DIR)/channels.h src/dab_resampler.hpp $(BUILD_DIR)/dab-config | $(BUILD_DIR)
+$(BUILD_DIR)/dab_worker: src/dab_worker.cpp $(DAB_SHARED_DSP) $(DAB_OBJECTS) $(DAB_DIR)/channels.h src/dab_resampler.hpp src/snapshot_file.h $(BUILD_DIR)/dab-config | $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DAB_FLAGS) $< $(DAB_OBJECTS) $(DAB_SHARED_DSP) $(DAB_LIBS) $(JSON_LIBS) $(shell pkg-config --libs samplerate) -pthread -o $@
 all: $(BUILD_DIR)/dab_worker
 

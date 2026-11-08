@@ -19,6 +19,13 @@ GLIB_CFLAGS := $(shell pkg-config --cflags glib-2.0)
 FILTER_CFLAGS := $(shell pkg-config --cflags fftw3f)
 FILTER_LIBS := $(shell pkg-config --libs fftw3f)
 
+# Native Pluto RX uses the libiio 0.x API, matching the ATV receiver.
+HAVE_LIBIIO := $(shell pkg-config --atleast-version=0.23 --max-version=0.99 libiio && echo 1)
+ifeq ($(HAVE_LIBIIO),1)
+PLUTO_CFLAGS := -DHAVE_LIBIIO $(shell pkg-config --cflags libiio)
+PLUTO_LIBS := $(shell pkg-config --libs libiio)
+endif
+
 # Optional native LimeSDR Mini RX. Set PKG_CONFIG_PATH for a private LimeSuite.
 HAVE_LIME := $(shell pkg-config --exists LimeSuite && echo 1)
 ifeq ($(HAVE_LIME),1)
@@ -29,7 +36,7 @@ endif
 # Rebuild the SDR helper when the optional backend or its location changes.
 .PHONY: FORCE_LIME_CONFIG
 $(BUILD_DIR)/lime-config: FORCE_LIME_CONFIG | $(BUILD_DIR)
-	@printf '%s\n' '$(LIME_CFLAGS) $(LIME_LIBS)' > $@.tmp
+	@printf '%s\n' '$(LIME_CFLAGS) $(LIME_LIBS) $(PLUTO_CFLAGS) $(PLUTO_LIBS)' > $@.tmp
 	@cmp -s $@.tmp $@ || cp $@.tmp $@
 
 GLIB_LIBS := $(shell pkg-config --libs glib-2.0)
@@ -107,6 +114,8 @@ $(BUILD_DIR)/components/dvbt/backend.o: src/dvbt_backend.c src/dvbt_backend.h sr
 .PHONY: all package dist package-windows test clean
 
 package-windows:
+	python3 tools/build-windows-pluto.py
+	python3 tools/build-windows-lime.py
 	python3 tools/build-windows.py
 	python3 dev/package_windows.py
 
@@ -169,9 +178,9 @@ test: test-bearing
 clean:
 	rm -rf $(BUILD_DIR)
 
-SDR_SOURCES := src/sdr_to_stdout.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
-$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(LIME_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
+SDR_SOURCES := src/sdr_to_stdout.c src/pluto_rx.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
+$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/pluto_rx.h src/snapshot_file.h src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PLUTO_CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(shell pkg-config --libs SoapySDR uhd alsa) $(PLUTO_LIBS) $(LIME_LIBS) $(FILTER_LIBS) -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_iq_output.c src/iq_output.c -o $@ $(LDFLAGS) -pthread $(LDLIBS)
@@ -375,6 +384,14 @@ test-srt: all
 test: test-srt
 
 test: test-dab
+
+ifeq ($(HAVE_LIBIIO),1)
+$(BUILD_DIR)/test_pluto_rx: tests/test_pluto_rx.c src/pluto_rx.c src/pluto_rx.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(PLUTO_CFLAGS) -Isrc tests/test_pluto_rx.c src/pluto_rx.c -o $@ $(LDFLAGS) -lm $(LDLIBS)
+.PHONY: test-pluto
+test-pluto: $(BUILD_DIR)/test_pluto_rx
+	./$(BUILD_DIR)/test_pluto_rx
+endif
 
 .PHONY: test-status-http
 test-status-http: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout

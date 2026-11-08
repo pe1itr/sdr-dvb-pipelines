@@ -65,6 +65,9 @@ static void __attribute__((constructor)) initialize(void) {
             if (g_file_test(path,G_FILE_TEST_IS_DIR)) g_setenv(keys[i],path,TRUE);
             g_free(path);
         }
+        char *loaders=g_build_filename(directory,"lib/gdk-pixbuf-2.0/2.10.0/loaders.cache",NULL);
+        if (g_file_test(loaders,G_FILE_TEST_IS_REGULAR)) g_setenv("GDK_PIXBUF_MODULE_FILE",loaders,TRUE);
+        g_free(loaders);
         char *path=g_strconcat(directory,";",g_getenv("PATH") ? g_getenv("PATH") : "",NULL);
         g_setenv("PATH",path,TRUE); g_free(path);
         g_free(directory); g_free(executable);

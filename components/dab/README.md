@@ -29,8 +29,9 @@ mono/stereo DAB+ services up to 192 kbit/s. Classic DAB MPEG Layer II, UEP,
 surround audio and seamless ensemble reconfiguration are not implemented.
 Reconfiguration pauses audio and rebuilds routing from current FIGs. PAD
 supports DLS/DL+ and the legacy MOT application types 12/13; arbitrary
-FIG 0/13 application-type assignments are not yet supported. Windows DAB
-reception is not enabled by the Windows build helper.
+FIG 0/13 application-type assignments are not yet supported. The Windows build
+includes the same DAB worker and FAAD2 decoder, with PortAudio speaker output.
+Its package also contains PNG/JPEG loaders for MOT slideshows.
 
 Protocol references are pinned to ETSI EN 300 401 V2.1.1 and TS 102 563 V2.1.1
 (2017-01), with clauses/tables beside the implementation. See [ORIGIN](ORIGIN)

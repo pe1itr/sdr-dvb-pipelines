@@ -72,11 +72,11 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
     if (!phase) {
         g_assert_true(a->running);g_assert_false(a->stopping);
         old_decoder=a->stages[1].pid;old_source=a->stages[0].pid;
-        g_assert_cmpint(old_decoder,>,0);
+        g_assert_true(old_decoder!=0);
         tune_step(a,-1);g_assert_false(a->stopping);g_assert_cmpuint(a->dab.generation,==,1);++phase;
     } else if (phase==1 && a->running && !a->stopping && a->dab.snapshot && dab_view_number(&a->dab,"generation")==1 && !dab_view_number(&a->dab,"tuning")) {
-        g_assert_cmpint(a->stages[1].pid,==,old_decoder);
-        g_assert_cmpint(a->stages[0].pid,==,old_source);g_assert_null(a->scatter_backend);
+        g_assert_true(a->stages[1].pid==old_decoder);
+        g_assert_true(a->stages[0].pid==old_source);g_assert_null(a->scatter_backend);
         g_assert_cmpint(a->stage_count,==,2);
         char *state_path=g_build_filename(a->dab.directory,"state.json",NULL);
         g_assert_false(g_file_test(state_path,G_FILE_TEST_EXISTS));g_free(state_path);
@@ -84,7 +84,7 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
         // Coalesce rapid A -> B -> A changes without restarting either process.
         tune_step(a,1);tune_step(a,-1);g_assert_cmpuint(a->dab.generation,==,3);++phase;
     } else if (phase==2 && a->dab.snapshot && dab_view_number(&a->dab,"generation")==3 && !dab_view_number(&a->dab,"tuning")) {
-        g_assert_cmpint(a->stages[1].pid,==,old_decoder);g_assert_cmpint(a->stages[0].pid,==,old_source);
+        g_assert_true(a->stages[1].pid==old_decoder);g_assert_true(a->stages[0].pid==old_source);
         power_clicked(NULL,a);++phase;
     } else if (phase==3 && !a->running) {
         g_assert_false(a->stopping);
@@ -96,7 +96,7 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
         old_decoder=a->stages[1].pid;old_source=a->stages[0].pid;
         tune_step(a,1);g_assert_cmpuint(a->dab.generation,==,1);++phase;
     } else if (phase==5 && a->dab.snapshot && dab_view_number(&a->dab,"generation")==1 && !dab_view_number(&a->dab,"tuning")) {
-        g_assert_cmpint(a->stages[1].pid,==,old_decoder);g_assert_cmpint(a->stages[0].pid,==,old_source);
+        g_assert_true(a->stages[1].pid==old_decoder);g_assert_true(a->stages[0].pid==old_source);
         g_assert_cmpfloat(dab_view_number(&a->dab,"frequency"),==,5700001250.0);
         g_assert_cmpstr(dab_view_text(&a->dab,"channel"),==,"free");
         power_clicked(NULL,a);++phase;
@@ -297,8 +297,14 @@ static gboolean exercise_dab(gpointer data) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_lo_box),FALSE);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_mixer_box),FALSE);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_profile_box),0);
-    // The Python harness replaces [paths] sdr with an IQ generator before launch.
-    char *source=setting(a,"paths","sdr");g_assert_true(g_str_has_suffix(source,"fake-dab-source"));g_free(source);
+    // The harness replaces [paths] sdr with an IQ generator before launch.
+    char *source=setting(a,"paths","sdr");
+#ifdef _WIN32
+    g_assert_true(g_str_has_suffix(source,"dab_fake_source.exe"));
+#else
+    g_assert_true(g_str_has_suffix(source,"fake-dab-source"));
+#endif
+    g_free(source);
     power_clicked(NULL,a);
     g_timeout_add(50,exercise_dab_lifecycle,a);return G_SOURCE_REMOVE;
 }

@@ -18,6 +18,12 @@
 #include <utility>
 #include <vector>
 #include <time.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace dect2::prof {
 
@@ -40,11 +46,19 @@ inline Stage::Stage(const char* n) : name(n) {
 inline bool stageProfEnabled() { return stageFlag().load(std::memory_order_relaxed) != 0; }
 inline void stageProfEnable(bool on) { stageFlag().store(on ? 1 : 0); }
 inline uint64_t threadCpuNs() {
-#if defined(CLOCK_THREAD_CPUTIME_ID) && !defined(_WIN32)
+#if defined(_WIN32)
+    FILETIME created, exited, kernel, user;
+    if (GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) {
+        const uint64_t k = (uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
+        const uint64_t u = (uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime;
+        return (k + u) * 100; // Windows reports thread CPU time in 100 ns units.
+    }
+    return 0; // unavailable; never mix a wall clock with thread CPU accounting
+#elif defined(CLOCK_THREAD_CPUTIME_ID)
     timespec ts;
     clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
-#else   // no per-thread CPU clock (Windows): wall time, only meaningful on an idle machine
+#else   // no per-thread CPU clock: wall time, only meaningful on an idle machine
     return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 #endif
 }

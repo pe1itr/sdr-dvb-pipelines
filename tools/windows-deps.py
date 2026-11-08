@@ -16,7 +16,7 @@ import urllib.request
 
 BASE = "https://repo.msys2.org/mingw/ucrt64/"
 PREFIX = "mingw-w64-ucrt-x86_64-"
-ROOTS = "gtk3 json-c fftw libsamplerate ffmpeg vlc zvbi soapysdr soapyhackrf soapyrtlsdr libuhd portaudio ttf-dejavu".split()
+ROOTS = "gtk3 json-c fftw libsamplerate ffmpeg vlc zvbi soapysdr soapyhackrf soapyrtlsdr libuhd portaudio faad2 hidapi ttf-dejavu".split()
 
 
 def fetch(url, path, checksum=None):

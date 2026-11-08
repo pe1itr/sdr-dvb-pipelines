@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "iq_file.h"
+#include <glib/gstdio.h>
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
 #include "tune_control.h"
@@ -65,6 +66,9 @@ static gboolean output(Replay *r, const uint8_t *buf, size_t length) {
     return TRUE;
 }
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    argv=g_win32_get_command_line();
+#endif
     char *path=NULL, *format=NULL;
     int header=0; Replay r={0};
     GOptionEntry entries[]={
@@ -78,13 +82,18 @@ int main(int argc, char **argv) {
     GOptionContext *options=g_option_context_new("- Play an IQ file to stdout in real time");
     g_option_context_add_main_entries(options,entries,NULL);
     GError *error=NULL; guint64 samples=0;
+#ifdef _WIN32
+    if (!g_option_context_parse_strv(options,&argv,&error)) goto invalid;
+    argc=(int)g_strv_length(argv);
+#else
     if (!g_option_context_parse(options,&argc,&argv,&error)) goto invalid;
+#endif
     if (!format) format=g_strdup("s16");
     if (argc!=1 || !path || r.rate<1 || r.rate>100000000 || !iq_bandfilter_valid(r.rate,r.bandwidth)) {
         g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Invalid file, sample rate or bandwidth"); goto invalid;
     }
     if (!iq_file_validate(path,format,header,&samples,&error)) goto invalid;
-    FILE *file=fopen(path,"rb");
+    FILE *file=g_fopen(path,"rb");
     if (!file || fseeko(file,header,SEEK_SET)) { perror("Open IQ file"); if (file) fclose(file); return 1; }
     struct sigaction sa={.sa_handler=stop_signal}; sigemptyset(&sa.sa_mask);
     sigaction(SIGINT,&sa,NULL); sigaction(SIGTERM,&sa,NULL); signal(SIGPIPE,SIG_IGN);

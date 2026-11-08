@@ -39,7 +39,7 @@
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
-       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_FILE = 12 };
+       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13 };
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -119,8 +119,8 @@ static gboolean valid_fec(App *a, int fec) {
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "rsp1a", "rsp1b", "airspyhf", "airspyr2", "file"};
-static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "File (IQ)"};
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "rsp1a", "rsp1b", "airspyhf", "airspyr2", "pluto", "file"};
+static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP, RENDER_SRT };
@@ -208,9 +208,6 @@ static double receiver_offset(App *a) {
 static double channel_bandwidth(App *a) { return a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
 static const char *receiver_offset_problem(App *a) {
     if (a->standard == 4) {
-#ifdef _WIN32
-        return "DAB reception currently requires the Linux DAB worker.";
-#endif
         char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
         int index=dab_channel_index(name);g_free(name);
         if (!dab_free_tuning(a) && index<0) return "DAB: unknown Band III channel in [dab] channel.";
@@ -399,8 +396,8 @@ static void build_pipeline(App *a) {
     if (a->window) add(s, "--control-stdin");
     } else {
         const char *section = sources[a->source];
-        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
-                                      a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
+        sample_rate = integer_setting(a, section, "sample_rate", a->source == SOURCE_PLUTO ? 2083334 : a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : 2000000,
+                                      a->source == SOURCE_PLUTO ? 61440000 : a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : 61440000);
         if (a->source == SOURCE_RTLSDR && !rtlsdr_rate_valid(sample_rate)) fatal("Invalid RTL-SDR sample rate: %d", sample_rate);
         if (a->source == 3 && !sdriq_rate_valid(sample_rate)) fatal("Invalid SDR-IQ sample rate: %d", sample_rate);
         g_free(format); format = setting(a, section, "format");
@@ -714,6 +711,9 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
         if (n > 0) {
             buf[n] = 0;
             if (a->headless) fwrite(buf,1,(size_t)n,stderr);
+#ifdef _WIN32
+            if (!a->headless && g_getenv("LINRAD_DIAGNOSTIC_LOG")) {fwrite(buf,1,(size_t)n,stderr);fflush(stderr);}
+#endif
             log_text(a, buf); record_log(a, buf, n); continue;
         }
         if (n < 0 && errno == EINTR) continue;
@@ -873,9 +873,20 @@ static void child_exit(GPid pid, gint result, gpointer data) {
             break;
         }
         if (!a->stopping) {
+#ifdef _WIN32
+            const char *reason=(guint32)result==0xc0000005u ? "memory access violation" :
+                (guint32)result==0xc0000135u ? "required DLL missing" :
+                (guint32)result==0xc0000139u ? "DLL entry point missing / incompatible DLL" :
+                (guint32)result==0xc000007bu ? "invalid DLL format (32/64-bit mismatch)" :
+                (guint32)result==0xc00000fdu ? "stack overflow" :
+                (guint32)result==0xc000001du ? "unsupported CPU instruction" : "see receiver log";
+            char *message=g_strdup_printf("%s stopped: %d (0x%08X; %s).", (char *)a->stages[i].args->pdata[0], result, (guint32)result, reason);
+            log_text(a,message);log_text(a,"\n");
+#else
             char *message = g_strdup_printf("%s stopped (%s %d); stopping the entire pipeline.",
                 (char *)a->stages[i].args->pdata[0], WIFEXITED(result) ? "exit code" : "signal",
                 WIFEXITED(result) ? WEXITSTATUS(result) : WTERMSIG(result));
+#endif
             a->exit_code = 1; status(a, message); g_free(message); stop_pipeline(a);
         }
         break;
@@ -1221,7 +1232,7 @@ static void gain_step(App *a, int direction) {
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
     double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
     double low = rx_rsp(section) ? 20 : a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
-    double high = a->source == SOURCE_AIRSPYR2 ? 45 : rx_rsp(section) ? 59 : a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    double high = a->source == SOURCE_PLUTO ? (g_key_file_get_double(a->config,section,"frequency",NULL)<=1300000000 ? 73 : g_key_file_get_double(a->config,section,"frequency",NULL)<=4000000000 ? 71 : 62) : a->source == SOURCE_AIRSPYR2 ? 45 : rx_rsp(section) ? 59 : a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
     if (a->source == SOURCE_RTLSDR) next = CLAMP(next, low, high);
     if (next == gain || next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
@@ -1932,8 +1943,8 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),
             rx_frequency_min(section)/1000.0, rx_frequency_max(section)/1000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
-        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
-                                  a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
+        gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_PLUTO ? 2083334 : a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
+                                  a->source == SOURCE_PLUTO ? 61440000 : a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),
             integer_setting(a, section, "sample_rate", 1, 100000000));
         if (a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2) {
@@ -2111,7 +2122,7 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
             g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
             double minimum=a->source==2 ? 4000000 : 2048000;
             if (g_key_file_get_double(a->config,section,"sample_rate",NULL)<minimum)
-                g_key_file_set_double(a->config,section,"sample_rate",a->source==2 ? 4096000 : a->source==SOURCE_AIRSPYR2 ? 2500000 : 2048000);
+                g_key_file_set_double(a->config,section,"sample_rate",(a->source==2 || a->source==SOURCE_PLUTO) ? 4096000 : a->source==SOURCE_AIRSPYR2 ? 2500000 : 2048000);
         }
         tuning_refresh(a);
     }
@@ -2286,7 +2297,13 @@ static void source_defaults(App *a) {
     if (!g_key_file_has_key(a->config,"paths","dab",NULL)) {
         char *exe=g_file_read_link("/proc/self/exe",NULL);
         char *dir=exe ? g_path_get_dirname(exe) : g_strdup("build");
-        char *worker=g_build_filename(dir,"dab_worker",NULL);
+        char *worker=g_build_filename(dir,
+#ifdef _WIN32
+            "dab_worker.exe",
+#else
+            "dab_worker",
+#endif
+            NULL);
         g_key_file_set_string(a->config,"paths","dab",worker);g_free(worker);g_free(dir);g_free(exe);
     }
     if (!g_key_file_has_key(a->config,"dvbt2","plp",NULL))
@@ -2329,6 +2346,7 @@ static void source_defaults(App *a) {
     const char *values[] = {"10000000", "437000000", "30", "", "", "TX/RX", "s16"};
     const char *sdriq_values[] = {"111111", "28000000", "10", "driver=rfspace,sdr-iq=/dev/ttyUSB0", "", "", "s16"};
     const char *rtlsdr_values[] = {"2400000", "437000000", "30", "driver=rtlsdr", "", "RX", "u8"};
+    const char *pluto_values[] = {"4096000", "437000000", "30", "", "", "A_BALANCED", "s16"};
     const char *lime_values[] = {"10000000", "437000000", "30", "", "", "AUTO", "s16"};
     const char *funcube_values[] = {"192000", "437000000", "20", "lna=1,mixer=1", "", "", "s16"};
     const char *rsp_values[] = {"2000000", "144600000", "40", "driver=sdrplay", "", "", "s16"};
@@ -2343,7 +2361,7 @@ static void source_defaults(App *a) {
     for (int j = 1; j < SOURCE_FILE; ++j)
         for (int i = 0; i < 7; ++i)
             if (!g_key_file_has_key(a->config, sources[j], keys[i], NULL))
-                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_AIRSPYR2 ? airspyr2_values[i] : j == SOURCE_AIRSPYHF ? airspyhf_values[i] : rx_rsp(sources[j]) ? rsp_values[i] : j == SOURCE_LIME ? lime_values[i] : j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
+                g_key_file_set_string(a->config, sources[j], keys[i], j == SOURCE_PLUTO ? pluto_values[i] : j == SOURCE_AIRSPYR2 ? airspyr2_values[i] : j == SOURCE_AIRSPYHF ? airspyhf_values[i] : rx_rsp(sources[j]) ? rsp_values[i] : j == SOURCE_LIME ? lime_values[i] : j == SOURCE_FCDPP ? funcube_values[i] : j == SOURCE_RTLSDR ? rtlsdr_values[i] : j == SOURCE_AFEDRI ? afedri_values[i] : j == 3 ? sdriq_values[i] : i == 6 && j == 1 ? "u8" : values[i]);
     for (int j = 1; j < SOURCE_FILE; ++j) {
         if (!g_key_file_has_key(a->config,sources[j],"receiver_offset",NULL))
             g_key_file_set_double(a->config,sources[j],"receiver_offset",0);
@@ -2626,7 +2644,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "DAB+ audio, station selection, MOT slideshow, constellation and ensemble information, "
         "country identification and TII reception logging. Normal, weak-signal and aircraft-scatter "
         "profiles, free-frequency tuning and the B210 fixed-IF / LO-output option are available. "
-        "DAB+ audio requires a build with FAAD2 and ALSA support.",NULL);
+        "DAB+ audio requires FAAD2 and an audio output backend.",NULL);
     about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
         "elements in static test patterns from fragments of the received "
         "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
@@ -2814,10 +2832,11 @@ static void create_config(App *a) {
             const char *labels[] = {"Device arguments", "UHD images (B210)", "Antenna"};
             const char *net_keys[] = {"ip", "port", "bind"};
             const char *net_labels[] = {"Afedri IP address", "TCP / UDP port", "UDP bind address"};
-            for (int field=0; field<((source == SOURCE_FCDPP || source == SOURCE_AIRSPYHF || source == SOURCE_AIRSPYR2 || rx_rsp(sources[source])) ? 1 : 3); ++field) {
+            for (int field=0; field<((source == SOURCE_PLUTO || source == SOURCE_FCDPP || source == SOURCE_AIRSPYHF || source == SOURCE_AIRSPYR2 || rx_rsp(sources[source])) ? 1 : 3); ++field) {
                 if (source == SOURCE_LIME && field == 1) continue;
-                GtkWidget *entry = entry_field(grid, source == SOURCE_AFEDRI ? net_labels[field] : labels[field],
+                GtkWidget *entry = entry_field(grid, source == SOURCE_PLUTO ? "Pluto URI (empty = USB auto)" : source == SOURCE_AFEDRI ? net_labels[field] : labels[field],
                     field, a, sources[source], source == SOURCE_AFEDRI ? net_keys[field] : keys[field]);
+                if (source == SOURCE_PLUTO) gtk_widget_set_tooltip_text(entry,"Pluto / PlutoSky, native libiio RX1, as in atv-receiver-analog. Empty: automatic USB selection; or usb:... / ip:192.168.2.1. Requires the Pluto Windows USB driver for USB access.");
                 if (source == SOURCE_LIME) gtk_widget_set_tooltip_text(entry, field == 0 ? "Empty for a single device, or serial=SERIAL to select a Mini. Native LimeSuite RX channel 0." : "AUTO switches LNAW below 2 GHz / LNAH from 2 GHz; or select LNAW or LNAH explicitly.");
                 if (source == SOURCE_FCDPP) gtk_widget_set_tooltip_text(entry, "Optional: hid=/dev/hidrawN,lna=0|1,mixer=0|1. Gain arrows set IF gain (0..59 dB). If the spectrum collapses at high IF gain, reduce IF gain or try lna=1,mixer=0 while stopped. The usable gain depends on the mixer setting and input signal.");
                 if (source == SOURCE_AIRSPYR2) gtk_widget_set_tooltip_text(entry,"SoapyAirspy + libairspy. Optional serial=HEX selects a device. 24..1700 MHz; 10 MS/s or experimental 2.5 MS/s. Gain setting 0..45 distributes LNA/MIX/VGA steps; not calibrated dB. Bias tee off by default.");
@@ -3843,6 +3862,9 @@ static char *network_status(gpointer data) {
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    argv=g_win32_get_command_line();
+#endif
     if (argc > 1 && !strcmp(argv[1], "--srt-worker"))
         return srt_output_main(argc-1, argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr"))
@@ -3866,7 +3888,7 @@ int main(int argc, char **argv) {
         {"rtlsdr-serial",0,0,G_OPTION_ARG_STRING,&rtlsdr_serial,"Select RTL-SDR by USB serial number (implies --source rtlsdr)","SERIAL"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2 or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2, pluto or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
@@ -3889,7 +3911,12 @@ int main(int argc, char **argv) {
         "Bundled LDPC helper: ldpc_tool --help / --version");
     g_option_context_add_main_entries(context, entries, NULL);
     GError *error = NULL;
+#ifdef _WIN32
+    if (!g_option_context_parse_strv(context, &argv, &error)) fatal("%s", error->message);
+    argc=(int)g_strv_length(argv);
+#else
     if (!g_option_context_parse(context, &argc, &argv, &error)) fatal("%s", error->message);
+#endif
     if (argc != 1 || (print && run)) fatal("Invalid arguments; see --help");
     if (!config) {
         char *exe = g_file_read_link("/proc/self/exe", &error);
@@ -3897,6 +3924,17 @@ int main(int argc, char **argv) {
         char *dir = g_path_get_dirname(exe);
 #ifdef _WIN32
         config = g_build_filename(dir, "linrad-dvb.ini", NULL);
+        /* Updates ship only the example, preserving the user's active INI.
+         * Copy without overwrite: another simultaneous first start is safe. */
+        if (!g_file_test(config, G_FILE_TEST_EXISTS)) {
+            char *example = g_build_filename(dir, "linrad-dvb.example.ini", NULL);
+            GFile *from = g_file_new_for_path(example), *to = g_file_new_for_path(config);
+            if (!g_file_copy(from, to, G_FILE_COPY_NONE, NULL, NULL, NULL, &error) &&
+                !g_error_matches(error, G_IO_ERROR, G_IO_ERROR_EXISTS))
+                fatal("Cannot create %s: %s", config, error->message);
+            g_clear_error(&error);
+            g_object_unref(from); g_object_unref(to); g_free(example);
+        }
 #else
         config = g_build_filename(dir, "..", "linrad-dvb.ini", NULL);
 #endif

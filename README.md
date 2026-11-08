@@ -64,14 +64,14 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 
 Linux input profiles cover HackRF One, USRP B210, RFspace SDR-IQ, AFEDRI Net,
 RTL-SDR, FUNcube Pro+, LimeSDR Mini v1.2, SDRplay RSP1A/RSP1B, Airspy R2 and
-Airspy HF+ Dual Port (VHF). Available receive modes depend on the device's
+Airspy HF+ Dual Port (VHF), and Pluto / PlutoSky RX1 via native libiio. Available receive modes depend on the device's
 frequency range and sample rate; some integrations still need live hardware
 validation. See [receiver setup and test status](docs/receivers.md).
 
 The complete receiver is supported on Linux. DVB-T2 is limited to the supported
 8 MHz broadcast modes; DAB audio supports DAB+ with EEP-A/B protection. The
-[Windows port](docs/windows.md) is experimental, does not yet enable DAB reception
-and has a more limited hardware set. See [decoder details](docs/decoders.md) and
+[Windows port](docs/windows.md) includes DAB+, direct FUNcube Pro+, LimeSDR Mini and Pluto / PlutoSky RX1
+support; native hardware/drivers still require Windows validation. See [decoder details](docs/decoders.md) and
 [DAB limitations](components/dab/README.md) before choosing a receive mode.
 
 For GPU video playback, select **Renderer → Embedded player** and click

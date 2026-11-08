@@ -5,19 +5,22 @@ Run on the Linux cross-build host with Wine and the existing leandvbtx fixture.
 No receiver hardware is opened.
 """
 import configparser
+import json
 import os
 from pathlib import Path
 import random
+import shutil
 import socket
 import struct
 import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = Path(os.getenv("LINRAD_WINDOWS_PACKAGE", ROOT / "build/linrad_dvb-windows-x64")).resolve()
-ENV = dict(os.environ, WINEDEBUG="-all", WINEPREFIX=str(ROOT / "build/wine-windows"))
+ENV = dict(os.environ, LINRAD_DIAGNOSTIC_LOG="1", WINEDEBUG="-all", WINEPREFIX=str(ROOT / "build/wine-windows"))
 
 
 def windows_path(path):
@@ -40,6 +43,140 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_default_config_created_once_and_preserved(self):
+        personal_b210 = (PACKAGE / "uhd-images/kintex7").exists()
+        with tempfile.TemporaryDirectory(prefix="Windows config é ", dir=ROOT / "build") as tmp:
+            isolated = Path(tmp)
+            for source in PACKAGE.iterdir():
+                if source.suffix.lower() in (".exe", ".dll"):
+                    os.link(source, isolated / source.name)
+            example = isolated / "linrad-dvb.example.ini"
+            shutil.copy2(PACKAGE / example.name, example)
+            config = isolated / "linrad-dvb.ini"
+            with patch(__name__ + ".PACKAGE", isolated):
+                p = run("linrad_dvb", "--source", "b210", "--standard", "DVB-T2", "--print-pipeline")
+                self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+                self.assertEqual(config.read_bytes(), example.read_bytes())
+                settings = configparser.ConfigParser(interpolation=None)
+                settings.read(config)
+                if personal_b210:
+                    self.assertEqual(settings["b210"]["args"], "type=b200")
+                settings["b210"]["args"] = "type=b200,serial=keep-me"
+                settings["status"].update(enabled="true", bind="0.0.0.0", port="8877")
+                with config.open("w") as f:
+                    settings.write(f)
+                saved = config.read_bytes()
+                example.write_text("[changed-template]\nvalue=must-not-replace-settings\n")
+                p = run("linrad_dvb", "--source", "b210", "--standard", "DVB-T2", "--print-pipeline")
+                self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+                self.assertIn(b"type=b200,serial=keep-me", p.stdout)
+                self.assertEqual(config.read_bytes(), saved)
+                missing = isolated / "explicit-missing.ini"
+                p = run("linrad_dvb", "-c", windows_path(missing), "--print-pipeline")
+                self.assertNotEqual(p.returncode, 0)
+                self.assertFalse(missing.exists())
+
+    def test_snapshot_contention(self):
+        with tempfile.TemporaryDirectory(prefix="Windows snapshot é 日 ", dir=ROOT / "build") as tmp:
+            p = run("windows_snapshot", windows_path(tmp))
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
+    def test_pluto_backend(self):
+        p = run("test_pluto_rx")
+        self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
+    def test_lime_backend(self):
+        p = run("test_lime_rx")
+        self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
+    def test_dab_input_profiles(self):
+        with tempfile.TemporaryDirectory(prefix="Windows DAB profiles ", dir=ROOT / "build") as tmp:
+            for source, rate in (("pluto", 4096000), ("b210", 4096000), ("rtlsdr", 2048000), ("hackrf", 8000000)):
+                with self.subTest(source=source):
+                    cfg = configparser.ConfigParser(interpolation=None)
+                    cfg.read(PACKAGE / "linrad-dvb.example.ini")
+                    cfg[source].update(sample_rate=str(rate), receiver_offset="0", lo_offset="0", filter_enabled="false")
+                    cfg["dab"].update(channel="11C", profile="weak")
+                    config = Path(tmp) / "receiver.ini"
+                    with config.open("w") as f:
+                        cfg.write(f)
+                    p = run("linrad_dvb", "-c", windows_path(config), "--source", source,
+                            "--standard", "DAB", "--print-pipeline")
+                    self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+                    self.assertIn(b"dab_worker.exe", p.stdout)
+                    self.assertIn(b"'--channel' '11C'", p.stdout)
+                    self.assertEqual(p.stdout.count(f"'--sample-rate' '{rate}'".encode()), 2)
+
+    @unittest.skipUnless(os.getenv("LINRAD_WINDOWS_GUI_TEST"), "Set LINRAD_WINDOWS_GUI_TEST=1 for audio checks")
+    def test_media_plugins_and_audio(self):
+        with tempfile.TemporaryDirectory(prefix="Windows media ", dir=ROOT / "build") as tmp:
+            p = run("windows_media", windows_path(tmp), timeout=90)
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
+    @unittest.skipUnless(os.getenv("LINRAD_WINDOWS_GUI_TEST"), "Set LINRAD_WINDOWS_GUI_TEST=1 for GUI checks")
+    def test_dab_gui_lifecycle(self):
+        with tempfile.TemporaryDirectory(prefix="Windows DAB GUI ", dir=ROOT / "build") as tmp:
+            cfg = configparser.ConfigParser(interpolation=None)
+            cfg.read(PACKAGE / "linrad-dvb.example.ini")
+            cfg["paths"]["sdr"] = windows_path(PACKAGE / "dab_fake_source.exe").replace("\\", "/")
+            cfg["paths"]["dab"] = windows_path(PACKAGE / "dab_worker.exe").replace("\\", "/")
+            cfg["b210"]["sample_rate"] = "4096000"
+            config = Path(tmp) / "receiver.ini"
+            with config.open("w") as f:
+                cfg.write(f)
+            p = run("dab_gui_smoke", windows_path(config), timeout=90)
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+            self.assertNotIn(b"CRITICAL", p.stderr)
+
+    def test_dab_core(self):
+        for name in "dx_msc dx_pad stream_acquisition libdxdabsdr_tii_synthetic fic_identity_accumulator channel_filter mot_slideshow dynamic_label dab_plus_radio".split():
+            with self.subTest(name=name):
+                p = run("dab_test_" + name, timeout=180)
+                self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+
+    def test_dab_worker_and_pipeline(self):
+        with tempfile.TemporaryDirectory(prefix="Windows DAB é 日 ", dir=ROOT / "build") as tmp:
+            tmp = Path(tmp)
+            iq = tmp / "silence.iq"
+            iq.write_bytes(bytes(196608 * 4 * 3))
+            p = run("dab_worker", "--state-dir", windows_path(tmp), "--frequency", "5700000123",
+                    "--no-audio", data=iq.read_bytes(), timeout=90)
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+            state = json.loads((tmp / "state.json").read_text())
+            self.assertEqual(state["radio_available"], 1)
+            self.assertEqual(state["frequency"], 5700000123)
+            self.assertEqual(state["input_samples"], 196608 * 3)
+            self.assertFalse(state["error"])
+            cfg = configparser.ConfigParser(interpolation=None)
+            cfg.read(PACKAGE / "linrad-dvb.example.ini")
+            cfg["file"].update(path=windows_path(iq).replace("\\", "/"), sample_rate="2048000", input_format="s16", header_bytes="0")
+            for key, name in [("iq_file", "iq_file_to_stdout"), ("dab", "dab_worker")]:
+                cfg["paths"][key] = windows_path(PACKAGE / (name + ".exe")).replace("\\", "/")
+            cfg["dab"]["channel"] = "9C"
+            config = tmp / "receiver.ini"
+            with config.open("w") as f:
+                cfg.write(f)
+            for mode in ("--print-pipeline", "--headless"):
+                p = run("linrad_dvb", "-c", windows_path(config), "--source", "file",
+                        "--standard", "DAB", mode, timeout=90)
+                self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+                if mode == "--print-pipeline":
+                    self.assertIn(b"dab_worker.exe", p.stdout)
+
+    def test_dab_recorded_audio(self):
+        directory = Path(os.environ.get("DAB_FIXTURE_DIR", ROOT / "tests/fixtures/dab"))
+        fixture = directory / "live-tii-phase-11c-4s.s16le.iq"
+        if not fixture.exists():
+            self.skipTest("Set DAB_FIXTURE_DIR to the recorded DAB fixtures")
+        with tempfile.TemporaryDirectory(prefix="Windows DAB audio ", dir=ROOT / "build") as tmp:
+            p = run("dab_worker", "--state-dir", windows_path(tmp), "--channel", "11C",
+                    "--no-audio", data=fixture.read_bytes(), timeout=180)
+            self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
+            state = json.loads((Path(tmp) / "state.json").read_text())
+            self.assertGreater(state["audio_frames"], 0, state)
+            self.assertGreater(len(state["services"]), 0, state)
+            self.assertFalse(state["error"])
+
     def test_thread_local_cleanup(self):
         p = run("windows_tls")
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
