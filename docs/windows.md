@@ -52,6 +52,17 @@ De externe speler `vlc.exe` wordt niet meegeleverd: de ingebouwde libVLC-speler
 wel. FFmpeg en FFplay zijn meegeleverd. De bestaande externe GPU-knop gebruikt
 CUDA/NVIDIA-instellingen en is geen algemene Windows-GPU-autodetectie.
 
+## Statusendpoint
+
+Via **Log → Status endpoint…** schakel je het endpoint voor alle modi direct
+aan of uit. Kies `0.0.0.0` als luisteradres voor toegang vanaf andere computers.
+Sluit het venster en druk **W** om de instelling voor volgende starts op te slaan.
+
+DAB-status gaat via een pipe naar de applicatie en is met
+`--status-port 8877 --status-bind 0.0.0.0` op `http://ONTVANGER-IP:8877/status` uit te lezen.
+De applicatie schrijft daarvoor geen `state.json`. De JSON bevat ook recente
+logmeldingen en fouten. Sta de TCP-poort toe in de Windows-firewall voor het
+privénetwerk; dit uitleesendpoint heeft geen authenticatie.
 ## Bouwen en packagen op Linux
 
 Vereist Python 3 met `pefile`, pkg-config, GNU tar/zstd, MinGW-w64 GCC/G++ met

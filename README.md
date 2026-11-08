@@ -197,19 +197,30 @@ beneath the image. **M** mutes audio. No substitute station image is fabricated
 when no slideshow is broadcast. DAB uses its own audio output; the DVB MPEG-TS
 renderer and TSscatterFix do not apply.
 
-DAB diagnostics remain available for analysis in the worker’s
-`state.json` (`/tmp/linrad-dab-*/state.json` during reception), without extra
-rows in the main window. These include **IQ queue / IQ peak** in milliseconds
+DAB diagnostics are available through the receiver’s HTTP `/status` endpoint
+(see below), without extra rows in the main window. The application receives
+worker snapshots through a pipe and keeps them in memory; it does not write a
+status JSON file. These include **IQ queue / IQ peak** in milliseconds
 (2000 ms capacity), **Audio queue / Audio peak** in encoded frames (64-frame
 capacity), **Audio drops**, **ALSA underruns**, **DX drops** and the last **DX time**
 in milliseconds. Peaks and loss counters reset on channel change, and persist
 across station changes. IQ drops count discarded radio IQ blocks; DX drops count
 complete pending identification captures replaced under load. ALSA underruns
 count playback EPIPE errors before recovery, including possible resume-after-mute
-events; they are unavailable with audio output disabled. Queue values exclude
+events; they are unavailable with audio output disabled. DAB playback requests a
+300 ms device buffer to absorb burst delivery of decoded superframes, at the
+cost of additional audio latency.
+
+The endpoint also reports `rejected_superframe_candidates` (failed sliding
+synchronization candidates, not a count of missing audio frames),
+`damaged_audio_units` (audio CRC failures), `aac_decode_errors` (FAAD2 errors)
+and `concealed_audio_frames` (access units replaced by a short fade to silence).
+These counters also reset on channel change. They distinguish received or
+decoded audio damage from output underruns; `dropped_audio` only counts overflow
+of the encoded audio queue. Queue values exclude
 work in progress, source/USB buffers and the sound device's playback buffer.
-Unavailable measurements are omitted or null; check the file modification time
-before treating a snapshot as live.
+Unavailable measurements are omitted or null; check `telemetry_fresh` and
+`telemetry_age_ms` before treating a snapshot as live.
 The **Capture** percentage remains the progress of the eight-second identification
 recording for short signal openings/scatter, not a queue-fill measurement.
 Its length and analysis frequency are unchanged; compare DX time with the
@@ -233,6 +244,48 @@ For DAB outside the Band III channel grid, open **Mode**, check **Free
 frequency**, and enter the frequency in MHz. Uncheck it to use the channel
 list again. During reception, left/right tunes by the SDR tuning step in free
 mode. The receiver's hardware range and DAB sample-rate requirements still apply.
+
+### Network diagnostics
+
+Open **Log → Status endpoint…** to switch the endpoint on or off immediately,
+for any receiver mode. Set the listen address to `0.0.0.0` for access from other
+computers, or `127.0.0.1` for local access. The default port is `8877`. Switch the
+endpoint off before changing its address or port. Close the dialog and press
+**W** in the main window to save the setting for the next start.
+
+Enable network diagnostics on Linux or Windows with:
+
+```sh
+linrad_dvb --status-bind 0.0.0.0 --status-port 8877
+```
+
+Read `http://RECEIVER-IP:8877/status` in a browser, with `curl`, or from PowerShell:
+
+```powershell
+Invoke-RestMethod http://RECEIVER-IP:8877/status | ConvertTo-Json -Depth 12
+```
+
+Alternatively configure `[status]` with `enabled=true`, `bind=0.0.0.0` and
+`port=8877`. Without configuration the endpoint is disabled; the default bind
+address is `127.0.0.1`. `--status-port 0` disables a saved setting. On Windows,
+allow the chosen TCP port through the firewall for the private network.
+This is an unauthenticated, read-only diagnostic endpoint for a trusted LAN.
+
+The versioned JSON response contains `state`, `message`, `exit_code`, source,
+standard, stage activity, `telemetry_age_ms`, `telemetry_fresh` and `recent_log`
+(the latest 64 KiB of pipeline messages and worker stderr). DAB measurements,
+including its `error` field, are under `dab`; DVB measurements and error counters
+are under `decoder`. Missing snapshots are null. A stopped or stale snapshot is
+marked `telemetry_fresh=false`; HTTP 200 means the status was retrieved, not that
+reception is healthy. The endpoint stays available when reception stops or fails
+in the GUI, until the application closes. With `--run`, it ends when the receiver
+process exits. Errors before application startup remain on stderr.
+
+Slow clients have a three-second deadline; at most sixteen connections are kept
+open. Requests never wait for new IQ or decoder data. The standalone `dab_worker`
+retains its legacy file output for existing scripts; `--status-stdout` selects the
+same newline-delimited JSON stream used by the application. Slideshow and tuning
+control files are separate from status and remain in use.
 
 ## Build and run
 

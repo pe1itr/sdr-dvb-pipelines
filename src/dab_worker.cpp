@@ -165,11 +165,12 @@ void scope_worker(Diagnostics& d) {
 
 int main(int argc,char **argv) {
     std::string directory, format="s16", channel="12C", profile="normal", device="default";
-    unsigned rate=2048000; bool audio=true, filter=false, explicit_channel=false, explicit_frequency=false;
+    unsigned rate=2048000; bool status_stdout=false, audio=true, filter=false, explicit_channel=false, explicit_frequency=false;
     std::string frequency;
     try {
         for (int i=1;i<argc;++i) {
             std::string arg=argv[i];
+            if (arg=="--status-stdout") {status_stdout=true;continue;}
             if (arg=="--no-audio") {audio=false;continue;}
             if (arg=="--channel-filter") {filter=true;continue;}
             if (i+1==argc) throw std::runtime_error("Missing value for "+arg);
@@ -274,6 +275,10 @@ int main(int argc,char **argv) {
             num(root,"audio_queue_capacity_frames",metrics.audio_capacity_frames);
             num(root,"dropped_audio",metrics.dropped_audio);
             num(root,"alsa_underruns",audio ? double(metrics.alsa_underruns) : NAN);
+            num(root,"rejected_superframe_candidates",metrics.rejected_superframe_candidates);
+            num(root,"damaged_audio_units",metrics.damaged_audio_units);
+            num(root,"aac_decode_errors",metrics.aac_decode_errors);
+            num(root,"concealed_audio_frames",metrics.concealed_audio_frames);
             auto *services=json_object_new_array();
             for (const auto& s:radio->services()) {
                 auto *item=json_object_new_object(); num(item,"id",s.service_id); str(item,"label",s.label);
@@ -323,7 +328,12 @@ int main(int argc,char **argv) {
                 json_object_object_add(root,"tii",items);
             }
             const char *json=json_object_to_json_string_ext(root,JSON_C_TO_STRING_PLAIN);
-            try {atomic_file(directory+"/state.json",json,strlen(json));} catch (...) {json_object_put(root);throw;}
+            try {
+                if (status_stdout) {
+                    if (std::fputs(json,stdout)==EOF || std::fputc('\n',stdout)==EOF || std::fflush(stdout))
+                        throw std::runtime_error("Cannot publish DAB status to parent");
+                } else atomic_file(directory+"/state.json",json,strlen(json));
+            } catch (...) {json_object_put(root);throw;}
             json_object_put(root);
         };
         while (!interrupted) {

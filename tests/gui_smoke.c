@@ -5,6 +5,39 @@
 #include "../src/tune_control.h"
 #include "../src/decoder_margin.h"
 
+static void exercise_status_endpoint(App *a) {
+    gtk_button_clicked(GTK_BUTTON(a->status_endpoint_item));
+    g_assert_true(gtk_widget_get_visible(a->status_endpoint_dialog));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled)));
+    gboolean running=a->running;
+    gtk_entry_set_text(GTK_ENTRY(a->status_endpoint_bind),"invalid-address");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),TRUE);
+    g_assert_null(a->status_http);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled)));
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->status_endpoint_message)),"Cannot start"));
+    GSocketListener *occupied=g_socket_listener_new();
+    guint16 port=g_socket_listener_add_any_inet_port(occupied,NULL,NULL);g_assert_cmpuint(port,>,0);
+    gtk_entry_set_text(GTK_ENTRY(a->status_endpoint_bind),"127.0.0.1");
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->status_endpoint_port),port);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),TRUE);
+    g_assert_null(a->status_http);
+    g_assert_false(g_key_file_get_boolean(a->config,"status","enabled",NULL));
+    g_socket_listener_close(occupied);g_object_unref(occupied);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),TRUE);
+    g_assert_nonnull(a->status_http);g_assert_cmpuint(status_http_port(a->status_http),==,port);
+    g_assert_true(g_key_file_get_boolean(a->config,"status","enabled",NULL));
+    g_assert_false(gtk_widget_get_sensitive(a->status_endpoint_port));
+    gtk_dialog_response(GTK_DIALOG(a->status_endpoint_dialog),GTK_RESPONSE_CLOSE);
+    gtk_button_clicked(GTK_BUTTON(a->status_endpoint_item));
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled)));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),FALSE);
+    g_assert_null(a->status_http);
+    g_assert_false(g_key_file_get_boolean(a->config,"status","enabled",NULL));
+    g_assert_true(gtk_widget_get_sensitive(a->status_endpoint_port));
+    g_assert_cmpint(a->running,==,running);
+    gtk_dialog_response(GTK_DIALOG(a->status_endpoint_dialog),GTK_RESPONSE_CLOSE);
+}
+
 static void exercise_signal_meter(App *a) {
     IQMonitorFrame frame={.magic=IQ_MONITOR_MAGIC,.rate=204800};
     for (int i=0; i<IQ_MONITOR_BINS; ++i) frame.power[i]=-120;
@@ -780,6 +813,7 @@ static void exercise_menu_clicks(App *a) {
         g_assert_false(gtk_widget_get_visible(dialog));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),FALSE);
     }
+    exercise_status_endpoint(a);
     /* A missing station should explain where to set it, without a stale result. */
     show_bearing(NULL,a);
     gtk_entry_set_text(GTK_ENTRY(a->bearing_target),"JO22QK");
@@ -1297,6 +1331,8 @@ static void exercise_programs(App *a, const TsInfoSnapshot *snapshot) {
 
 static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoSnapshot *snapshot) {
     App test=*a;
+    /* The fixture owns its diagnostic buffers, independently of the live app. */
+    test.status_message=NULL;test.status_log=NULL;test.status_http=NULL;
     test.config=g_key_file_new();
     g_key_file_set_string(test.config,"logging","my_callsign","PE1ITR/P");
     g_key_file_set_string(test.config,"logging","my_locator","JO21QK");
@@ -1401,6 +1437,8 @@ static void exercise_reception_log(App *a, TsInfoBackend *backend, const TsInfoS
     g_assert_true(g_file_get_contents(invalid,&contents,NULL,NULL));
     g_assert_cmpstr(contents,==,"unrelated data\n");
     g_free(contents); g_free(invalid); g_free(path); g_key_file_unref(test.config);
+    g_free(test.status_message);
+    if (test.status_log) g_string_free(test.status_log,TRUE);
 }
 
 static void exercise_information(App *a) {

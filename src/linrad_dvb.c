@@ -35,6 +35,7 @@
 #include "srt_output.h"
 #include "reception_log.h"
 #include "dab_view.h"
+#include "status_http.h"
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
@@ -43,6 +44,9 @@ enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
     GKeyFile *config;
+    StatusHttp *status_http;
+    GString *status_log;
+    char *status_message;
     char *config_path, *directory;
     int standard, sr, fec, gi, exit_code, source, constellation;
     GtkWidget *source_box, *rate_box, *sdriq_rate_box, *frequency_box, *format_box;
@@ -72,6 +76,8 @@ typedef struct {
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
     GtkWidget *record_button, *reception_button, *reception_dialog;
     GtkWidget *log_menu, *log_popover, *application_log_item;
+    GtkWidget *status_endpoint_item, *status_endpoint_dialog, *status_endpoint_enabled;
+    GtkWidget *status_endpoint_bind, *status_endpoint_port, *status_endpoint_message;
     GtkWidget *logbook_item, *logbook_dialog, *logbook_view, *logbook_message;
     GtkListStore *logbook_store;
     GtkWidget *my_station_item, *my_station_dialog, *my_callsign, *my_locator, *my_station_error;
@@ -439,7 +445,7 @@ static void build_pipeline(App *a) {
     }
     if (a->standard == 4) {
         s=new_stage(a,"dab");
-        add(s,"--state-dir");add(s,a->dab.directory);
+        add(s,"--state-dir");add(s,a->dab.directory);add(s,"--status-stdout");
         if (dab_free_tuning(a)) {
             add(s,"--frequency");g_ptr_array_add(s->args,g_strdup_printf("%.0f",dab_frequency(a)));
         } else {add(s,"--channel");add(s,dab_channels[dab_channel(a)].name);}
@@ -594,7 +600,20 @@ static char *describe(App *a) {
     return g_string_free(text, FALSE);
 }
 
+static void status_log_append(App *a,const char *text) {
+    if (!a->status_http && !a->window) return;
+    if (!a->status_log) a->status_log=g_string_new(NULL);
+    char *valid=g_utf8_make_valid(text,-1);
+    g_string_append(a->status_log,valid);g_free(valid);
+    if (a->status_log->len>65536) {
+        gsize cut=a->status_log->len-65536;
+        while ((a->status_log->str[cut]&0xc0)==0x80) ++cut;
+        g_string_erase(a->status_log,0,cut);
+    }
+}
 static void status(App *a, const char *message) {
+    g_free(a->status_message);a->status_message=g_utf8_make_valid(message,-1);
+    status_log_append(a,"[pipeline] ");status_log_append(a,message);status_log_append(a,"\n");
     fprintf(stderr, "[pipeline] %s\n", message);
     if (a->status) {
         gtk_label_set_text(GTK_LABEL(a->status), message);
@@ -603,6 +622,7 @@ static void status(App *a, const char *message) {
 }
 
 static void log_text(App *a, const char *text) {
+    status_log_append(a,text);
     if (!a->log) return;
     GtkTextBuffer *b = gtk_text_view_get_buffer(GTK_TEXT_VIEW(a->log));
     GtkTextIter end, start;
@@ -691,7 +711,11 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
     /* Bound each callback so continuous decoder logging cannot starve Stop. */
     for (int i = 0; i < 16; ++i) {
         n = read(fd, buf, sizeof(buf) - 1);
-        if (n > 0) { buf[n] = 0; log_text(a, buf); record_log(a, buf, n); continue; }
+        if (n > 0) {
+            buf[n] = 0;
+            if (a->headless) fwrite(buf,1,(size_t)n,stderr);
+            log_text(a, buf); record_log(a, buf, n); continue;
+        }
         if (n < 0 && errno == EINTR) continue;
         if (!n || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) { close(fd); return G_SOURCE_REMOVE; }
         break;
@@ -898,6 +922,7 @@ static void start_pipeline(App *a) {
         }
         g_free(found);
     }
+    int dab_pipe[2]={-1,-1};
     int pipes[2][2], scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
     if (a->standard != 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
@@ -919,7 +944,11 @@ static void start_pipeline(App *a) {
     if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (nullfd < 0) goto pipe_error;
-    if (!a->headless) {
+    if (a->standard==4) {
+        if (!g_unix_open_pipe(dab_pipe,FD_CLOEXEC,NULL)) goto pipe_error;
+        if (!g_unix_set_fd_nonblocking(dab_pipe[0],TRUE,NULL)) goto pipe_error;
+    }
+    if (!a->headless || a->status_http) {
         if (!g_unix_open_pipe(log_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(log_pipe[0], TRUE, NULL)) goto pipe_error;
     }
@@ -950,7 +979,7 @@ static void start_pipeline(App *a) {
             a->exit_code = 1; goto pipe_error;
         }
     }
-    if (a->window && !decoder_view_start(&a->decoder_view))
+    if ((a->window || a->status_http) && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decoder telemetry unavailable; reception continues.\n");
     a->running = TRUE;
     if (a->controls) {
@@ -964,7 +993,7 @@ static void start_pipeline(App *a) {
         int in = i == 0 ? nullfd : pipes[i - 1][0];
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
         int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
-        if (i == 1) out = a->standard==4 ? nullfd : scatter_pipe[1];
+        if (i == 1) out = a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
         GError *error = NULL; Stage *s = &a->stages[i];
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
@@ -982,7 +1011,7 @@ static void start_pipeline(App *a) {
         }
         gboolean spawned = g_spawn_async_with_fds(a->directory, (char **)s->args->pdata, env,
                 G_SPAWN_SEARCH_PATH | G_SPAWN_DO_NOT_REAP_CHILD, child_setup, NULL,
-                &s->pid, in, out, a->headless ? STDERR_FILENO : log_pipe[1], &error);
+                &s->pid, in, out, log_pipe[1]>=0 ? log_pipe[1] : STDERR_FILENO, &error);
         g_strfreev(env);
         if (!spawned) {
             a->exit_code = 1; status(a, error->message); g_clear_error(&error); stop_pipeline(a); break;
@@ -996,11 +1025,15 @@ static void start_pipeline(App *a) {
     if (tune_pipe[0] >= 0) close(tune_pipe[0]);
     if (a->stopping) { if (tune_pipe[1] >= 0) close(tune_pipe[1]); }
     else a->tune_fd = tune_pipe[1];
+    if (dab_pipe[1]>=0) close(dab_pipe[1]);
+    if (dab_pipe[0]>=0) dab_view_watch(&a->dab,dab_pipe[0]);
     if (log_pipe[1] >= 0) close(log_pipe[1]);
     if (log_pipe[0] >= 0) g_unix_fd_add(log_pipe[0], G_IO_IN | G_IO_HUP | G_IO_ERR, read_log, a);
     if (!a->stopping) status(a, a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
+    if (dab_pipe[0]>=0) close(dab_pipe[0]);
+    if (dab_pipe[1]>=0) close(dab_pipe[1]);
     if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
     if (a->video_view.area) video_view_stop(&a->video_view);
     if (output_fd >= 0) close(output_fd);
@@ -3023,10 +3056,91 @@ static void show_my_station(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->my_station_dialog));
 }
 
+static char *network_status(gpointer data);
+
+static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
+    App *a=data;
+    gboolean enabled=gtk_toggle_button_get_active(button);
+    char *message=NULL;
+    if (enabled) {
+        gtk_spin_button_update(GTK_SPIN_BUTTON(a->status_endpoint_port));
+        const char *bind=gtk_entry_get_text(GTK_ENTRY(a->status_endpoint_bind));
+        int port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->status_endpoint_port));
+        GError *error=NULL;
+        a->status_http=status_http_start(bind,port,network_status,a,&error);
+        if (!a->status_http) {
+            message=g_strdup_printf("Cannot start status endpoint: %s",error->message);
+            g_clear_error(&error);enabled=FALSE;
+            g_signal_handlers_block_by_func(button,status_endpoint_toggled,a);
+            gtk_toggle_button_set_active(button,FALSE);
+            g_signal_handlers_unblock_by_func(button,status_endpoint_toggled,a);
+        } else {
+            g_key_file_set_string(a->config,"status","bind",bind);
+            g_key_file_set_integer(a->config,"status","port",port);
+            if (!strcmp(bind,"0.0.0.0") || !strcmp(bind,"::"))
+                message=g_strdup_printf("Status endpoint active on port %d.\nOpen http://RECEIVER-IP:%d/status from another computer.",port,port);
+            else
+                message=g_strdup_printf("Status endpoint active: http://%s%s%s:%d/status",
+                    strchr(bind,':') ? "[" : "",bind,strchr(bind,':') ? "]" : "",port);
+        }
+    } else {
+        status_http_stop(a->status_http);a->status_http=NULL;
+        message=g_strdup("Status endpoint disabled");
+    }
+    g_key_file_set_boolean(a->config,"status","enabled",enabled);
+    gtk_widget_set_sensitive(a->status_endpoint_bind,!enabled);
+    gtk_widget_set_sensitive(a->status_endpoint_port,!enabled);
+    gtk_label_set_text(GTK_LABEL(a->status_endpoint_message),message);
+    status(a,message);g_free(message);
+}
+
+static void show_status_endpoint(GtkWidget *widget,gpointer data) {
+    (void)widget;App *a=data;
+    if (!a->status_endpoint_dialog) {
+        GtkWidget *grid;
+        a->status_endpoint_dialog=settings_dialog(a,"Status endpoint",&grid);
+        a->status_endpoint_enabled=gtk_check_button_new_with_label("Enable status endpoint");
+        gtk_grid_attach(GTK_GRID(grid),a->status_endpoint_enabled,0,0,2,1);
+        GtkWidget *label=gtk_label_new("Listen address");
+        gtk_widget_set_halign(label,GTK_ALIGN_START);gtk_grid_attach(GTK_GRID(grid),label,0,1,1,1);
+        a->status_endpoint_bind=gtk_entry_new();gtk_grid_attach(GTK_GRID(grid),a->status_endpoint_bind,1,1,1,1);
+        a->status_endpoint_port=spin(grid,"TCP port",2,1,65535,1);
+        char *bind=g_key_file_get_string(a->config,"status","bind",NULL);
+        int port=g_key_file_get_integer(a->config,"status","port",NULL);
+        gtk_entry_set_text(GTK_ENTRY(a->status_endpoint_bind),bind ? bind : "127.0.0.1");g_free(bind);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->status_endpoint_port),
+            a->status_http ? status_http_port(a->status_http) : port>0 && port<=65535 ? port : 8877);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),a->status_http!=NULL);
+        gtk_widget_set_sensitive(a->status_endpoint_bind,a->status_http==NULL);
+        gtk_widget_set_sensitive(a->status_endpoint_port,a->status_http==NULL);
+        GtkWidget *hint=gtk_label_new("All receiver modes · status, measurements and recent logs\n"
+            "0.0.0.0: other computers on your network; 127.0.0.1: this computer only.\n"
+            "Read-only, without authentication. Use on a trusted network.\n"
+            "Switch off to change address or port. Changes take effect immediately.\n"
+            "Press W in the main window to save for the next start.");
+        gtk_label_set_line_wrap(GTK_LABEL(hint),TRUE);gtk_label_set_max_width_chars(GTK_LABEL(hint),64);
+        gtk_label_set_xalign(GTK_LABEL(hint),0);gtk_grid_attach(GTK_GRID(grid),hint,0,3,2,1);
+        char *message=a->status_http ? g_strdup_printf("Status endpoint active on port %u · /status",status_http_port(a->status_http))
+            : g_strdup("Status endpoint disabled");
+        a->status_endpoint_message=gtk_label_new(message);g_free(message);
+        gtk_label_set_selectable(GTK_LABEL(a->status_endpoint_message),TRUE);
+        gtk_label_set_line_wrap(GTK_LABEL(a->status_endpoint_message),TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(a->status_endpoint_message),64);
+        gtk_label_set_xalign(GTK_LABEL(a->status_endpoint_message),0);
+        gtk_grid_attach(GTK_GRID(grid),a->status_endpoint_message,0,4,2,1);
+        g_signal_connect(a->status_endpoint_enabled,"toggled",G_CALLBACK(status_endpoint_toggled),a);
+        g_signal_connect(a->status_endpoint_dialog,"response",G_CALLBACK(hide_dialog),a);
+        g_signal_connect(a->status_endpoint_dialog,"delete-event",G_CALLBACK(hide_dialog_close),a);
+    }
+    gtk_widget_show_all(a->status_endpoint_dialog);
+    gtk_window_present(GTK_WINDOW(a->status_endpoint_dialog));
+}
+
 static void log_menu_selected(GtkWidget *widget, gpointer data) {
     App *a=data;
     gtk_popover_popdown(GTK_POPOVER(a->log_popover));
     if (widget==a->application_log_item) show_diagnostics(widget,a);
+    else if (widget==a->status_endpoint_item) show_status_endpoint(widget,a);
     else if (widget==a->my_station_item) show_my_station(widget,a);
     else if (widget==a->bearing_item) show_bearing(widget,a);
     else show_logbook(widget,a);
@@ -3400,7 +3514,7 @@ static void gui(App *a) {
     a->log_menu=gtk_menu_button_new();
     gtk_button_set_label(GTK_BUTTON(a->log_menu),"Log");
     gtk_box_pack_start(GTK_BOX(menu),a->log_menu,FALSE,FALSE,0);
-    gtk_widget_set_tooltip_text(a->log_menu,"Application log, RX log, My Station and Bearing");
+    gtk_widget_set_tooltip_text(a->log_menu,"Application log, status endpoint, RX log, My Station and Bearing");
     a->log_popover=gtk_popover_new(a->log_menu);
     GtkWidget *log_options=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
     gtk_container_set_border_width(GTK_CONTAINER(log_options),6);
@@ -3410,6 +3524,11 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(log_options),a->application_log_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->application_log_item,"Startup command and application messages · Alt+L");
     g_signal_connect(a->application_log_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    a->status_endpoint_item=gtk_model_button_new();
+    g_object_set(a->status_endpoint_item,"text","Status endpoint…",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->status_endpoint_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->status_endpoint_item,"Enable or disable HTTP status and logs for all receiver modes");
+    g_signal_connect(a->status_endpoint_item,"clicked",G_CALLBACK(log_menu_selected),a);
     a->logbook_item=gtk_model_button_new();
     g_object_set(a->logbook_item,"text","RX log",NULL);
     gtk_box_pack_start(GTK_BOX(log_options),a->logbook_item,FALSE,FALSE,0);
@@ -3629,6 +3748,7 @@ static void gui(App *a) {
     gtk_widget_destroy(a->mode_dialog);
     gtk_widget_destroy(a->renderer_dialog);
     gtk_widget_destroy(a->tci_dialog);
+    if (a->status_endpoint_dialog) gtk_widget_destroy(a->status_endpoint_dialog);
     gtk_widget_destroy(a->diagnostics_dialog);
     gtk_widget_destroy(a->config_dialog);
     dab_view_destroy(&a->dab);
@@ -3666,6 +3786,62 @@ static void load_session(App *a) {
     }
 }
 
+/* Main-context snapshot: no GTK access from network threads, no status files. */
+static json_object *status_number(double value) {
+    return isfinite(value) ? json_object_new_double(value) : NULL;
+}
+static char *network_status(gpointer data) {
+    App *a=data;json_object *root=json_object_new_object();
+#define STR(o,k,v) json_object_object_add(o,k,json_object_new_string(v))
+#define NUM(o,k,v) json_object_object_add(o,k,status_number(v))
+#define BOOL(o,k,v) json_object_object_add(o,k,json_object_new_boolean(v))
+    NUM(root,"schema_version",1);NUM(root,"updated_unix_ms",g_get_real_time()/1000);
+#ifdef _WIN32
+    STR(root,"platform","windows");
+#else
+    STR(root,"platform","linux");
+#endif
+    STR(root,"state",a->stopping ? "stopping" : a->exit_code ? "error" : a->running ? "running" : "stopped");
+    BOOL(root,"running",a->running);NUM(root,"exit_code",a->exit_code);
+    STR(root,"message",a->status_message ? a->status_message : "Ready");
+    STR(root,"standard",standards[a->standard]);STR(root,"source",sources[a->source]);NUM(root,"rate",a->sr);
+    gint64 stamp=a->standard==4 ? a->dab.snapshot_time : a->decoder_view.status_time;
+    double age=stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
+    NUM(root,"telemetry_age_ms",age);
+    BOOL(root,"telemetry_fresh",a->running && !a->stopping && isfinite(age) && age<2000);
+    if (a->standard==4) json_object_object_add(root,"dab",json_object_get(a->dab.snapshot));
+    else {
+        json_object *d=NULL;
+        if (stamp) {
+            d=json_object_new_object();DecoderStatus *v=&a->decoder_view.status;
+            NUM(d,"locks",v->locks);NUM(d,"lock_valid",v->lock_valid);
+            NUM(d,"snr_db",v->snr_db);NUM(d,"mer_db",v->mer_db);NUM(d,"cfo_hz",v->cfo_hz);
+            NUM(d,"rms_dbfs",v->rms_dbfs);NUM(d,"peak_dbfs",v->peak_dbfs);
+            NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
+            NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
+            NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
+            json_object_object_add(d,"input_dropped",json_object_new_uint64(v->input_dropped));
+            json_object_object_add(d,"fec_frames_dropped",json_object_new_uint64(v->fec_frames_dropped));
+            STR(d,"service",v->service);STR(d,"provider",v->provider);
+            STR(d,"modulation",v->modulation);STR(d,"fec",v->fec);STR(d,"guard",v->guard);
+            NUM(d,"plp_id",v->plp_id);
+        }
+        json_object_object_add(root,"decoder",d);
+    }
+    json_object *stages=json_object_new_array();
+    for (int i=0;i<a->stage_count;++i) {
+        json_object *stage=json_object_new_object();NUM(stage,"index",i);BOOL(stage,"running",a->stages[i].pid!=0);
+        json_object_array_add(stages,stage);
+    }
+    json_object_object_add(root,"stages",stages);
+    STR(root,"recent_log",a->status_log ? a->status_log->str : "");
+    char *result=g_strdup(json_object_to_json_string_ext(root,JSON_C_TO_STRING_PLAIN));json_object_put(root);
+#undef STR
+#undef NUM
+#undef BOOL
+    return result;
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--srt-worker"))
         return srt_output_main(argc-1, argv+1);
@@ -3679,8 +3855,12 @@ int main(int argc, char **argv) {
     char *source = NULL, *constellation = NULL, *renderer = NULL, *srt_url = NULL, *rtlsdr_serial = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
     gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE;
-    int sr = -1, plp = -2;
+    int sr = -1, plp = -2, status_port=-1;
+    char *status_bind=NULL;
+    a.decoder_view.fd=-1;
     GOptionEntry entries[] = {
+        {"status-port",0,0,G_OPTION_ARG_INT,&status_port,"Enable HTTP status endpoint on this TCP port (0 disables)","PORT"},
+        {"status-bind",0,0,G_OPTION_ARG_STRING,&status_bind,"HTTP status listen address (default 127.0.0.1)","IP"},
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, srt, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"srt-output",0,0,G_OPTION_ARG_STRING,&srt_url,"Select gated 1920x1080 H.264/AAC SRT caller output","URL"},
         {"rtlsdr-serial",0,0,G_OPTION_ARG_STRING,&rtlsdr_serial,"Select RTL-SDR by USB serial number (implies --source rtlsdr)","SERIAL"},
@@ -3789,6 +3969,19 @@ int main(int argc, char **argv) {
     if (!offset_problem) build_pipeline(&a);
     if (print) { char *text = describe(&a); puts(text); g_free(text); }
     else {
+        if (status_port < -1 || status_port > 65535) fatal("Invalid status port (0..65535)");
+        if (status_port==-1) status_port=g_key_file_get_boolean(a.config,"status","enabled",NULL)
+            ? integer_setting(&a,"status","port",1,65535) : 0;
+        if (!status_bind) status_bind=g_key_file_get_string(a.config,"status","bind",NULL);
+        if (!status_bind) status_bind=g_strdup("127.0.0.1");
+        if (status_port) {
+            a.status_http=status_http_start(status_bind,status_port,network_status,&a,&error);
+            if (!a.status_http) fatal("Cannot start status endpoint: %s",error->message);
+            fprintf(stderr,"[status] HTTP listening on %s port %d (/status)\n",status_bind,status_port);
+        }
+        g_key_file_set_boolean(a.config,"status","enabled",a.status_http!=NULL);
+        g_key_file_set_string(a.config,"status","bind",status_bind);
+        if (status_port) g_key_file_set_integer(a.config,"status","port",status_port);
         signal(SIGPIPE, SIG_IGN);
         guint sigint = g_unix_signal_add(SIGINT, exit_signal, &a), sigterm = g_unix_signal_add(SIGTERM, exit_signal, &a);
         if (run) {
@@ -3800,6 +3993,9 @@ int main(int argc, char **argv) {
         } else gui(&a);
         g_source_remove(sigint); g_source_remove(sigterm);
     }
+    status_http_stop(a.status_http);a.status_http=NULL;
+    g_free(status_bind);g_free(a.status_message);
+    if (a.status_log) g_string_free(a.status_log,TRUE);
     if (a.dab.directory) dab_view_destroy(&a.dab);
     clear_stages(&a); g_key_file_unref(a.config); g_free(a.config_path); g_free(a.directory);
     g_free(config); g_free(standard); g_free(fec); g_free(gi); g_option_context_free(context);

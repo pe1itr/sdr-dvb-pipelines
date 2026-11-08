@@ -27,6 +27,9 @@ struct DabPlusRadioMetrics {
     std::size_t iq_samples = 0, iq_peak_samples = 0, iq_capacity_samples = 0;
     std::size_t audio_frames = 0, audio_peak_frames = 0, audio_capacity_frames = 0;
     std::size_t dropped_iq = 0, dropped_audio = 0, alsa_underruns = 0;
+    // Candidate windows, access units and concealments; not PCM sample counts.
+    std::size_t rejected_superframe_candidates = 0, damaged_audio_units = 0;
+    std::size_t aac_decode_errors = 0, concealed_audio_frames = 0;
 };
 
 // Build the MPEG-4 AudioSpecificConfig required for one DAB+ access unit.

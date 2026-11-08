@@ -22,6 +22,10 @@ namespace dab
 namespace
 {
 constexpr std::size_t input_capacity = 4096000, audio_capacity = 64, block_size = 32768;
+// A 120 ms DAB+ superframe is assembled from 24 ms CIFs, delivered here in
+// 96 ms radio frames. Consecutive audio batches can therefore be 192 ms apart.
+// Keep room for that batching plus scheduling jitter (also after XRUN recovery).
+constexpr unsigned playback_latency_us = 300000;
 std::string lower(std::string s)
 {
     for (auto &c : s)
@@ -89,6 +93,8 @@ struct DabPlusRadioSession::Impl
     std::atomic<bool> stopping{false}, started{false}, muted{false}, synced{false};
     std::atomic<std::size_t> iq_drops{0}, audio_drops{0}, underruns{0}, decoded{0}, slides{0},
         service_generation{0};
+    std::atomic<std::size_t> rejected_superframes{0}, damaged_units{0},
+        aac_errors{0}, concealed_frames{0};
     std::atomic<std::uint64_t> generation{0};
     mutable std::mutex state_mutex, input_mutex, audio_mutex, error_mutex;
     std::condition_variable input_ready, audio_ready;
@@ -249,10 +255,16 @@ struct DabPlusRadioSession::Impl
             auto word = msc.push(f.msc.data() + cif * 55296, 55296);
             if (word.empty())
                 continue;
-            for (auto &unit : superframes.push(std::move(word)))
+            auto rejected_before = superframes.rejected;
+            auto units = superframes.push(std::move(word));
+            rejected_superframes += superframes.rejected - rejected_before;
+            for (auto &unit : units)
             {
                 if (unit.damaged)
+                {
+                    ++damaged_units;
                     pad.reset();
+                }
                 else
                     pad.push(unit.bytes);
                 std::lock_guard<std::mutex> l(audio_mutex);
@@ -374,6 +386,8 @@ struct DabPlusRadioSession::Impl
                     NeAACDecFrameInfo info{};
                     auto *data = static_cast<std::int16_t *>(NeAACDecDecode(
                         decoder, &info, item.unit.bytes.data(), item.unit.bytes.size()));
+                    if (info.error)
+                        ++aac_errors;
                     // FAAD2 primes its synthesis overlap on the first AU.
                     // No PCM without an error is not packet loss: resetting
                     // here would leave the codec permanently in that first AU.
@@ -402,6 +416,7 @@ struct DabPlusRadioSession::Impl
                     continue;
                 if (output.empty())
                 {
+                    ++concealed_frames;
                     // Own conservative concealment: a 5 ms ramp to silence,
                     // never label guessed audio as successfully decoded.
                     unsigned frames = (header & 32) ? 1920 : 960;
@@ -442,7 +457,7 @@ struct DabPlusRadioSession::Impl
                     if (err >= 0)
                         err = snd_pcm_set_params(pcm, SND_PCM_FORMAT_S16_LE,
                                                  SND_PCM_ACCESS_RW_INTERLEAVED, channels, rate, 1,
-                                                 100000);
+                                                 playback_latency_us);
                     if (err < 0)
                         throw std::runtime_error(std::string("ALSA: ") + snd_strerror(err));
                 }
@@ -686,6 +701,10 @@ DabPlusRadioMetrics DabPlusRadioSession::metrics() const
     m.dropped_iq = impl_->iq_drops;
     m.dropped_audio = impl_->audio_drops;
     m.alsa_underruns = impl_->underruns;
+    m.rejected_superframe_candidates = impl_->rejected_superframes;
+    m.damaged_audio_units = impl_->damaged_units;
+    m.aac_decode_errors = impl_->aac_errors;
+    m.concealed_audio_frames = impl_->concealed_frames;
     return m;
 }
 } // namespace dab

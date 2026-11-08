@@ -4,6 +4,30 @@
 #undef main
 #include "../components/dab/country.h"
 
+static void check_network_snapshot(App *a) {
+    char *encoded=network_status(a);
+    json_object *root=json_tokener_parse(encoded), *dab=NULL, *fresh=NULL;
+    g_assert_true(json_object_object_get_ex(root,"dab",&dab));
+    g_assert_nonnull(dab);
+    g_assert_true(json_object_object_get_ex(root,"telemetry_fresh",&fresh));
+    g_assert_false(json_object_get_boolean(fresh)); /* Receiver is still stopped. */
+    json_object_put(root);g_free(encoded);
+    gboolean running=a->running;a->running=TRUE;
+    gint64 stamp=a->dab.snapshot_time;a->dab.snapshot_time=g_get_monotonic_time()-3*G_USEC_PER_SEC;
+    encoded=network_status(a);root=json_tokener_parse(encoded);
+    json_object_object_get_ex(root,"telemetry_fresh",&fresh);g_assert_false(json_object_get_boolean(fresh));
+    json_object_put(root);g_free(encoded);a->dab.snapshot_time=stamp;a->running=running;
+    status(a,"Test error: \"device\" unavailable · ontvanger");a->exit_code=1;
+    encoded=network_status(a);root=json_tokener_parse(encoded);g_assert_nonnull(root);
+    json_object *state=NULL,*log=NULL;
+    json_object_object_get_ex(root,"state",&state);g_assert_cmpstr(json_object_get_string(state),==,"error");
+    json_object_object_get_ex(root,"recent_log",&log);
+    g_assert_nonnull(strstr(json_object_get_string(log),"device"));
+    json_object_put(root);g_free(encoded);a->exit_code=0;
+    char *large=g_strnfill(70000,'x');status_log_append(a,large);g_free(large);
+    g_assert_cmpuint(a->status_log->len,<=,65536);
+}
+
 static GtkWidget *tii_cell_at(App *a,int column,int row) {
     GtkWidget *cell=gtk_grid_get_child_at(GTK_GRID(a->dab.tii_rows),column,row);
     g_assert_nonnull(cell);return cell;
@@ -54,6 +78,9 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
         g_assert_cmpint(a->stages[1].pid,==,old_decoder);
         g_assert_cmpint(a->stages[0].pid,==,old_source);g_assert_null(a->scatter_backend);
         g_assert_cmpint(a->stage_count,==,2);
+        char *state_path=g_build_filename(a->dab.directory,"state.json",NULL);
+        g_assert_false(g_file_test(state_path,G_FILE_TEST_EXISTS));g_free(state_path);
+
         // Coalesce rapid A -> B -> A changes without restarting either process.
         tune_step(a,1);tune_step(a,-1);g_assert_cmpuint(a->dab.generation,==,3);++phase;
     } else if (phase==2 && a->dab.snapshot && dab_view_number(&a->dab,"generation")==3 && !dab_view_number(&a->dab,"tuning")) {
@@ -144,7 +171,6 @@ static gboolean exercise_dab(gpointer data) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_profile_box),2);
     pipeline=describe(a);g_assert_nonnull(strstr(pipeline,"'--profile' 'aircraft'"));g_free(pipeline);
 
-    char *state=g_build_filename(a->dab.directory,"state.json",NULL);
     const char *json="{\"channel\":\"9C\",\"frequency\":206352000,\"ensemble\":\"Test ensemble\","
         "\"synced\":1,\"signal_synced\":1,\"audio_active\":1,\"station\":\"Station one\",\"snr\":15.5,\"cfo\":120,\"mer\":12.5,"
         "\"scope_sequence\":1,\"scope_age_ms\":20,\"constellation\":[0.7,0.7,-0.7,-0.7],"
@@ -154,8 +180,9 @@ static gboolean exercise_dab(gpointer data) {
         "\"services\":[{\"id\":4660,\"label\":\"Station one\",\"bitrate\":96},{\"id\":4661,\"label\":\"Station two\",\"bitrate\":64}],"
         "\"tii\":[{\"main\":19,\"sub\":4,\"confidence\":0.9,\"hits\":12,\"confirmed\":1,\"ambiguous\":0},"
         "{\"main\":46,\"sub\":15,\"confidence\":0.5,\"hits\":6,\"confirmed\":1,\"ambiguous\":1}]}";
-    g_assert_true(g_file_set_contents(state,json,-1,NULL));g_free(state);
+    dab_view_feed(&a->dab,json,strlen(json));dab_view_feed(&a->dab,"\n",1);
     dab_view_tick(&a->dab,TRUE);
+    check_network_snapshot(a);
     g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_true(gtk_widget_get_visible(a->decoder_view.country));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"NL");
@@ -226,12 +253,12 @@ static gboolean exercise_dab(gpointer data) {
     g_assert_false(gtk_widget_get_sensitive(tii_cell_at(a,5,2)));
     g_free(log_path);
     // Empty captures reset the indicator; an unknown ECC never guesses a country.
-    state=g_build_filename(a->dab.directory,"state.json",NULL);
-    g_assert_true(g_file_set_contents(state,"{\"ueid\":32769,\"tii\":[]}",-1,NULL));
+    const char *empty="{\"ueid\":32769,\"tii\":[]}\n";
+    dab_view_feed(&a->dab,empty,strlen(empty));
     dab_view_tick(&a->dab,TRUE);
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->dab.tii_button),"information-ready"));
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->decoder_view.country)),==,"—");
-    g_assert_true(g_file_set_contents(state,json,-1,NULL));g_free(state);
+    dab_view_feed(&a->dab,json,strlen(json));dab_view_feed(&a->dab,"\n",1);
     dab_view_tick(&a->dab,TRUE);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(tii_cell_at(a,4,1))),==,"✓ Logged");
     dab_view_mute(&a->dab,TRUE);
@@ -281,7 +308,11 @@ int main(int argc,char **argv) {
     a.config=g_key_file_new();a.config_path=g_canonicalize_filename(argv[1],NULL);
     a.directory=g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config,a.config_path,0,NULL));
+    a.status_http=status_http_start("127.0.0.1",0,network_status,&a,NULL);
+    g_assert_nonnull(a.status_http);
     g_timeout_add(200,exercise_dab,&a);gui(&a);
+    status_http_stop(a.status_http);
+    g_string_free(a.status_log,TRUE);g_free(a.status_message);
     clear_stages(&a);g_key_file_unref(a.config);g_free(a.config_path);g_free(a.directory);
     return 0;
 }

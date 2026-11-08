@@ -89,8 +89,8 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
-GUI_SOURCES += src/program_view.c src/srt_output.c src/dab_view.c
-GUI_HEADERS += src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
+GUI_SOURCES += src/status_http.c src/program_view.c src/srt_output.c src/dab_view.c
+GUI_HEADERS += src/status_http.h src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
 GUI_HEADERS += src/decoder_margin.h
 GUI_HEADERS += src/signal_meter.h
 GUI_HEADERS += src/reception_log.h src/maidenhead.h
@@ -375,3 +375,8 @@ test-srt: all
 test: test-srt
 
 test: test-dab
+
+.PHONY: test-status-http
+test-status-http: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout
+	python3 tests/test_status_http.py
+test: test-status-http

@@ -41,7 +41,7 @@ def main():
               "-DLEANSDR_EXTENSIONS", '-DVERSION="linrad-leansdr-84c59e1"', "-DLINRAD_EMBEDDED_DVBT",
               '-DRBDVBT_VERSION="0.1.5"', *cflags]
     gui = ["linrad_dvb", "iq_file", "decoder_view", "video_view", "scatter_backend", "scatter_view", "ts_info", "ts_info_view",
-           "usb_receiver", "usb_demod", "usb_tci", "program_view", "srt_output", "dab_view", "dvbt_backend", "dvbt2_backend", "leansdr_backend", "ldpc_pool"]
+           "usb_receiver", "usb_demod", "usb_tci", "program_view", "srt_output", "status_http", "dab_view", "dvbt_backend", "dvbt2_backend", "leansdr_backend", "ldpc_pool"]
     cpp = {"dvbt2_backend", "leansdr_backend", "ldpc_pool"}
     gui_sources = [f"src/{name}.{'cc' if name in cpp else 'c'}" for name in gui]
     gui_sources += ["third_party/leansdr/src/apps/leandvb.cc"]

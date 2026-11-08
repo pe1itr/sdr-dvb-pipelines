@@ -1,4 +1,5 @@
 #include "dab_view.h"
+#include <glib-unix.h>
 #include "../components/dab/country.h"
 #include <glib/gstdio.h>
 #include <string.h>
@@ -136,9 +137,41 @@ void dab_view_mute(DabView *v,gboolean muted) {
     char *path=g_build_filename(v->directory,"mute",NULL);
     g_file_set_contents(path,muted ? "1" : "0",-1,NULL);g_free(path);
 }
+/* A bounded newline-framed stream from the worker; retain only the latest snapshot. */
+void dab_view_feed(DabView *v,const char *data,gsize length) {
+    if (!v->status_line) v->status_line=g_string_new(NULL);
+    for (gsize i=0;i<length;++i) {
+        if (data[i]=='\n') {
+            if (!v->status_discard && v->status_line->len) {
+                g_free(v->pending_json);v->pending_json=g_strdup(v->status_line->str);
+            }
+            g_string_truncate(v->status_line,0);v->status_discard=FALSE;
+        } else if (!v->status_discard) {
+            if (!data[i] || v->status_line->len>=262144) {v->status_discard=TRUE;g_string_truncate(v->status_line,0);}
+            else g_string_append_c(v->status_line,data[i]);
+        }
+    }
+}
+static gboolean read_status(gint fd,GIOCondition condition,gpointer data) {
+    DabView *v=data;char buffer[16384];
+    for (int i=0;i<16;++i) {
+        ssize_t n=read(fd,buffer,sizeof(buffer));
+        if (n>0) {dab_view_feed(v,buffer,n);continue;}
+        if (n<0 && errno==EINTR) continue;
+        if (n<0 && (errno==EAGAIN || errno==EWOULDBLOCK) && !(condition&G_IO_NVAL)) return G_SOURCE_CONTINUE;
+        close(fd);v->status_watch=0;return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+void dab_view_watch(DabView *v,int fd) {
+    if (v->status_watch) {g_source_remove(v->status_watch);close(v->status_fd);}
+    v->status_fd=fd;
+    v->status_watch=g_unix_fd_add(fd,G_IO_IN|G_IO_HUP|G_IO_ERR,read_status,v);
+}
 static void clear_reception(DabView *v) {
     if (v->snapshot) json_object_put(v->snapshot);
-    v->snapshot=NULL;v->active=FALSE;v->slide=0;
+    v->snapshot=NULL;v->active=FALSE;v->slide=0;v->snapshot_time=0;
+    g_clear_pointer(&v->pending_json,g_free);
     g_clear_pointer(&v->last_json,g_free);g_clear_pointer(&v->station_signature,g_free);g_clear_pointer(&v->tii_signature,g_free);
     v->scope_sequence=0;
     if (v->decoder) {
@@ -154,6 +187,9 @@ static void clear_reception(DabView *v) {
     gtk_label_set_text(GTK_LABEL(v->label),"Waiting for ensemble");gtk_label_set_text(GTK_LABEL(v->caption),"Waiting for stations…");
 }
 void dab_view_reset(DabView *v) {
+    if (v->status_watch) {g_source_remove(v->status_watch);close(v->status_fd);v->status_watch=0;}
+    if (v->status_line) {g_string_free(v->status_line,TRUE);v->status_line=NULL;}
+    v->status_discard=FALSE;
     clear_reception(v);v->generation=0;
     if (v->directory) {
         const char *names[]={"state.json","state.json.tmp","station","slide","slide.tmp","mute","channel","tuned","tuned.tmp"};
@@ -209,18 +245,19 @@ static void update_decoder(DabView *v,json_object *root,const char *ensemble) {
 }
 static void read_state(DabView *v,gboolean active) {
     v->active=active;
-    if (!v->info || !v->directory) return;
-    gtk_widget_set_sensitive(v->stations,active);
-    if (!active) {gtk_widget_set_sensitive(v->tii_rows,FALSE);return;}
-    gtk_widget_set_sensitive(v->tii_rows,TRUE);
-    char *path=g_build_filename(v->directory,"state.json",NULL), *contents=NULL;
-    gsize size=0;gboolean read=g_file_get_contents(path,&contents,&size,NULL);g_free(path);
-    if (!read || size>262144 || !g_strcmp0(contents,v->last_json)) {g_free(contents);return;}
+    if (v->info) {
+        gtk_widget_set_sensitive(v->stations,active);
+        gtk_widget_set_sensitive(v->tii_rows,active);
+    }
+    if (!active || !v->pending_json) return;
+    char *contents=g_steal_pointer(&v->pending_json), *path=NULL;
     json_object *root=json_tokener_parse(contents);
-    if (!root) {g_free(contents);return;}
+    if (!root || !json_object_is_type(root,json_type_object)) {json_object_put(root);g_free(contents);return;}
     if ((guint64)number(root,"generation")!=v->generation) {json_object_put(root);g_free(contents);return;}
     if (v->snapshot) json_object_put(v->snapshot);
     v->snapshot=root;g_free(v->last_json);v->last_json=contents;
+    v->snapshot_time=g_get_monotonic_time();
+    if (!v->info) return;
     const char *ensemble=text(root,"radio_ensemble");
     if (!*ensemble) ensemble=text(root,"ensemble");
     update_decoder(v,root,ensemble);
