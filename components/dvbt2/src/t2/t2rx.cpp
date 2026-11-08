@@ -111,12 +111,18 @@ void T2Receiver::Impl::append(const cf32* x, size_t n) {
 }
 
 void T2Receiver::Impl::sroReset() {
+    frameSpacingValid = false;
     sroOn = false;
     sroCorr = 0;
     sroN = 0;
 }
 
 void T2Receiver::Impl::gapReset(size_t skippedIn) {
+    // Keep the predicted P1 cadence for acquisition, but do not use the
+    // synthetic pre-gap position as a sample-clock measurement. Resampler
+    // history/phase was reset, so only two subsequent real P1s give a valid
+    // clock interval. Repeated gaps otherwise integrate these offsets as SRO.
+    frameSpacingValid = false;
     frames.clear(); frameCells.clear(); p2cells.clear(); prevCells.clear();
     chValid = false;
     haveRejected = false;

@@ -530,8 +530,9 @@ void T2Receiver::Impl::handleP1Candidate(int64_t d, float metric) {
         prevPos = -1;
         cfoEst = info.cfoHz;
     }
-    if (prevPos >= 0) onFrameSpacing(pos - prevPos);
+    if (prevPos >= 0 && frameSpacingValid) onFrameSpacing(pos - prevPos);
     prevPos = pos;
+    frameSpacingValid = true;
     trackMiss = 0; trackExpect = pos + frameLen; trackFrames++; trackKeep = (int64_t)pos + 2 * kP1Len;
     if (state == 2 && frameSyms > 0) {
         Frame f;

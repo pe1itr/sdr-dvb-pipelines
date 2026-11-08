@@ -1,0 +1,194 @@
+Windows DVB-T2 investigation, 2026-11-08
+======================================
+
+Outcome
+-------
+A reproducible receiver defect BEFORE LDPC was found and fixed. Known input
+sample gaps reset resampler state, but the next P1 detection was compared with
+a synthetic pre-gap position as though both positions were continuous clock
+measurements. Repeated short gaps integrated a false sample-clock correction
+(SRO), eventually damaging P2/L1 and preventing recovery after the gaps stopped.
+The fix preserves predicted P1 cadence for acquisition, but requires two real
+P1 detections without an intervening gap before measuring frame spacing again.
+
+This establishes a failure mechanism after sample loss. It does NOT establish
+the initial reason why the Windows input queue fills, nor prove that every
+live Windows failure has this cause. Native Windows live validation of this
+change remains pending. Missing samples themselves cannot be recovered.
+
+The GUI Service Info Buffer is the worker INPUT queue occupancy, not RF signal
+strength or LDPC queue occupancy (src/dvbt2_backend.cc). Capacity is 64 blocks
+of 65,536 samples, about 419 ms at 10 MS/s. It can rise during a processing
+burst and drain afterwards. A 100% snapshot alone is not a loss measurement;
+increasing input_dropped proves discarded input. Stronger/usable reception
+also enables work that is absent while searching, but this is not evidence
+that signal amplitude directly causes overflow. The pipelined resampler has
+its own bounded queue. SDR hardware overflow, SDR writer drops, decoder input
+drops and FEC frame drops must be kept separate.
+
+Evidence retained
+-----------------
+Full handover, endpoint observations and reference source downloads are in
+build/t2-bench/reference-review-20261108/ (SHA256.json inventories originals).
+Original handover: /tmp/ontvanger-overdracht-20261108.txt; archived as overdracht.txt.
+
+The start-transition observation first decoded 183 good BCH blocks, zero bad,
+4,700 TS packets and zero input loss; then 671/61, 17,236 packets and 2,162,688
+lost samples. Later good blocks and TS plateaued while bad blocks and sample
+loss increased. A separate 91.363 s profile interval lost 111,542,272 samples
+(12.21% at 10 MS/s), produced 23,241 bad and no good blocks. LDPC plus retry
+CPU accounted for 77.53% of instrumented stage CPU. This is not a measurement
+of whole-machine CPU utilization or proof that LDPC caused the first loss.
+
+RMS remained about -18.6 dBFS across the first transition, falling towards
+-26.5 dBFS later without a logged gain change. An earlier restart also failed
+while RMS remained near -20.7 dBFS. Thus later input-power variation is real
+telemetry but cannot explain the first transition by itself. Read recent_log
+only after the latest Pipeline running line when assigning settings to a run.
+
+Controlled recovery tests
+-------------------------
+No new IQ recording was requested or made. Tests used the existing 13.037677 s
+Eindhoven recording at 570 MHz / 10 MS/s, PLP 0. Feeding was paced at quarter
+speed to avoid a realtime throughput experiment alongside the live receiver.
+Sample gaps were injected at explicit input positions; no host overload was
+needed. Exact events and results:
+build/t2-bench/gap-clock-recovery-validation-20261108.json
+Probe source, CSV telemetry and stderr logs remain alongside that file.
+
+Case                       Lost samples  Peak |SRO|   Final BCH good/bad
+One 2,162,688-sample gap       2,162,688     3.712 ppm     8,938 / 212
+Seven 655,360-sample gaps      4,587,520    12.869 ppm     7,656 / 213
+136 small gaps, original      8,912,896   105.882 ppm     1,069 / 212
+136 small gaps, fixed         8,912,896     3.675 ppm     3,082 / 212
+17 larger gaps, original      8,912,896    21.801 ppm     2,470 / 3,203
+17 larger gaps, fixed         8,912,896     3.704 ppm     5,461 / 212
+
+Small and larger repeated-gap tests have the same total loss, distributed
+between input seconds 2 and 10. The original small-gap run produced NO further
+good blocks after 10.1 s, even though the remaining input was continuous.
+The fixed run produced 2,013 good blocks after 10.1 s. No FEC queue drops
+occurred in these tests. The initial 212 bad blocks also occur without gaps;
+they are an acquisition baseline, not additional damage caused by the fix.
+At the end of the original small-gap run cached data SNR still read 24.52 dB
+while P2 SNR was -25.4 dB. A displayed SNR can therefore outlive the data that
+produced it and cannot alone establish current RF or synchronization quality.
+
+An independent-of-radio regression generates 40 synthetic 32K / GI 1/8 / PP7
+frames at exactly zero clock error. It selects absent PLP 255, so NO payload
+LDPC decoding runs. It injects 65,536-sample gaps and then continuous input.
+Original: L1-pre good/bad 7/27; peak false SRO 129.941 ppm; test fails.
+Fixed: L1-pre good/bad 36/0; SRO approximately zero; test passes.
+Source: components/dvbt2/tests/test_gap_clock.cpp.
+This demonstrates damage in acquisition/clock recovery without LDPC workload.
+
+Comparison with other implementations
+------------------------------------
+This is a source comparison at pinned revisions, not a hardware performance
+benchmark. Archived copies are under reference-review-20261108/.
+
+1. ads will / OnAir, revision 25034214fa91adcdfd7ec843c51f9d79285472d8
+   Repository: https://github.com/adswill/OnAir/tree/25034214fa91adcdfd7ec843c51f9d79285472d8
+   Our DVB-T2 component derives from this core; it is not an independent
+   decoder cross-check. Upstream gapReset retains the same synthetic P1
+   predecessor involved in the reproduced clock defect.
+
+   core/src/engine/engine_start.cpp enables pipelined resampling by default
+   for live Windows input. We already enabled that path in b1039ba, but the
+   saved Windows observations show that pipelining alone did not solve loss.
+   core/src/engine/engine_loops.cpp raises the analysis thread priority and
+   calls catchUp before ingestion. engine_watch.cpp drops accumulated ring
+   backlog and marks one corresponding gap. Our host adapter drops incoming
+   whole blocks while its queue is full, potentially creating many short
+   gaps. Controlled equal-loss tests above show why gap distribution matters.
+   We have not changed queue policy or thread priorities in this fix.
+
+   core/src/source/source_usrp.cpp uses UHD fc32 CPU / sc16 wire samples and
+   explicitly handles metadata overflow. Our helper uses sc16 and scales
+   int16 values by 1/32768; the format difference alone is not a defect.
+   docs/USRP-B210-WINDOWS.md explicitly says the upstream developers had not
+   validated this on real Windows hardware. Its existence is not proof that
+   OnAir works with the user's particular B210-compatible Kintex-7.
+
+   Both imported cores use the Background thread policy for FEC. On Windows
+   that requests BELOW_NORMAL and attempts EcoQoS; on Linux it uses nice 5.
+   Microsoft documents that EcoQoS may select efficient cores/reduce frequency:
+   https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-setthreadinformation
+   Actual application of that policy on the user's Windows machine has not
+   been measured. It remains a capacity hypothesis, not a demonstrated cause.
+
+2. Oleg-Malyutin/sdr_receiver_dvb_t2, revision
+   332e9704c29d16940a7322b9f49a11a6f5c04437
+   Repository: https://github.com/Oleg-Malyutin/sdr_receiver_dvb_t2/tree/332e9704c29d16940a7322b9f49a11a6f5c04437
+   This is an independent implementation. README lists B200mini, Windows 10
+   22H2 and 32K/8 MHz reception; it does not validate the user's clone.
+
+   src/rx_usrp.cpp also uses sc16, double buffers and a demodulator mutex.
+   Buffer exhaustion discards data. The receive loop does not inspect UHD
+   metadata error codes or the receive return status like OnAir does, so
+   this is not a loss-free reference transport by inspection.
+   src/DVB_T2/dvbt2_demodulator.cpp resets its acquisition, CFO and SRO loops
+   when initialized reception loses L1-pre CRC. It updates dynamic PLP data
+   after a fresh L1-post CRC. It can nevertheless continue data processing
+   after post-CRC failure; do not assume its stale-L1 behavior is always safe.
+   time_deinterleaver.cpp consumes those dynamic PLP positions/block counts.
+
+   llr_demapper.cpp quantizes to int8 and batches SIMD frames through Qt
+   blocking connections. ldpc_decoder.h/.cpp use the active 25-iteration
+   offset-min-sum path, SIMD16/32, with no equivalent of our three alpha retry
+   attempts. The disabled #if 0 branch is not the active iteration count.
+   Our receiver retains floating LLRs and different decoding/retry policy.
+   The algorithms and workload are therefore not directly comparable; no
+   claim of better speed or sensitivity is justified without matched tests.
+
+Our additional audit
+--------------------
+Windows stdin/stdout/stderr and pipes are explicitly binary in
+src/win32/platform.c. The DVB-T2 adapter accumulates short reads, preserves
+four-byte sc16 sample boundaries and normalizes signed int16 values. Slowed
+recorded-IQ replays under Wine produce byte-identical TS to Linux. These checks
+argue against generic newline conversion/short-read corruption, but do not
+prove native Windows UHD sample continuity or exclude an upstream defect.
+
+components/dvbt2/src/t2/t2rx_l1.cpp can reuse cached L1 for up to eight frames,
+including dynamic PLP placement/block counts. L1 counters can record a CRC
+failure while processing continues with reused information. The endpoint
+does not currently distinguish fresh versus reused L1 in its boolean status.
+This remains a possible amplifier of damage, not a proven initial cause.
+
+The retry policy can spend up to three additional 150-iteration attempts
+under its backlog/time checks. Those checks do not see the host input queue.
+Thus high retry CPU can contribute to feedback after corruption, but the
+no-LDPC regression proves that clock recovery itself can fail first.
+
+Why Linux can still work well
+----------------------------
+The defect is shared portable code, not a Windows-only arithmetic defect.
+It is triggered by sample gaps and their timing. Saved Linux runs had either
+zero loss or about 0.31%, versus 7-12% in affected Windows runs. Those different
+conditions can expose the same bug much more strongly on Windows. This is a
+supported mechanism, not proof of why Windows initially has less headroom.
+Native CPU scheduling, actual EcoQoS, driver/USB behavior and processing bursts
+still require a matched live profile. Keep hardware, antenna, gain, sample
+rate and PLP identical; do not compare dissimilar historical runs as controlled
+experiments. Do not run heavy benchmarks beside a live receiver.
+
+Next native Windows check
+-------------------------
+Use dist/linrad_dvb-windows-x64.zip (fixed filename), preserve active INI,
+retain personal FPGA/firmware and Device arguments type=b200. Start with
+start-dvbt2-profile.cmd. Compare fresh timestamped endpoint snapshots through
+http://192.168.0.67:8877/status, including startup through the first loss and
+recovery. Check whether good BCH/TS resume after IQ loss, not just whether
+the buffer reaches zero. The endpoint cannot install/restart or inspect CPU.
+If losses persist, measure the initial queue-fill timing and actual Windows
+thread/CPU policy before changing queue policy or retry limits.
+
+Build validation
+----------------
+Linux and Windows-under-Wine gap-clock and pipeline tests pass. Four slowed
+3-second recorded-IQ replays (Linux/Windows, sync/pipelined) each produce
+46,257 TS packets, BCH 1,801/212, zero input/FEC drops, and identical SHA-256:
+5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e
+Results/logs: build/t2-bench/gap-clock-correctness-*.json/.log. These are
+correctness checks, not native Windows live capacity measurements.

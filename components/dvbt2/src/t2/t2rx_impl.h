@@ -198,6 +198,7 @@ struct T2Receiver::Impl {
     P1Info p1;
     uint64_t p1Count = 0;
     double prevPos = -1;
+    bool frameSpacingValid = false; // previous P1 was measured without an intervening sample gap
     int64_t giAnchor = 0;
     int giIdx = -1;
     float giScore[kNumGi] = {};

@@ -127,6 +127,13 @@ ook de laatste resamplerblokken verwerkt. De opstartregel meldt
 verwerking kan in dezelfde opdrachtprompt `set LINRAD_DVBT2_FRONTEND=sync`
 worden ingesteld; `set LINRAD_DVBT2_FRONTEND=` herstelt de standaard.
 
+Bij bekende IQ-gaten telt de voorspelde P1-positie niet meer mee als meting
+van de sampleklok. Herhaalde gaten konden daardoor een onterechte klokcorrectie
+opbouwen, waarna P2/L1 al vóór LDPC beschadigd raakte. Een synthetische test
+zonder LDPC reproduceert dit; dezelfde test blijft met de wijziging stabiel.
+Dit herstelt een fout ná sampleverlies. De eerste oorzaak van het vollopen van
+de Windows-buffer is hiermee nog niet vastgesteld.
+
 Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
 profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
 verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor

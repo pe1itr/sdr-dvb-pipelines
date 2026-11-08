@@ -63,6 +63,14 @@ exclude losses upstream in USB or the SDR helper, which reports its own losses.
 The decoder does not slow an SDR's sample clock. File tests must be clocked;
 feeding a whole recording at filesystem speed deliberately exercises overload.
 
+Known IQ gaps invalidate the P1 interval used for sample-clock tracking. The
+predicted P1 cadence is retained for acquisition, but clock updates resume only
+after two real P1 detections without an intervening gap. Otherwise repeated
+resampler resets can accumulate a false clock correction and corrupt P2/L1
+before LDPC. `test_dvbt2_gap_clock` reproduces this with a zero-clock-error
+synthetic signal and an absent PLP (no LDPC work). This fixes recovery after
+loss; it does not prevent the original input queue overflow.
+
 Partial reads are retained across sample boundaries; truncated samples and
 nonfinite float samples fail the worker. EOF drains submitted FEC work, with a
 10-second timeout, and flushes TS without fabricating additional IQ. Incomplete

@@ -19,6 +19,8 @@ $(DVBT2_RUST): $(shell find $(DVBT2_DIR)/rust -type f)
 
 $(BUILD_DIR)/dvbt2_fixture: tests/dvbt2_fixture.cpp $(BUILD_DIR)/components/dvbt2/t2/t2gen.o $(DVBT2_OBJECTS) $(DVBT2_RUST)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
+$(BUILD_DIR)/test_dvbt2_gap_clock: $(DVBT2_DIR)/tests/test_gap_clock.cpp $(BUILD_DIR)/components/dvbt2/t2/t2gen.o $(DVBT2_OBJECTS) $(DVBT2_RUST)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
 $(BUILD_DIR)/test_dvbt2_%: $(DVBT2_DIR)/tests/test_%.cpp $(DVBT2_OBJECTS) $(DVBT2_RUST)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
 .PHONY: test-dvbt2
@@ -32,11 +34,12 @@ $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.o: $(DVBT2_DIR)/src/t2/t2ldpc.cp
 -include $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.d
 $(BUILD_DIR)/test_dvbt2_ldpc_generic: tests/dvbt2_ldpc_equivalence.cpp $(filter-out $(BUILD_DIR)/components/dvbt2/t2/t2ldpc.o,$(DVBT2_OBJECTS)) $(BUILD_DIR)/components/dvbt2/t2/t2ldpc_generic.o $(DVBT2_RUST)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
-test-dvbt2: $(BUILD_DIR)/test_dvbt2_ldpc $(BUILD_DIR)/test_dvbt2_ldpc_generic $(BUILD_DIR)/test_dvbt2_pipeline
+test-dvbt2: $(BUILD_DIR)/test_dvbt2_ldpc $(BUILD_DIR)/test_dvbt2_ldpc_generic $(BUILD_DIR)/test_dvbt2_pipeline $(BUILD_DIR)/test_dvbt2_gap_clock
 test-dvbt2: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/dvbt2_fixture $(BUILD_DIR)/test_dvbt2_fec $(BUILD_DIR)/test_dvbt2_l1
 	./$(BUILD_DIR)/test_dvbt2_ldpc
 	./$(BUILD_DIR)/test_dvbt2_ldpc_generic
 	./$(BUILD_DIR)/test_dvbt2_pipeline
+	./$(BUILD_DIR)/test_dvbt2_gap_clock
 	./$(BUILD_DIR)/test_dvbt2_fec
 	./$(BUILD_DIR)/test_dvbt2_l1
 	python3 tests/test_dvbt2.py --build-dir $(BUILD_DIR)

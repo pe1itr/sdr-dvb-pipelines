@@ -102,6 +102,7 @@
     "Explicit missing PLP does not fall back; auto selects type-1 data only.",
     "T2Receiver::poll() collects FEC without per-IQ-block display copies.",
     "AVX2 buffered min-sum kernel for LDPC layers with repeated groups; original posterior scatter order preserved.",
-    "Windows stage profiling uses GetThreadTimes CPU accounting instead of elapsed wall time."
+    "Windows stage profiling uses GetThreadTimes CPU accounting instead of elapsed wall time.",
+    "Exclude synthetic P1 spacing across known IQ gaps from sample-clock tracking; synthetic regression without LDPC."
   ]
 }

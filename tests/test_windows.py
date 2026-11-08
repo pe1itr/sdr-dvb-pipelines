@@ -43,6 +43,10 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_dvbt2_gap_clock(self):
+        p = run("test_dvbt2_gap_clock", timeout=40)
+        self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace") + p.stdout.decode(errors="replace"))
+
     def test_dvbt2_pipeline(self):
         p = run("test_dvbt2_pipeline", timeout=30)
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
