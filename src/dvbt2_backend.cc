@@ -4,6 +4,7 @@
 #include "dect2/t2/t2rx.h"
 #include "dect2/tv/bbunpack.h"
 #include "dect2/common/stage_prof.h"
+#include "dect2/common/threadpool.h"
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <atomic>
@@ -90,6 +91,8 @@ int dvbt2_backend_main(int argc, char** argv) {
         const bool pipelined = !frontend || strcmp(frontend, "sync") != 0;
         rx.setPipelined(pipelined);
         fprintf(stderr, "DVB-T2 frontend: %s\n", pipelined ? "pipelined" : "synchronous");
+        fprintf(stderr, "DVB-T2 runtime: logical_processors=%u configured_workers=%d profile=%d\n",
+            std::thread::hardware_concurrency(), configuredThreads(), prof::stageProfEnabled());
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;
@@ -99,6 +102,7 @@ int dvbt2_backend_main(int argc, char** argv) {
             else ++packets;
         });
         rx.setPlpCallback([&](const PlpResult& r) {
+            DECT2_STAGE("host.ts-delivery");
             if (previousFrame >= 0 && r.numT2Frames > 0 &&
                 r.t2Frame != (previousFrame + r.frameInterval) % r.numT2Frames) unpack.lost();
             previousFrame = r.t2Frame;
@@ -113,6 +117,7 @@ int dvbt2_backend_main(int argc, char** argv) {
         std::string previousUnsupported;
         std::string previousPlps;
         auto report = [&](bool final) {
+            DECT2_STAGE("host.report");
             rx.poll(); // drain completed resampling, then FEC/TS
             rx.telemetry(t, 0); // also collects FEC results and emits TS
             DecoderStatus s{};
@@ -155,10 +160,14 @@ int dvbt2_backend_main(int argc, char** argv) {
             // is running: stopping the live pipeline may terminate it at once.
             if (prof::stageProfEnabled() && (final || Clock::now() - lastProfile >= std::chrono::seconds(5))) {
                 auto stages = prof::stageProfSnapshot();
+                const auto wallStages = prof::stageProfSnapshot(true);
                 std::sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.second.first > b.second.first; });
-                for (const auto& stage : stages)
-                    fprintf(stderr, "DVB-T2 profile: %s cpu=%.6f calls=%llu\n", stage.first.c_str(),
-                        stage.second.first, (unsigned long long)stage.second.second);
+                for (const auto& stage : stages) {
+                    double wall = 0;
+                    for (const auto& w : wallStages) if (w.first == stage.first) { wall = w.second.first; break; }
+                    fprintf(stderr, "DVB-T2 profile: %s cpu=%.6f calls=%llu wall=%.6f\n", stage.first.c_str(),
+                        stage.second.first, (unsigned long long)stage.second.second, wall);
+                }
                 lastProfile = Clock::now();
             }
             if (final || Clock::now() - lastLog >= std::chrono::seconds(1)) {
@@ -169,18 +178,23 @@ int dvbt2_backend_main(int argc, char** argv) {
                     rms, s.snr_db, s.cfo_hz, s.modulation, s.fec, s.guard);
                 lastLog = Clock::now();
             }
-            if (fflush(stdout)) failed = true;
+            { DECT2_STAGE("host.ts-flush"); if (fflush(stdout)) failed = true; }
             lastStatus = Clock::now();
         };
         for (;;) {
             Chunk chunk;
-            { std::unique_lock<std::mutex> lock(input.mutex);
+            { DECT2_STAGE("host.input-wait");
+              std::unique_lock<std::mutex> lock(input.mutex);
               input.ready.wait_for(lock, std::chrono::milliseconds(100), [&] { return input.eof || !input.queue.empty(); });
               if (input.queue.empty()) { if (input.eof) break; }
               else { chunk = std::move(input.queue.front()); input.queue.pop_front(); } }
             if (!chunk.bytes.empty()) {
-                if (chunk.first != next) { rx.markGap(chunk.first - next); unpack.lost(); }
+                if (chunk.first != next) {
+                    DECT2_STAGE("host.gap");
+                    rx.markGap(chunk.first - next); unpack.lost();
+                }
                 const size_t n = chunk.bytes.size() / sampleBytes;
+                DECT2_STAGE_VAR(convert, "host.convert");
                 std::vector<cf32> samples(n);
                 double sum = 0, maximum = 0;
                 for (size_t i = 0; i < n; ++i) {
@@ -193,8 +207,10 @@ int dvbt2_backend_main(int argc, char** argv) {
                     double power = std::norm(samples[i]); sum += power; maximum = std::max(maximum, power);
                 }
                 rms = 10 * log10(std::max(sum / n, 1e-20)); peak = 10 * log10(std::max(maximum, 1e-20));
-                rx.feed(samples.data(), samples.size()); next = chunk.first + n;
-                rx.poll();
+                convert.stop();
+                { DECT2_STAGE("host.feed"); rx.feed(samples.data(), samples.size()); }
+                next = chunk.first + n;
+                { DECT2_STAGE("host.poll"); rx.poll(); }
             }
             if (Clock::now() - lastStatus >= std::chrono::milliseconds(200)) report(false);
         }

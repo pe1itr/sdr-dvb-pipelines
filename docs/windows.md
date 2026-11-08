@@ -112,6 +112,27 @@ vergelijking geen tweede decoder tegelijk draaien. Controleer de afspeelduur in
 de `[iq-file] end of file`-regel: de bestandsbron kan bij vertraging langer doen
 over de opname en bootst dan geen ononderbroken live-SDR-aanvoer na.
 
+Het profiel bevat ook `wall=`: verstreken tijd binnen elke meetstap, inclusief
+wachten en tijd waarin de thread niet wordt ingepland. Geneste meetstappen
+worden afgetrokken van hun bovenliggende stap. Tijd van parallelle threads kan
+overlap hebben; tel `wall` daarom niet op als totale looptijd. `wall - cpu` is
+een aanwijzing voor wachten of verdringing, geen afzonderlijk bewijs van de
+oorzaak. De extra meetpunten zijn:
+
+- `host.input-wait`: wachten op invoer en de invoerwachtrij;
+- `host.convert`, `host.feed`, `host.poll`, `host.report`: werk in de adapter,
+  exclusief onderliggende gemeten decoderstappen;
+- `host.ts-delivery` en `host.ts-flush`: BBFRAME-uitpakken en schrijven naar
+  TS-uitvoer, respectievelijk flushen; blokkering door de uitvoer telt mee;
+- `t2.resample-wait` en `t2.pool-wait`: wachten op ruimte in de resamplerpijplijn
+  en op afronding door parallelle workers.
+
+Het opstartlog meldt `logical_processors` en `configured_workers` (`-1` is
+automatisch). Het endpoint geeft nu ook `decoder.buffer_valid` en, indien
+beschikbaar, `decoder.buffer_percent`: dezelfde momentopname als Service Info.
+De bestaande decoderalgoritmen, prioriteiten en wachtrijlimieten veranderen
+niet door deze meetuitbreiding. Profileren zelf heeft enige overhead.
+
 De Windows-build compileert de DVB-T2-component en zijn workeradapter met
 `-O3`, overeenkomstig onze Linux-build en OnAir's Release-configuratie.
 AVX2/FMA blijven runtime geselecteerd; er is geen globale AVX2-eis en geen

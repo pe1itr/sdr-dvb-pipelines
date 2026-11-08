@@ -82,6 +82,7 @@ void T2Receiver::Impl::stageEnqueue(StageItem item) {
             lk.unlock();
             stageDrain();
         } else {
+            DECT2_STAGE("t2.resample-wait");
             stage.cvSpace.wait(lk, [&] {
                 return stage.stop || !stage.out.empty() ||
                     stage.in.size() + stage.busy < kStageMaxPending;

@@ -1,6 +1,18 @@
 Windows DVB-T2 investigation, 2026-11-08
 ======================================
 
+Update 2026-11-09: comparison hardware is DIFFERENT
+-------------------------------------------------
+User read Windows Task Manager: AMD Ryzen 5 5500H. AMD specifies 4 cores /
+8 threads. Local Linux lscpu and decoder runtime report Ryzen 7 5800H,
+8 cores / 16 threads. Thus the earlier assumption of equal-spec hardware is
+incorrect. Historical Linux/Windows reception and per-call CPU timings do
+not isolate the operating system. This is a substantial capacity difference,
+not proof that hardware alone explains all loss. No claim of exactly twice
+the performance follows from twice the core count.
+Sources: build/t2-bench/receiver-cpu-comparison-20261109.json and
+https://www.amd.com/en/support/downloads/drivers.html/processors/ryzen/ryzen-5000-series/amd-ryzen-5-5500h.html
+
 Outcome
 -------
 A reproducible receiver defect BEFORE LDPC was found and fixed. Known input
@@ -205,3 +217,23 @@ hardware_concurrency - 1)), plus the participating PLP thread. This does not
 bind those workers to particular cores. Linux has additional heterogeneous
 core affinity rules for non-background work; Windows placement is OS-managed.
 Native Windows A/B reception remains needed with the same settings/player.
+
+Follow-up: CPU versus wall-time instrumentation (2026-11-09)
+----------------------------------------------------------
+The profile now measures exclusive elapsed wall time as well as thread CPU
+time. New stages cover host input waits, conversion, receiver feeding/polling,
+reporting, TS delivery/flush, resampler capacity waits and parallel worker
+completion waits. Parallel wall times overlap: their sum is not process
+elapsed time. Difference from CPU includes blocking and scheduling delays.
+Startup reports logical processor count and requested worker count; HTTP
+decoder telemetry exposes buffer_valid and buffer_percent. This changes
+diagnostics, not decoder algorithms, queue capacities or thread policies.
+
+Tests: nested sleeping stage records wall time without double counting or
+charging sleep as CPU; Linux and Windows-under-Wine tests pass. Four slowed
+recording replays retain 46,257 identical packets and zero input/FEC losses.
+A separate Linux replay deliberately stalls the TS reader for 350 ms: TS
+delivery reports 0.387907 s wall versus 0.037848 s CPU, with identical output.
+An idle receiver HTTP check verifies fresh buffer_valid=true, buffer_percent=0.
+Artifacts: build/t2-bench/wall-profile-*.json/.log. This validates diagnostic
+behavior only; native Windows live diagnosis is still needed.

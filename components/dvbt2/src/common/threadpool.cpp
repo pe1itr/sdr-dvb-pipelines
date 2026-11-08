@@ -1,6 +1,7 @@
 // Shared worker pool, thread naming and DECT2_THREADS (threadpool.h).
 #include "dect2/common/threadpool.h"
 #include "dect2/common/platform.h"
+#include "dect2/common/stage_prof.h"
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -118,6 +119,7 @@ void ThreadPool::parallelFor(size_t n, const std::function<void(size_t)>& fn, si
     const size_t helpers = std::min({n - 1, threads_.size(), maxHelpers});
     for (size_t h = 0; h < helpers; h++) enqueue(run);
     run();   // the caller helps; when it returns every index is claimed (not yet finished: a worker may still run its index)
+    DECT2_STAGE("t2.pool-wait");
     std::unique_lock<std::mutex> lk(st->m);
     st->cv.wait(lk, [&] { return st->done == st->n; });
     if (st->err) std::rethrow_exception(st->err);

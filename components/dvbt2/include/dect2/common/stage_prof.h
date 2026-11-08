@@ -29,7 +29,7 @@ namespace dect2::prof {
 
 struct Stage {
     const char* name;
-    std::atomic<uint64_t> ns{0}, calls{0};
+    std::atomic<uint64_t> ns{0}, wallNs{0}, calls{0};
     Stage* next = nullptr;
     explicit Stage(const char* n);
 };
@@ -63,10 +63,16 @@ inline uint64_t threadCpuNs() {
 #endif
 }
 // every stage seen so far: name, CPU seconds, calls (the same name at two sites is summed)
-inline std::vector<std::pair<std::string, std::pair<double, uint64_t>>> stageProfSnapshot() {
+// Wall time is exclusive on each thread, including waits and descheduling.
+// Summing wall time across parallel threads is NOT elapsed process time.
+inline uint64_t wallNs() {
+    return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+inline std::vector<std::pair<std::string, std::pair<double, uint64_t>>> stageProfSnapshot(bool wall = false) {
     std::vector<std::pair<std::string, std::pair<double, uint64_t>>> v;
     for (Stage* s = stageList().load(std::memory_order_acquire); s; s = s->next) {
-        const double sec = (double)s->ns.load(std::memory_order_relaxed) * 1e-9;
+        const double sec = (double)(wall ? s->wallNs.load(std::memory_order_relaxed) : s->ns.load(std::memory_order_relaxed)) * 1e-9;
         const uint64_t c = s->calls.load(std::memory_order_relaxed);
         bool merged = false;
         for (auto& e : v) if (e.first == s->name) { e.second.first += sec; e.second.second += c; merged = true; break; }
@@ -75,7 +81,7 @@ inline std::vector<std::pair<std::string, std::pair<double, uint64_t>>> stagePro
     return v;
 }
 inline void stageProfReset() {
-    for (Stage* s = stageList().load(std::memory_order_acquire); s; s = s->next) { s->ns.store(0); s->calls.store(0); }
+    for (Stage* s = stageList().load(std::memory_order_acquire); s; s = s->next) { s->ns.store(0); s->wallNs.store(0); s->calls.store(0); }
 }
 
 class Scope {
@@ -83,20 +89,27 @@ public:
     explicit Scope(Stage& s) : s_(stageProfEnabled() ? &s : nullptr) {
         if (!s_) return;
         const uint64_t now = threadCpuNs();
+        const uint64_t wall = wallNs();
         parent_ = top();
-        if (parent_) parent_->acc_ += now - parent_->t0_;   // the enclosing stage pauses
+        if (parent_) {
+            parent_->acc_ += now - parent_->t0_;   // the enclosing stage pauses
+            parent_->wallAcc_ += wall - parent_->wallT0_;
+        }
         top() = this;
         t0_ = now;
+        wallT0_ = wall;
     }
     ~Scope() { stop(); }
     void stop() {   // ends the scope early (the innermost one)
         if (!s_) return;
         const uint64_t now = threadCpuNs();
+        const uint64_t wall = wallNs();
         s_->ns.fetch_add(acc_ + (now - t0_), std::memory_order_relaxed);
+        s_->wallNs.fetch_add(wallAcc_ + (wall - wallT0_), std::memory_order_relaxed);
         s_->calls.fetch_add(1, std::memory_order_relaxed);
         s_ = nullptr;
         top() = parent_;
-        if (parent_) parent_->t0_ = now;                    // and goes on
+        if (parent_) { parent_->t0_ = now; parent_->wallT0_ = wall; } // and goes on
     }
     Scope(const Scope&) = delete;
     Scope& operator=(const Scope&) = delete;
@@ -105,6 +118,7 @@ private:
     Stage* s_;
     Scope* parent_ = nullptr;
     uint64_t t0_ = 0, acc_ = 0;
+    uint64_t wallT0_ = 0, wallAcc_ = 0;
 };
 
 } // namespace dect2::prof

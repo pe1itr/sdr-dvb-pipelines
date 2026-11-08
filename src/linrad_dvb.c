@@ -3839,6 +3839,8 @@ static char *network_status(gpointer data) {
             NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
             NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
             NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
+            BOOL(d,"buffer_valid",v->buffer_valid);
+            if (v->buffer_valid) NUM(d,"buffer_percent",v->buffer_percent);
             json_object_object_add(d,"input_dropped",json_object_new_uint64(v->input_dropped));
             json_object_object_add(d,"fec_frames_dropped",json_object_new_uint64(v->fec_frames_dropped));
             STR(d,"service",v->service);STR(d,"provider",v->provider);
