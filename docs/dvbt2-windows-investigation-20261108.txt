@@ -192,3 +192,16 @@ Linux and Windows-under-Wine gap-clock and pipeline tests pass. Four slowed
 5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e
 Results/logs: build/t2-bench/gap-clock-correctness-*.json/.log. These are
 correctness checks, not native Windows live capacity measurements.
+
+Follow-up: isolate Windows EcoQoS (user-authorized change)
+-------------------------------------------------------
+The Windows FEC background thread policy now explicitly requests execution-
+speed throttling OFF (ControlMask=1, StateMask=0). Scheduling priorities, worker
+counts, queues and decoder algorithms are unchanged. Each affected thread logs
+API acceptance, failure with GetLastError, or absence of SetThreadInformation.
+Acceptance is not proof of higher frequency or improved live throughput.
+The default background pool count is the same on both OSes: max(1, min(8,
+hardware_concurrency - 1)), plus the participating PLP thread. This does not
+bind those workers to particular cores. Linux has additional heterogeneous
+core affinity rules for non-background work; Windows placement is OS-managed.
+Native Windows A/B reception remains needed with the same settings/player.

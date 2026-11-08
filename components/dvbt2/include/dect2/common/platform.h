@@ -1,5 +1,6 @@
 // Small OS abstractions used by the core: thread priority.
 #pragma once
+#include <cstdio>
 #include <initializer_list>
 
 #if defined(__APPLE__)
@@ -73,14 +74,28 @@ inline void setThreadPriority(ThreadPriority p) {
     SetThreadPriority(GetCurrentThread(), p == ThreadPriority::Realtime ? THREAD_PRIORITY_TIME_CRITICAL : p == ThreadPriority::High ? THREAD_PRIORITY_ABOVE_NORMAL
                                           : p == ThreadPriority::Decode ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
     if (p == ThreadPriority::Background) {
-        // EcoQoS (Windows 11): hybrid Intel processors put the thread on the efficiency cores. Looked up at run time (older systems skip it).
+        // Live FEC has a deadline. Explicitly disable execution-speed throttling
+        // (HighQoS), keeping the existing BELOW_NORMAL scheduling priority.
+        // Resolve at run time so older Windows versions can still run.
         struct PowerThrottling { ULONG Version, ControlMask, StateMask; };
         using Fn = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
         static const Fn fn = [] {
             HMODULE k = GetModuleHandleW(L"kernel32.dll");
             return k ? reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(k, "SetThreadInformation"))) : nullptr;
         }();
-        if (fn) { PowerThrottling t{1, 1, 1}; fn(GetCurrentThread(), 3 /* ThreadPowerThrottling */, &t, sizeof t); }
+        const unsigned long tid = GetCurrentThreadId();
+        if (fn) {
+            // ControlMask selects execution speed; a zero StateMask turns it off.
+            PowerThrottling t{1, 1, 0};
+            if (fn(GetCurrentThread(), 3 /* ThreadPowerThrottling */, &t, sizeof t))
+                fprintf(stderr, "DVB-T2 Windows thread %lu: EcoQoS disable accepted\n", tid);
+            else {
+                const unsigned long error = GetLastError();
+                fprintf(stderr, "DVB-T2 Windows thread %lu: EcoQoS disable failed (error=%lu)\n", tid, error);
+            }
+        } else {
+            fprintf(stderr, "DVB-T2 Windows thread %lu: EcoQoS control unavailable\n", tid);
+        }
     }
 #elif defined(__linux__)
     // nice values are per thread on Linux; lowering the value needs privileges, raising it never does

@@ -103,6 +103,7 @@
     "T2Receiver::poll() collects FEC without per-IQ-block display copies.",
     "AVX2 buffered min-sum kernel for LDPC layers with repeated groups; original posterior scatter order preserved.",
     "Windows stage profiling uses GetThreadTimes CPU accounting instead of elapsed wall time.",
-    "Exclude synthetic P1 spacing across known IQ gaps from sample-clock tracking; synthetic regression without LDPC."
+    "Exclude synthetic P1 spacing across known IQ gaps from sample-clock tracking; synthetic regression without LDPC.",
+    "Windows live FEC background threads explicitly disable EcoQoS execution-speed throttling and log API acceptance/failure; existing thread priorities unchanged."
   ]
 }

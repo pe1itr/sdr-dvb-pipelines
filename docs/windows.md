@@ -134,6 +134,14 @@ zonder LDPC reproduceert dit; dezelfde test blijft met de wijziging stabiel.
 Dit herstelt een fout ná sampleverlies. De eerste oorzaak van het vollopen van
 de Windows-buffer is hiermee nog niet vastgesteld.
 
+De Windows FEC-decoderthreads schakelen EcoQoS (execution-speed throttling)
+expliciet uit. Hun bestaande threadprioriteit blijft gelijk. Bij het opstarten
+meldt elke betrokken thread `EcoQoS disable accepted`, `EcoQoS disable failed`
+(met Windows-foutcode), of `EcoQoS control unavailable`. Deze meldingen staan
+ook in het statusendpoint. Acceptatie van de API-aanroep bewijst niet dat het
+IQ-verlies is opgelost; vergelijk daarvoor twee verse metingen bij dezelfde
+ontvangstinstellingen en spelerinstelling. Start via `start-dvbt2-profile.cmd`.
+
 Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
 profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
 verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor
