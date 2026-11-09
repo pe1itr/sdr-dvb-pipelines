@@ -1,5 +1,10 @@
 #define _POSIX_C_SOURCE 200809L
 #include <gtk/gtk.h>
+#include "linrad_build_info.h"
+#define LINRAD_BUILD_DATE __DATE__ " " __TIME__
+#define LINRAD_VERSION_TEXT "Linrad DVB " LINRAD_APP_VERSION "\nBuild ID: " LINRAD_BUILD_ID \
+    "\nGit commit: " LINRAD_GIT_COMMIT "\nSource state: " LINRAD_SOURCE_STATE \
+    "\nCompiled: " LINRAD_BUILD_DATE " (compiler local time)\n"
 #include "gui_theme.h"
 #include "sdriq.h"
 #include "funcube.h"
@@ -2642,6 +2647,12 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_container_set_border_width(GTK_CONTAINER(box),12);
     gtk_container_add(GTK_CONTAINER(scroll),box);
     about_label(box,"Linrad DVB","about-title");
+    about_label(box,LINRAD_VERSION_TEXT,"about-meta");
+    if (!strcmp(LINRAD_SOURCE_STATE,"dirty"))
+        about_label(box,"Local changes are included; this build differs from the Git commit shown.","about-meta");
+    if (strcmp(LINRAD_GIT_COMMIT,"unknown"))
+        about_link(box,"View source commit on GitHub",
+            "https://github.com/pe1itr/sdr-dvb-pipelines/commit/" LINRAD_GIT_COMMIT);
     about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
         "amateur television under weak signal conditions (DVB-S, DVB-S2 and narrowband DVB-T), "
         "supported 8 MHz broadcast DVB-T2 and DAB/DAB+ radio.",NULL);
@@ -2661,8 +2672,6 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "Provided without warranty. Bundled components retain their own license notices.",NULL);
     about_link(box,"Project source and documentation","https://github.com/pe1itr/sdr-dvb-pipelines");
     about_link(box,"GNU General Public License version 3","https://www.gnu.org/licenses/gpl-3.0.html");
-    /* Compiler timestamps identify this executable, not the date it is opened. */
-    about_label(box,"Build date: " __DATE__ " · " __TIME__,"about-meta");
     about_label(box,"Receiver controls","about-heading");
     about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
         "Mode: DVB-S/S2/T/T2 or DAB, with the corresponding decoder and channel settings. "
@@ -3821,6 +3830,12 @@ static char *network_status(gpointer data) {
 #define NUM(o,k,v) json_object_object_add(o,k,status_number(v))
 #define BOOL(o,k,v) json_object_object_add(o,k,json_object_new_boolean(v))
     NUM(root,"schema_version",1);NUM(root,"updated_unix_ms",g_get_real_time()/1000);
+    json_object *build=json_object_new_object();
+    STR(build,"version",LINRAD_APP_VERSION);STR(build,"id",LINRAD_BUILD_ID);
+    STR(build,"git_commit",LINRAD_GIT_COMMIT);STR(build,"source_state",LINRAD_SOURCE_STATE);
+    STR(build,"compiled",LINRAD_BUILD_DATE);
+    STR(build,"compiled_timezone","compiler local time");
+    json_object_object_add(root,"build",build);
 #ifdef _WIN32
     STR(root,"platform","windows");
 #else
@@ -3906,11 +3921,12 @@ int main(int argc, char **argv) {
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
     char *source = NULL, *constellation = NULL, *renderer = NULL, *srt_url = NULL, *rtlsdr_serial = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
-    gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE;
+    gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE, version = FALSE;
     int sr = -1, plp = -2, status_port=-1;
     char *status_bind=NULL;
     a.decoder_view.fd=-1;
     GOptionEntry entries[] = {
+        {"version",0,0,G_OPTION_ARG_NONE,&version,"Show application version and build identity",NULL},
         {"status-port",0,0,G_OPTION_ARG_INT,&status_port,"Enable HTTP status endpoint on this TCP port (0 disables)","PORT"},
         {"status-bind",0,0,G_OPTION_ARG_STRING,&status_bind,"HTTP status listen address (default 127.0.0.1)","IP"},
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, srt, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
@@ -3948,6 +3964,7 @@ int main(int argc, char **argv) {
     if (!g_option_context_parse(context, &argc, &argv, &error)) fatal("%s", error->message);
 #endif
     if (argc != 1 || (print && run)) fatal("Invalid arguments; see --help");
+    if (version) { fputs(LINRAD_VERSION_TEXT,stdout);g_option_context_free(context);return 0; }
     if (!config) {
         char *exe = g_file_read_link("/proc/self/exe", &error);
         if (!exe) fatal("Cannot determine the program directory: %s", error->message);

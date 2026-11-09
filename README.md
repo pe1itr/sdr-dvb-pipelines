@@ -376,6 +376,25 @@ IQ recordings are not included and are not needed to build the application.
 
 ## Development and source packages
 
+The application version is stored in `VERSION` (initially `0.1.0-dev`). Both
+Linux and Windows builds embed that version, the full Git commit and a
+`clean`/`dirty` source marker. **About** shows these details at the top,
+with a link to the commit and the compilation date/time. They are also
+available without a display or INI file via `linrad_dvb --version`, and in
+the HTTP `/status` response's `build` object.
+
+For a GitHub release, update `VERSION` (for example to `0.1.0`), commit the
+release changes, tag that commit `v0.1.0`, then build from the clean checkout.
+The resulting build ID is `0.1.0+g<12-character-commit>`. Uncommitted changes,
+including untracked files, append `-dirty`; the displayed commit then identifies
+the base revision, not all local changes. Builds from a source ZIP without Git
+retain `VERSION` but explicitly report an unknown commit/source state.
+The metadata is refreshed automatically on each build invocation, including
+after a checkout or commit; an unchanged header does not force recompilation.
+Compilation timestamps use the compiler's local time and are not unique IDs
+or binary checksums. The Windows ZIP filename remains
+`dist/linrad_dvb-windows-x64.zip`.
+
 ```sh
 make test        # full regression suite
 make package     # build and copy component licenses into build/

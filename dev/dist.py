@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FILES = (
     ".gitignore",
     "Makefile",
+    "VERSION",
     "README.md",
     "LICENSE",
     "NOTICE",

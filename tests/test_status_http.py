@@ -86,6 +86,13 @@ class StatusTests(unittest.TestCase):
         code, state = self.get()
         self.assertEqual(code, 200)
         self.assertEqual(state['schema_version'], 1)
+        build = state['build']
+        version = subprocess.check_output([ROOT / 'build/linrad_dvb', '--version'], text=True)
+        self.assertIn('Linrad DVB ' + build['version'], version)
+        self.assertIn('Build ID: ' + build['id'], version)
+        self.assertIn('Git commit: ' + build['git_commit'], version)
+        self.assertIn('Source state: ' + build['source_state'], version)
+        self.assertIn('Compiled: ' + build['compiled'], version)
         self.assertEqual(state['standard'], 'DAB')
         self.assertEqual(state['state'], 'running')
         self.assertTrue(state['telemetry_fresh'])

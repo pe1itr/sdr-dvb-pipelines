@@ -25,6 +25,8 @@ def main():
     sdk = args.sdk.resolve()
     build = args.build_dir.resolve()
     build.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["bash", str(ROOT / "tools/build-info.sh"),
+                    str(build / "generated/linrad_build_info.h")], check=True)
     env = dict(os.environ, PKG_CONFIG_LIBDIR=str(sdk / "lib/pkgconfig"), PKG_CONFIG_PATH="")
     modules = "gtk+-3.0 json-c fftw3f libsamplerate libvlc libavcodec libavformat libavutil libswscale zvbi-0.2 SoapySDR uhd portaudio-2.0 faad2 hidapi LimeSuite libiio".split()
     # MSYS2 calls the samplerate module 'samplerate'.
@@ -97,6 +99,7 @@ def main():
             return
         compiler = "x86_64-w64-mingw32-g++" if source.endswith((".cc", ".cpp")) else "x86_64-w64-mingw32-gcc"
         flags = ["-std=gnu++20"] if compiler.endswith("g++") else ["-std=gnu11"]
+        flags += ["-I" + str(build / "generated")]
         if source.startswith("components/dvbt2/") or source == "src/dvbt2_backend.cc":
             # Match OnAir's Release build and our Linux CXXFLAGS: the OFDM/FEC
             # hot loops need -O3's inlining/vectorization at broadcast rates.
