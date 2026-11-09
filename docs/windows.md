@@ -47,8 +47,12 @@ worden, net als op Linux, niet ondersteund.
 
 Voeg alleen passende 64-bit SoapySDR 0.8-modules toe aan
 `lib/SoapySDR/modules0.8`; eventuele afhankelijkheden moeten ook beschikbaar
-zijn. Linux `.so`-drivers werken niet op Windows. Hardwareontvangst moet nog op
-een echte Windows-pc worden getest. Windows ondersteunt geen Linux
+zijn. Linux `.so`-drivers werken niet op Windows. B210-compatibel Kintex-7,
+HackRF en RTL-SDR zijn inmiddels met live ontvangst op een echte Windows-pc
+getest; dit valideert niet alle bovenstaande radio's en drivers. Zie de
+[geteste computers](../README.md#tested-computers-and-practical-limits) en de
+[resterende DVB-T2-beperkingen](../README.md#dvb-t2-on-windows).
+Windows ondersteunt geen Linux
 `SO_RXQ_OVFL`-teller; AFEDRI telt wel de ontvangen sequentiegaten en queuedrops.
 
 FUNcube koppelt HID en audio via hun Windows-apparaatcontainer en gebruikt

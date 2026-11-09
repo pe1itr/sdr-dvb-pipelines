@@ -1,9 +1,11 @@
 # Linrad DVB
 
-A Linux SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2 and DAB/DAB+**,
-with a GTK interface for live spectrum, waterfall, constellation, decoder status
+An SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2 and DAB/DAB+**,
+with a GTK interface for spectrum, waterfall, constellation, decoder status
 and television playback. Developed by **Rob Hardenberg / PE1ITR** for amateur
-DATV, weak-signal experiments and broadcast reception.
+DATV, weak-signal DX and broadcast reception. Linux is the main development
+platform; a native Windows x64 package is also available, with the
+[DVB-T2 performance limitations described below](#dvb-t2-on-windows).
 
 This is the main development repository for **linrad_dvb**, the **DVB-T receiver
 (rbdvbt)** and **TSscatterFix**, with DAB reception in its own [component](components/dab/README.md). Their source code, integration, tests and future
@@ -13,7 +15,20 @@ development are maintained together here.
 
 *DVB-T2 reception at 570 MHz. Screenshot from an actual receive session.*
 
-## What it does
+- [Purpose](#purpose)
+- [Features](#features)
+- [Weak-signal and DX reception](#weak-signal-and-dx-reception)
+- [Buttons and everyday controls](#buttons-and-everyday-controls)
+- [Tested computers and practical limits](#tested-computers-and-practical-limits)
+- [Build and run](#build-and-run)
+
+## Purpose
+
+The main aim is to help amateur television DXers receive, identify and document
+weak or intermittent stations. A short opening may yield a service name,
+a few usable picture fragments or a DAB transmitter identification even when
+continuous sound and video are not possible. The application brings those
+observations, decoding controls and a reception log into one receiver window.
 
 Linrad DVB turns raw radio samples (IQ) into digital television and DAB+ radio.
 It tunes a supported SDR, or accepts samples from Linrad or an IQ recording.
@@ -56,23 +71,214 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 - Switch live DVB video to external FFplay with NVIDIA CUDA decoding and Vulkan rendering.
 - TSscatterFix image recovery from incomplete transport streams.
 - IQ and MPEG-TS recording, IQ replay, UDP transport-stream output and SRT output.
-- Parallel USB, FM and FM-DATA audio monitoring, TCI and optional PCM UDP output.
+- Parallel audio monitoring in USB, FM or FM-DATA, TCI and optional PCM UDP output.
 - Editable CSV reception log: UTC time, RF frequency, service/provider, mode,
   decoder settings and DAB TII, with selected/all ADIF export as reception (SWL) records.
 - My Station callsign/locator settings and a Maidenhead distance/bearing calculator.
 - Headless operation and command-line pipeline inspection for automated receiver setups.
 
-Linux input profiles cover HackRF One, USRP B210, RFspace SDR-IQ, AFEDRI Net,
+## Weak-signal and DX reception
+
+These options serve different purposes: acquiring a signal, recovering usable
+data during a short opening, inspecting reception quality, and recording the
+result. A visible constellation alone does not mean the programme is decodable.
+
+### DVB-S/S2: short openings and low symbol rates
+
+**Mode** exposes the DVB-S2 error-correction method, worker count, acquisition
+mode and processing mode. **Soft-decision LDPC** is the default; **Bit-flipping**
+is also available. The automatic settings follow the selected symbol rate:
+
+| DVB-S2 symbol rate | Automatic acquisition | Automatic LDPC processing |
+| --- | --- | --- |
+| Up to and including 333 ksym/s | Continuous search | Low latency: one frame at a time |
+| Above 333 ksym/s | Normal search | Throughput: batches of up to 32 frames |
+
+Continuous search keeps looking for frames after unsuccessful acquisition;
+low latency avoids waiting for a batch during a short signal opening. The
+default is one LDPC worker; 1–8 are selectable. More workers are not always
+faster, and these DVB-S2 controls do not configure the DVB-T2 worker pool.
+DVB-S uses continuous acquisition and high-quality processing by default.
+See [decoder measurements](docs/decoders.md) for the weak-recording comparisons,
+including the 125 ksym/s DL4FBN reception tests. They are evidence for those
+signals, not a universal sensitivity gain in dB.
+
+**D margin**, in Service info for DVB-S/S2, estimates reception reserve from
+MER and a modulation/FEC reference threshold. Red is below 0 dB, orange is
+0–2 dB and green is at least 2 dB. It is an aid to tuning, not a calibrated
+guarantee of picture or audio; unsupported or unavailable values show `—`.
+
+### TSscatterFix: recovering pictures from incomplete reception
+
+Enable **TSscatterFix** to reconstruct images from a parallel copy of the
+received transport stream, particularly for repeated/static DATV test pictures.
+Its recovery and candidate-ranking code can make fragments useful when the
+normal video player cannot show a complete picture. The recovery panel shows
+the result and estimated progress; **R** clears accumulated reconstruction.
+It does not turn an incomplete reception into guaranteed continuous television.
+The original stream to the player, recording and UDP output stays unchanged.
+See the [TSscatterFix component](components/tsscatterfix/README.md).
+
+### DAB: weak stations and aircraft scatter
+
+Choose a profile under **Mode → DAB reception**:
+
+| Profile | What it adds |
+| --- | --- |
+| **Normal** | Continuous DAB+ audio with independent ensemble/FIC and TII analysis. |
+| **Weak signal / DX** | Extra phase-reference searches for timing/frequency/inversion and accumulation of CRC-validated identity fragments across captures. |
+| **Aircraft scatter** | The weak/DX options plus temporal ranking and six overlapping 2.5-second analysis windows within each eight-second capture, to inspect short openings. |
+
+The deeper DX analysis is separate from continuous audio decoding. It may
+identify a station or transmitter without producing listenable audio; choosing
+a DX profile does not apply all of its fallback processing to the audio path.
+These profiles require more processing time. **Capture** is the progress of an
+eight-second analysis capture, not receiver buffer occupancy.
+
+**TII** lists transmitter codes, confidence and confirmation status. Confirmed
+observations can be logged; ambiguous candidates remain identifiable as such.
+See [DAB reception](#dab-reception) and the [DAB component](components/dab/README.md).
+
+### Finding and preserving a weak signal
+
+Use spectrum/waterfall and the signal-history meter to follow fading and short
+openings. The **BW** IQ filter can suppress out-of-channel signals, but must
+remain wide enough for the selected modulation. It cannot undo overload that
+already happened in the radio. **USB**, **FM** and **FM-DATA** provide a separate
+audio monitor while the digital receiver continues. **Record IQ** preserves a
+reception for later replay; **P** captures the screen and **Log** records the
+identified station. Compare fresh error-counter increments, not just lifetime
+totals or the size of a constellation.
+
+## Buttons and everyday controls
+
+The top row selects the input, decoder and output. Controls in the spectrum
+row open analysis tools or switch live functions. Mode-specific controls appear
+only where applicable; hover over a control for its tooltip.
+
+| Button or control | Function |
+| --- | --- |
+| **Input** | Select the SDR, Linrad UDP or an IQ file; configure sample rate, device arguments, gain-related options, tuning step and frequency offsets. Stop reception to change hardware settings. |
+| **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 DX/LDPC options, DVB-T2 PLP, or DAB channel/profile. |
+| **Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
+| **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
+| **Record IQ** | Start/stop raw sample recording during live reception, with metadata for replay. This is different from saving decoded MPEG-TS through Renderer. |
+| **BW** | Enable/bypass the IQ channel filter. The bracket keys adjust its width; DVB-T2 requires the full 8 MHz channel. |
+| **TSscatterFix** | Enable/disable separate picture reconstruction during DVB reception and show/hide its panel. |
+| **Programs / DAB station list** | Click a DVB programme to switch the embedded player, or a DAB+ station to switch audio. Programs occupies the reconstruction-panel position when TSscatterFix is off. External DVB players select their own programme. |
+| **EIT** | Open received programme/event information. |
+| **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. Pages must be received before they can be displayed. |
+| **TII** | In DAB, inspect transmitter IDs and log confirmed observations. Green indicates codes in the latest capture; **✓ Logged** marks an already logged ensemble/code combination. |
+| **USB / FM / FM-DATA** | Toggle the parallel 3 kHz USB, 12.5 kHz FM or 20 kHz flat-audio FM-DATA monitor. Here USB means upper sideband. Only one monitor mode is active at a time. |
+| **TCI** | Configure the monitor's TCI connection, audio output and optional PCM UDP stream. |
+| **Log** beside FM-DATA | Capture the current service/ensemble in the reception editor; **Save reception** writes it to the log. |
+| **Log** in the top menu | Open **RX log**, **My Station**, **Bearing**, **Application log** or **Status endpoint…**. |
+| **Extern op GPU / Terug in venster** | Switch DVB playback between external NVIDIA FFplay and embedded VLC while reception continues. This accelerates video playback, not radio demodulation or LDPC. |
+| **◀ / ▶** in DAB | Previous/next Band III channel, or the configured tuning step in Free frequency mode. |
+| Spectrum/waterfall arrow buttons | Adjust the displayed noise-floor level and vertical range; these do not change SDR gain. |
+| Signal-meter arrow buttons | Adjust level range, trace position and averaging/time scale. |
+| **About** | Show version/build identity, credits and the keyboard reference. |
+
+With the main receiver window focused:
+
+| Key or action | Function |
+| --- | --- |
+| **← / →** | Tune a direct SDR; move through DAB channels, or tune by step in Free frequency mode. With Linrad input, tune in Linrad. |
+| **↑ / ↓** | Increase/decrease SDR gain. HackRF shows and adjusts LNA/VGA separately according to the policy below. |
+| **[ / ]** | Narrow/widen the IQ filter within the receive mode's limits. |
+| **U / F / D** | Toggle USB / FM / FM-DATA monitoring. |
+| Click the spectrum | Tune the active audio monitor to the clicked frequency. |
+| **Page Up / Page Down** | Tune the audio monitor down/up: 100 Hz for USB, 2.5 kHz for FM/FM-DATA. |
+| **M** | Mute/unmute speaker audio; TCI audio continues. |
+| **R** | Reset TSscatterFix reconstruction. |
+| **P** | Save a PNG screenshot of the whole main window. |
+| **W** | Save receiver settings, including spectrum/waterfall settings. |
+| **Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A** | Open Input / Mode / Renderer / TCI / Application log / About. |
+
+For **HackRF**, the gain arrows first raise LNA from 0 to 40 dB in 8 dB
+steps while VGA stays at 12 dB. Only then does VGA rise in 2 dB steps, up to
+24 dB. **Input → RF amplifier (AMP)** independently offers Auto / Off / On;
+Auto enables AMP when LNA reaches 40 dB. Older aggregate-gain configurations
+start the new policy at LNA 32/VGA 12; **W** saves that migration. This avoids
+the driver's earlier abrupt redistribution between LNA and VGA.
+
+## Hardware inputs and receive modes
+
+Input profiles cover HackRF One, USRP B210, RFspace SDR-IQ, AFEDRI Net,
 RTL-SDR, FUNcube Pro+, LimeSDR Mini v1.2, SDRplay RSP1A/RSP1B, Airspy R2 and
 Airspy HF+ Dual Port (VHF), and Pluto / PlutoSky RX1 via native libiio. Available receive modes depend on the device's
 frequency range and sample rate; some integrations still need live hardware
 validation. See [receiver setup and test status](docs/receivers.md).
 
-The complete receiver is supported on Linux. DVB-T2 is limited to the supported
-8 MHz broadcast modes; DAB audio supports DAB+ with EEP-A/B protection. The
-[Windows port](docs/windows.md) includes DAB+, direct FUNcube Pro+, LimeSDR Mini and Pluto / PlutoSky RX1
-support; native hardware/drivers still require Windows validation. See [decoder details](docs/decoders.md) and
-[DAB limitations](components/dab/README.md) before choosing a receive mode.
+The [native Windows package](docs/windows.md) includes DVB and DAB+ reception.
+B210-compatible Kintex-7, HackRF and RTL-SDR have been used in native Windows
+live checks; that does not validate every listed radio/driver combination.
+Direct FUNcube Pro+, LimeSDR Mini and Pluto / PlutoSky RX1 are also implemented,
+with their hardware-specific validation limits listed in the Windows notes.
+
+DVB-T2 supports the implemented **8 MHz broadcast modes**, with 8–20 MS/s IQ
+input; 10 MS/s is a starting point. A B210-compatible receiver was also tested
+at 9,142,857 samples/s, close to the native 64/7 MHz DVB-T2 rate, while retaining
+8 MHz channel bandwidth. The device must actually support the selected rate.
+MISO, inter-frame time interleaving and type-2/sub-sliced PLPs are not supported.
+DAB audio supports Mode I DAB+ with EEP-A/B protection; legacy DAB/MP2 and UEP
+are not implemented. See [decoder details](docs/decoders.md), the
+[DVB-T2 component](components/dvbt2/README.md) and [DAB limitations](components/dab/README.md).
+
+## Tested computers and practical limits
+
+These are development and reception observations as of **9 November 2026**,
+not minimum system requirements or guarantees for every multiplex.
+
+| Computer/platform | Testing performed | What the results establish |
+| --- | --- | --- |
+| **Linux x86-64, AMD Ryzen 7 5800H — 8 physical cores / 16 logical processors** | Main development/build machine; recorded-IQ DVB-S/S2/T/T2 tests, live 8 MHz DVB-T2 with B210-compatible Kintex-7 and HackRF, and live DAB+ with RTL-SDR/B210. | B210 live intervals sustained about 19,400 TS packets/s with very few bad blocks. HackRF also approached that throughput after the LNA-first gain change, though losses remained in its measured interval. |
+| **Native Windows x64, AMD Ryzen 5 5500H — 4 physical cores / 8 logical processors** | Live DVB-T2 with B210-compatible Kintex-7 and HackRF; RTL-SDR DVB-T/DVB-S and DAB+, plus B210 DAB+. GPU video rendering was also tried. | DAB+ comparisons had intervals without measured audio/IQ losses. Heavy DVB-T2 reception remained variable, with hardware overflows, decoder/FEC losses or jerky playback in several runs. |
+
+The Windows test computer has fewer physical cores than the Linux machine.
+These runs therefore **do not isolate an operating-system performance difference**.
+Sample rates, gain, worker settings, radio and RF conditions also differed;
+no precise CPU-speed ratio or universal reception limit follows from them.
+
+Windows executables also undergo software tests **under Wine on the Linux
+5800H**. Those tests check correctness and integration; they are not native
+Windows radio/performance measurements. The **ODROID-N2 / Ubuntu 20.04 aarch64**
+build path has container/compiler/emulation checks, but full reception
+throughput on a physical N2 is **not yet validated**. See the
+[ODROID notes](docs/headless.md#odroid-n2-ubuntu-20046-aarch64-en-meerdere-rtl-sdrs).
+
+### DVB-T2 on Windows
+
+**8 MHz DVB-T2 is demanding, and smooth, loss-free reception is not yet
+established on the tested Ryzen 5 5500H Windows system.** A constellation or
+high SNR can coexist with damaged or missing data and interrupted video.
+The receiver performs demodulation and LDPC/BCH error correction on the CPU.
+Selecting **Extern op GPU** only moves video playback to the GPU-capable player;
+there is no shipped GPU LDPC decoder.
+
+The GPU renderer made the picture substantially more watchable in the user's
+Windows tests. One measured interval reached about 18,800 TS packets/s with
+no new decoder-IQ or FEC-frame drops, while SDR hardware-overflow indications
+remained. Other intervals were worse. This is useful reception, but not proof
+that the underlying sample-loss problem is solved. See the saved
+[Windows reception baseline](benchmarks/dvbt2-sdr-receive-2026-11-09.json).
+
+The tested B210 setup used its own board-specific FPGA/firmware images and
+`type=b200`. Using 9,142,857 samples/s, the AVX2 clock-correction path and four
+background FEC helpers improved some measured intervals. The
+`DECT2_THREADS=4` setting means four helpers plus the participating PLP thread;
+it is not a four-core CPU limit. These are tested configurations, not a
+universal prescription. See [Windows setup and profiling](docs/windows.md).
+
+Check fresh counters separately: SDR hardware overflows, SDR output-queue
+drops, decoder `input_dropped` and `fec_frames_dropped` describe different
+loss points. The DVB-T2 "bad BCH" total also includes blocks skipped by the
+decoder's recovery policy, so it is not solely a count of attempted BCH failures.
+More processing headroom can help, but the remaining Windows loss cause has
+not been pinned down to CPU capacity, USB transport, a driver or a single bug.
+Avoid running decoder benchmarks alongside a live receiver when comparing it.
+
+## Playback and reception logging
 
 For GPU video playback, select **Renderer → Embedded player** and click
 **Extern op GPU** below **Received video** during reception. **Terug in venster**
@@ -142,15 +348,6 @@ The optional contest fields export as `APP_VERON_ATV_POINTS` and
 contestrobot ATV spreadsheet-to-ADIF converter. Empty fields are omitted.
 This is a reception log; a complete contest submission still needs callsigns,
 locators, reports and exchanges in the contest logging workflow.
-
-Inputs include RTL-SDR, HackRF, USRP B210, RFSpace SDR-IQ, AFEDRI / AFE822x,
-FUNcube Dongle Pro+, LimeSDR Mini v1.x, SDRplay RSP1A/B, Airspy HF+ Dual Port
-(VHF) and Airspy R2. Hardware support depends on the installed drivers; see
-[receiver setup](docs/receivers.md).
-
-DVB-T2 currently supports **8 MHz broadcast channels**, starting at 10 Msps IQ
-input. MISO, inter-frame interleaving and type-2/sub-sliced PLPs are not supported.
-See the [DVB-T2 component](components/dvbt2/README.md) for the supported scope.
 
 ## IQ channel filter
 
