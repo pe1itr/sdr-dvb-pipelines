@@ -8,6 +8,7 @@
 #include "../components/dab/channels.h"
 #include "iq_output.h"
 #include "iq_convert.h"
+#include "hackrf_gain.h"
 #include "iq_shift.h"
 #include "rx_limits.h"
 #include "sdriq.h"
@@ -68,6 +69,23 @@ static double number(const char *s) {
 #define U(call) do { if ((call) != UHD_ERROR_NONE) { char msg[1024]; uhd_get_last_error(msg, sizeof(msg)); fprintf(stderr, "%s: %s\n", #call, msg); goto done; } } while (0)
 #define S(call) do { if ((call) != 0) { fprintf(stderr, "%s: %s\n", #call, SoapySDRDevice_lastError()); goto done; } } while (0)
 
+static int hackrf_gain_apply(SoapySDRDevice *dev, double requested, int mode, double *actual) {
+    HackrfGain g = hackrf_gain(requested);
+    /* Keep Auto's former >51 threshold, but never let the aggregate driver
+     * redistribute LNA/VGA. 14 is Soapy's AMP on code, not calibrated dB. */
+    int amp = mode < 0 ? g.lna + g.vga > 51 : mode;
+    /* Lower VGA before raising LNA to avoid a transient high-gain setting. */
+    double old_vga = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "VGA");
+    if (g.vga < old_vga && SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "VGA", g.vga)) return -1;
+    if (SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "LNA", g.lna) ||
+        SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "VGA", g.vga) ||
+        SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "AMP", amp ? 14 : 0)) return -1;
+    *actual = g.lna + g.vga;
+    fprintf(stderr, "[SDR] HackRF gain: LNA-first; LNA %d dB, VGA %d dB (base 12, limit 24); RF amplifier %s (%s)\n",
+        g.lna, g.vga, amp ? "on" : "off", mode < 0 ? "auto" : "manual");
+    return 0;
+}
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
     /* CRT argv uses the ANSI code page; control/snapshot paths are UTF-8. */
@@ -78,7 +96,7 @@ int main(int argc, char **argv) {
     double bandwidth = 0, receiver_offset = 0, channel_bandwidth = 0;
     const char *ip = "192.168.0.118", *bind_ip = "0.0.0.0";
     double port = 50005;
-    int control_stdin = 0, dab_lo=0;
+    int control_stdin = 0, dab_lo=0, hackrf_amp=-1;
     double dab_if=0;
     const char *b210_port="", *lo_port="TRX1", *dab_state_dir="";
     B210Mixer mixer={0};
@@ -88,11 +106,17 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--dab-lo-output")) {dab_lo=1;continue;}
         if (!strcmp(argv[i], "--control-stdin")) { control_stdin = 1; continue; }
         if (!strcmp(argv[i], "--help")) {
-            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2|pluto --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--b210-input TRX1|RX1|TRX2|RX2] [--dab-if Hz --dab-lo-output --dab-lo-port TRX1|TRX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
+            fprintf(stderr, "sdr_to_stdout --source hackrf|b210|sdriq|afedri|rtlsdr|fcdpp|lime|rsp1a|rsp1b|airspyhf|airspyr2|pluto --sample-rate Hz --frequency Hz --gain dB --format s16|u8 [--ip IPv4 --port TCP_UDP_PORT --bind IPv4] [--args device_args] [--hackrf-amp auto|off|on] [--images DIR] [--antenna TX/RX|RX2|AUTO|LNAW|LNAH] [--b210-input TRX1|RX1|TRX2|RX2] [--dab-if Hz --dab-lo-output --dab-lo-port TRX1|TRX2] [--control-stdin] [--filter-bandwidth Hz] [--receiver-offset Hz --channel-bandwidth Hz]\nHackRF gain: LNA+VGA 12..64 dB, excluding AMP; LNA first, VGA base 12 and limit 24.\nPositive receiver offset selects above the SDR center; 0 bypasses mixing.\nControl stdin: frequency Hz, gain DB, bandwidth HZ (0 = bypass), record FREQUENCY_HZ BASENAME, or record-stop.\n"); return 0;
         }
         if (i + 1 == argc) { fprintf(stderr, "Missing option value\n"); return 2; }
         const char *key = argv[i++], *v = argv[i];
         if (!strcmp(key, "--source")) source = v;
+        else if (!strcmp(key, "--hackrf-amp")) {
+            if (!strcmp(v,"auto")) hackrf_amp=-1;
+            else if (!strcmp(v,"off")) hackrf_amp=0;
+            else if (!strcmp(v,"on")) hackrf_amp=1;
+            else { fprintf(stderr,"Invalid HackRF amplifier mode: use auto, off or on\n"); return 2; }
+        }
         else if (!strcmp(key,"--dab-state-dir")) dab_state_dir=v;
         else if (!strcmp(key,"--dab-if")) dab_if=number(v);
         else if (!strcmp(key,"--b210-input")) b210_port=v;
@@ -142,7 +166,7 @@ int main(int argc, char **argv) {
                    freq < 0 || freq > 35000000 || !afedri_gain_valid(gain) ||
                    port < 1 || port > 65535 || port != floor(port)) : sdriq ? (!sdriq_rate_valid(rate) || freq < 500 || freq > 30000000 || !sdriq_gain_valid(gain)) :
          (rate < 2000000 || rate > (hackrf ? 20000000 : 61440000) ||
-          freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < 0 || gain > (hackrf ? 116 : 76)))) {
+          freq < (hackrf ? 1000000 : 70000000) || freq > 6000000000.0 || gain < (hackrf ? HACKRF_VGA_BASE : 0) || gain > (hackrf ? HACKRF_GAIN_MAX : 76)))) {
         fprintf(stderr, "Invalid source, format, rate, frequency or gain\n");
         if (airspyr2) fprintf(stderr,"Airspy R2: frequency 24000000..1700000000 Hz; rate 2500000 or 10000000; gain setting 0..45 in whole steps\n");
         if (airspyhf) fprintf(stderr,"Airspy HF+ Dual Port VHF: frequency 64000000..260000000 Hz; rate from device (default 768000); automatic gain (gain=0)\n");
@@ -277,6 +301,9 @@ int main(int argc, char **argv) {
             S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "RFGR", 0));
             S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "IFGR", gain));
             gain=SoapySDRDevice_getGainElement(dev,SOAPY_SDR_RX,0,"IFGR");
+        } else if (hackrf) {
+            S(SoapySDRDevice_setBandwidth(dev, SOAPY_SDR_RX, 0, rate));
+            S(hackrf_gain_apply(dev, gain, hackrf_amp, &gain));
         } else if (sdriq) {
             S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "ATT", gain));
             gain = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "ATT");
@@ -409,8 +436,8 @@ int main(int argc, char **argv) {
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
         int changed = control_stdin ? tune_control_read(&control, STDIN_FILENO,
                 rx_frequency_min(source), rx_frequency_max(source), &requested,
-                rsp ? 20 : afedri ? -10 : sdriq ? -20 : 0,
-                pluto ? 73 : airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? 116 : 76,
+                rsp ? 20 : afedri ? -10 : sdriq ? -20 : hackrf ? HACKRF_VGA_BASE : 0,
+                pluto ? 73 : airspyr2 ? 45 : airspyhf ? 0 : rsp ? 59 : lime ? LIME_RX_MAX_GAIN : fcdpp ? FUNCUBE_MAX_GAIN : rtlsdr ? RTLSDR_MAX_GAIN : afedri ? 35 : sdriq ? 10 : hackrf ? HACKRF_GAIN_MAX : 76,
                 pluto || airspyr2 || rsp || lime || fcdpp ? 1 : afedri ? 3 : sdriq ? 10 : 0, &requested_gain, rate, &requested_bw) : 0;
         if ((changed & 1) && (!rx_tuning_valid(source,requested,receiver_offset) ||
             (dab_if && !b210_mixer_valid(requested,dab_if,b210_port,lo_port,dab_lo)))) {
@@ -466,7 +493,9 @@ int main(int argc, char **argv) {
             } else if (sdriq) {
                 S(SoapySDRDevice_setGainElement(dev, SOAPY_SDR_RX, 0, "ATT", requested_gain));
                 gain = SoapySDRDevice_getGainElement(dev, SOAPY_SDR_RX, 0, "ATT");
-            } else if (hackrf || rtlsdr || airspyr2) {
+            } else if (hackrf) {
+                S(hackrf_gain_apply(dev, requested_gain, hackrf_amp, &gain));
+            } else if (rtlsdr || airspyr2) {
                 S(SoapySDRDevice_setGain(dev, SOAPY_SDR_RX, 0, requested_gain));
                 gain = SoapySDRDevice_getGain(dev, SOAPY_SDR_RX, 0);
             } else {

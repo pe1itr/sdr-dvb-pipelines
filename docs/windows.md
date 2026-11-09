@@ -359,3 +359,21 @@ LINRAD_WINDOWS_GUI_TEST=1 python3 tests/test_windows.py
 
 Maak daarna opnieuw het definitieve package; de testprogramma's worden niet
 meegeleverd. `tests/windows_gui_smoke.c` is de aanvullende GUI/video-test.
+
+
+### HackRF: eerst LNA, daarna begrensde VGA
+
+De gainpijlen regelen de HackRF rechtstreeks via de afzonderlijke versterkertrappen.
+VGA blijft op 12 dB terwijl LNA in stappen van 8 dB van 0 naar 40 dB gaat.
+Daarna stijgt VGA in stappen van 2 dB, tot maximaal 24 dB. Omlaag gaat in
+omgekeerde volgorde. Het hoofdscherm toont LNA en VGA afzonderlijk.
+RF amplifier (AMP) blijft afzonderlijk op Auto / Off / On instelbaar;
+Auto schakelt AMP in zodra LNA 40 dB bereikt. AMP telt niet mee in `gain`.
+
+Nieuwe configuraties gebruiken `[hackrf] gain_policy=lna_first` en `gain=44`
+(LNA 32 + VGA 12). Een bestaande INI zonder `gain_policy` krijgt bij het laden
+deze beginstand; de oude waarde wordt in het geheugen bewaard als
+`legacy_soapy_gain`. De actieve INI wordt daarmee niet automatisch herschreven:
+W slaat de nieuwe instellingen op. Een bestaande AMP-keuze blijft behouden.
+De helper accepteert voor HackRF `--gain 12..64` (LNA + VGA), afgerond naar
+bovenstaande hardwarestappen; de RF-versterker is `--hackrf-amp auto|off|on`.

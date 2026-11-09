@@ -98,7 +98,7 @@ GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
 GUI_SOURCES += src/status_http.c src/program_view.c src/srt_output.c src/dab_view.c
 GUI_HEADERS += src/sdr_rx_status.h src/status_http.h src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
-GUI_HEADERS += src/decoder_margin.h
+GUI_HEADERS += src/decoder_margin.h src/hackrf_gain.h
 GUI_HEADERS += src/signal_meter.h
 GUI_HEADERS += src/reception_log.h src/maidenhead.h
 GUI_HEADERS += $(BUILD_DIR)/generated/linrad_build_info.h
@@ -190,7 +190,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 SDR_SOURCES := src/sdr_to_stdout.c src/pluto_rx.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
-$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/sdr_rx_status.h src/pluto_rx.h src/snapshot_file.h src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
+$(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/hackrf_gain.h src/sdr_rx_status.h src/pluto_rx.h src/snapshot_file.h src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(PLUTO_CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(GLIB_LIBS) $(shell pkg-config --libs SoapySDR uhd alsa) $(PLUTO_LIBS) $(LIME_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
 $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)

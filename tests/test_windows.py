@@ -43,6 +43,28 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_hackrf_gain_migration_preserves_ini(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as tmp:
+            path=Path(tmp)/"hackrf.ini"
+            settings=configparser.ConfigParser(interpolation=None)
+            settings.read(PACKAGE / "linrad-dvb.example.ini")
+            settings['hackrf'].pop('gain_policy',None)
+            settings['hackrf'].update(gain='83',rf_amp='on')
+            with path.open('w') as f: settings.write(f)
+            before=path.read_bytes()
+            result=run('linrad_dvb','-c',windows_path(path),'--source','hackrf',
+                       '--standard','DVB-T2','--print-pipeline')
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn(b"'--gain' '44'",result.stdout)
+            self.assertIn(b"'--hackrf-amp' 'on'",result.stdout)
+            self.assertEqual(path.read_bytes(),before)
+            settings['hackrf'].update(gain_policy='lna_first',gain='54')
+            with path.open('w') as f: settings.write(f)
+            result=run('linrad_dvb','-c',windows_path(path),'--source','hackrf',
+                       '--standard','DVB-T2','--print-pipeline')
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn(b"'--gain' '54'",result.stdout)
+
     def test_iq_output_backpressure(self):
         for name in ("test_iq_output", "test_iq_output_backpressure"):
             with self.subTest(program=name):

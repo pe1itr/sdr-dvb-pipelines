@@ -25,7 +25,7 @@ class SoapyInputTests(unittest.TestCase):
 
     def receiver(self, source, *args, commands=b'', model=None, actual_rate=None, no_2m5=False):
         env = dict(os.environ, LD_PRELOAD=self.library,
-                   MOCK_MODEL=model or {'rsp1a': 'RSP1A', 'rsp1b': 'RSP1B', 'airspyhf': 'AirspyHF', 'airspyr2': 'Airspy'}[source])
+                   MOCK_MODEL=model or {'hackrf': 'HackRF', 'rsp1a': 'RSP1A', 'rsp1b': 'RSP1B', 'airspyhf': 'AirspyHF', 'airspyr2': 'Airspy'}[source])
         if no_2m5:
             env["MOCK_NO_2M5"] = "1"
         if actual_rate:
@@ -34,6 +34,43 @@ class SoapyInputTests(unittest.TestCase):
             '--sample-rate', '10000000' if source == 'airspyr2' else '768000' if source == 'airspyhf' else '2000000',
             '--frequency', '144000000', '--gain', '0' if source == 'airspyhf' else '40',
             '--control-stdin', *args], input=commands, capture_output=True, env=env, timeout=5)
+
+    def test_hackrf_amp_survives_live_gain_changes(self):
+        for mode, start_gain, command, state in (
+                ('on', '30', b'gain 40\n', b'on (manual)'),
+                ('off', '56', b'gain 64\n', b'off (manual)'),
+                ('auto', '30', b'gain 52\n', None)):
+            result=self.receiver('hackrf', '--gain', start_gain, '--hackrf-amp', mode, commands=command)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(result.stdout), 8)
+            if state:
+                self.assertEqual(result.stderr.count(b'RF amplifier '+state), 2, result.stderr)
+                self.assertEqual(result.stderr.count(b'MOCK gain AMP '+(b'14' if mode=='on' else b'0')), 2)
+            else:
+                self.assertIn(b'RF amplifier off (auto)',result.stderr)
+                self.assertIn(b'RF amplifier on (auto)',result.stderr)
+                self.assertIn(b'MOCK gain AMP 0',result.stderr)
+                self.assertIn(b'MOCK gain AMP 14',result.stderr)
+        result=self.receiver('hackrf', '--hackrf-amp', 'invalid')
+        self.assertEqual(result.returncode,2)
+        self.assertNotIn(b'MOCK open',result.stderr)
+
+    def test_hackrf_lna_first_and_bounded_vga(self):
+        for total,lna,vga in ((12,0,12),(20,8,12),(28,16,12),(36,24,12),
+                              (44,32,12),(52,40,12),(54,40,14),(64,40,24)):
+            with self.subTest(total=total):
+                result=self.receiver('hackrf','--gain',str(total),'--hackrf-amp','on')
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertIn(f'LNA {lna} dB, VGA {vga} dB'.encode(),result.stderr)
+                self.assertNotIn(b'MOCK gain aggregate',result.stderr)
+        result=self.receiver('hackrf','--gain','64',commands=b'gain 44\n')
+        self.assertEqual(result.returncode,0,result.stderr)
+        tail=result.stderr.split(b'RF amplifier on (auto)')[-1]
+        self.assertLess(tail.index(b'MOCK gain VGA 12'),tail.index(b'MOCK gain LNA 32'))
+        for gain in ('11','65','83'):
+            result=self.receiver('hackrf','--gain',gain)
+            self.assertEqual(result.returncode,2,result.stderr)
+            self.assertNotIn(b'MOCK open',result.stderr)
 
     def test_stream_conversion_and_live_controls(self):
         for source in ('rsp1a', 'rsp1b', 'airspyhf', 'airspyr2'):

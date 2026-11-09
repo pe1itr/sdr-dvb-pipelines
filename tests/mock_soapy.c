@@ -10,13 +10,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-static double rate, gain;
+static double rate, gain, amp, lna, vga=16;
 static int handle, reads, native_s16;
 SoapySDRDevice *SoapySDRDevice_make(const SoapySDRKwargs *args) {
     fprintf(stderr,"MOCK open %s\n",SoapySDRKwargs_get(args,"driver"));
     return (SoapySDRDevice *)&handle;
 }
 int SoapySDRDevice_unmake(SoapySDRDevice *d) { return 0; }
+SoapySDRDevice *SoapySDRDevice_makeStrArgs(const char *args) {
+    SoapySDRKwargs parsed=SoapySDRKwargs_fromString(args);
+    SoapySDRDevice *dev=SoapySDRDevice_make(&parsed);
+    SoapySDRKwargs_clear(&parsed); return dev;
+}
 char *SoapySDRDevice_getHardwareKey(const SoapySDRDevice *d) { return strdup(getenv("MOCK_MODEL")); }
 SoapySDRRange *SoapySDRDevice_getFrequencyRange(const SoapySDRDevice *d, int dir, size_t ch, size_t *n) {
     *n=1;
@@ -42,20 +47,29 @@ int SoapySDRDevice_setGainMode(SoapySDRDevice *d, int dir, size_t ch, bool autom
     fprintf(stderr,"MOCK agc %d\n",automatic); return 0;
 }
 int SoapySDRDevice_setGain(SoapySDRDevice *d, int dir, size_t ch, double v) {
-    assert(v>=0 && v<=45); fprintf(stderr,"MOCK gain aggregate %.0f\n",v); gain=v; return 0;
+    assert(strcmp(getenv("MOCK_MODEL"),"HackRF")); /* Must use named stages. */
+    assert(v>=0 && v<=116); fprintf(stderr,"MOCK gain aggregate %.0f\n",v);
+    gain=v; amp=v>51 ? 14 : 0; return 0;
 }
 double SoapySDRDevice_getGain(const SoapySDRDevice *d, int dir, size_t ch) { return gain; }
 int SoapySDRDevice_setGainElement(SoapySDRDevice *d, int dir, size_t ch, const char *name, double v) {
-    fprintf(stderr,"MOCK gain %s %.0f\n",name,v); gain=v; return 0;
+    fprintf(stderr,"MOCK gain %s %.0f\n",name,v);
+    if (!strcmp(name,"AMP")) amp=v;
+    else if (!strcmp(name,"LNA")) { assert(v>=0 && v<=40 && (int)v%8==0); lna=v; }
+    else if (!strcmp(name,"VGA")) { assert(v>=12 && v<=24 && (int)v%2==0); vga=v; }
+    else gain=v;
+    return 0;
 }
-double SoapySDRDevice_getGainElement(const SoapySDRDevice *d, int dir, size_t ch, const char *name) { return gain; }
+double SoapySDRDevice_getGainElement(const SoapySDRDevice *d, int dir, size_t ch, const char *name) {
+    return !strcmp(name,"AMP") ? amp : !strcmp(name,"LNA") ? lna : !strcmp(name,"VGA") ? vga : gain;
+}
 #if SOAPY_SDR_API_VERSION >= 0x00080000
 SoapySDRStream *SoapySDRDevice_setupStream(SoapySDRDevice *d, int dir, const char *format,
 #else
 int SoapySDRDevice_setupStream(SoapySDRDevice *d, SoapySDRStream **out, int dir, const char *format,
 #endif
         const size_t *channels, size_t n, const SoapySDRKwargs *args) {
-    native_s16=!strcmp(getenv("MOCK_MODEL"),"Airspy");
+    native_s16=!strcmp(getenv("MOCK_MODEL"),"Airspy") || !strcmp(getenv("MOCK_MODEL"),"HackRF");
     assert(!strcmp(format,native_s16 ? "CS16" : "CF32") && n==1 && *channels==0);
 #if SOAPY_SDR_API_VERSION >= 0x00080000
     return (SoapySDRStream *)&handle;

@@ -42,6 +42,7 @@
 #include "dab_view.h"
 #include "status_http.h"
 #include "sdr_rx_status.h"
+#include "hackrf_gain.h"
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
@@ -62,6 +63,7 @@ typedef struct {
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
+    GtkWidget *hackrf_amp_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_plp_box;
@@ -412,6 +414,10 @@ static void build_pipeline(App *a) {
         if (strcmp(format, "s16") && strcmp(format, "u8")) fatal("Invalid SDR format");
         s = new_stage(a, "sdr");
         add(s, "--source"); add(s, section);
+        if (a->source == 1) {
+            char *mode=setting(a,"hackrf","rf_amp");
+            add(s,"--hackrf-amp"); add(s,mode); g_free(mode);
+        }
         if (a->standard==4) {add(s,"--dab-state-dir");add(s,a->dab.directory);}
         if (a->window) add(s, "--control-stdin");
         add(s, "--format"); add(s, format);
@@ -1098,6 +1104,10 @@ static void tuning_refresh(App *a) {
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
         char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
+        if (a->source == 1) {
+            HackrfGain g=hackrf_gain(g_key_file_get_double(a->config,"hackrf","gain",NULL));
+            g_free(gain); gain=g_strdup_printf("LNA %d / VGA %d dB",g.lna,g.vga);
+        }
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
@@ -1242,9 +1252,10 @@ static void gain_step(App *a, int direction) {
     const char *section = sources[a->source];
     double gain = g_key_file_get_double(a->config, section, "gain", NULL);
     double next = gain + direction*(a->source == SOURCE_AFEDRI ? 3 : a->source == 3 ? 10 : 1);
-    double low = rx_rsp(section) ? 20 : a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : 0;
-    double high = a->source == SOURCE_PLUTO ? (g_key_file_get_double(a->config,section,"frequency",NULL)<=1300000000 ? 73 : g_key_file_get_double(a->config,section,"frequency",NULL)<=4000000000 ? 71 : 62) : a->source == SOURCE_AIRSPYR2 ? 45 : rx_rsp(section) ? 59 : a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? 116 : 76;
+    double low = rx_rsp(section) ? 20 : a->source == SOURCE_AFEDRI ? -10 : a->source == 3 ? -20 : a->source == 1 ? HACKRF_VGA_BASE : 0;
+    double high = a->source == SOURCE_PLUTO ? (g_key_file_get_double(a->config,section,"frequency",NULL)<=1300000000 ? 73 : g_key_file_get_double(a->config,section,"frequency",NULL)<=4000000000 ? 71 : 62) : a->source == SOURCE_AIRSPYR2 ? 45 : rx_rsp(section) ? 59 : a->source == SOURCE_LIME ? LIME_RX_MAX_GAIN : a->source == SOURCE_FCDPP ? FUNCUBE_MAX_GAIN : a->source == SOURCE_RTLSDR ? RTLSDR_MAX_GAIN : a->source == SOURCE_AFEDRI ? 35 : a->source == 3 ? 10 : a->source == 1 ? HACKRF_GAIN_MAX : 76;
     if (a->source == SOURCE_RTLSDR) next = CLAMP(next, low, high);
+    if (a->source == 1) next = hackrf_gain_step(gain,direction);
     if (next == gain || next < low || next > high) { status(a, "SDR gain limit reached"); return; }
     if (a->running) {
         /* The helper expects a decimal point, regardless of GTK's locale. */
@@ -2301,6 +2312,20 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+    /* Old aggregate gain numbers had a different meaning. Preserve the old
+     * value for reference and start the new policy at LNA32/VGA12 in memory.
+     * The active INI is only updated by the existing explicit save action. */
+    if (!g_key_file_has_key(a->config,"hackrf","gain_policy",NULL)) {
+        if (g_key_file_has_key(a->config,"hackrf","gain",NULL))
+            g_key_file_set_double(a->config,"hackrf","legacy_soapy_gain",
+                g_key_file_get_double(a->config,"hackrf","gain",NULL));
+        g_key_file_set_string(a->config,"hackrf","gain_policy","lna_first");
+        g_key_file_set_integer(a->config,"hackrf","gain",HACKRF_GAIN_DEFAULT);
+    }
+    HackrfGain hg=hackrf_gain(g_key_file_get_double(a->config,"hackrf","gain",NULL));
+    g_key_file_set_integer(a->config,"hackrf","gain",hg.lna+hg.vga);
+    if (!g_key_file_has_key(a->config,"hackrf","rf_amp",NULL))
+        g_key_file_set_string(a->config,"hackrf","rf_amp","auto");
     const char *dk[]={"channel","profile","channel_filter","audio_device","mixer_enabled","lo_output_enabled","if_hz","rx_input","lo_port","free_tuning","frequency_hz"};
     const char *dv[]={"12C","normal","true","default","false","false","53000000","RX1","TRX1","false","227360000"};
     for (unsigned i=0;i<G_N_ELEMENTS(dk);++i)
@@ -2787,6 +2812,14 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
 }
 
+static void hackrf_amp_changed(GtkComboBox *box, gpointer data) {
+    App *a=data;
+    const char *mode=gtk_combo_box_get_active_id(box);
+    if (a->running || !mode) return;
+    g_key_file_set_string(a->config,"hackrf","rf_amp",mode);
+    refresh_preview(a);
+}
+
 static void create_config(App *a) {
     a->config_dialog = gtk_dialog_new_with_buttons("SDR · input and hardware", GTK_WINDOW(a->window),
         GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
@@ -2859,6 +2892,23 @@ static void create_config(App *a) {
                 if (rx_rsp(sources[source])) gtk_widget_set_tooltip_text(entry,"SoapySDRPlay3 and SDRplay API v3 required. Optional serial=SERIAL selects a device. The selected RSP model is checked at start. Gain arrows adjust IF reduction (20..59 dB); higher means less gain. RF reduction state is 0.");
                 a->hardware_entries[source][field] = entry;
                 g_signal_connect(entry, "changed", G_CALLBACK(hardware_entry_changed), a);
+            }
+            if (source == 1) {
+                GtkWidget *label=gtk_label_new("RF amplifier (AMP)");
+                gtk_widget_set_halign(label,GTK_ALIGN_START);
+                gtk_grid_attach(GTK_GRID(grid),label,0,3,1,1);
+                a->hackrf_amp_box=gtk_combo_box_text_new();
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->hackrf_amp_box),"auto","Auto (follow gain)");
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->hackrf_amp_box),"off","Off");
+                gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->hackrf_amp_box),"on","On");
+                char *mode=setting(a,"hackrf","rf_amp");
+                gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->hackrf_amp_box),mode); g_free(mode);
+                gtk_widget_set_tooltip_text(a->hackrf_amp_box,"Switch the internal RF preamplifier on or off. Auto enables it when LNA reaches 40 dB. AMP is separate from the displayed LNA/VGA gain. Stop reception to change; W saves settings.");
+                gtk_grid_attach(GTK_GRID(grid),a->hackrf_amp_box,1,3,1,1);
+                g_signal_connect(a->hackrf_amp_box,"changed",G_CALLBACK(hackrf_amp_changed),a);
+                GtkWidget *note=gtk_label_new("Gain arrows: LNA 0–40 dB first, with VGA at 12 dB.\nThen VGA 12–24 dB. W saves settings.");
+                gtk_label_set_xalign(GTK_LABEL(note),0);
+                gtk_grid_attach(GTK_GRID(grid),note,0,4,2,1);
             }
             if (source == SOURCE_FCDPP) {
                 GtkWidget *note = gtk_label_new("Fixed 192 kS/s · IF gain 0–59 dB\nUse narrowband DVB settings, e.g. DVB-T 40 kHz.\nTuning: 0.15–240 MHz and 420–1900 MHz.\nSpectrum disappears at high gain? Reduce IF gain\nor try lna=1,mixer=0 in Device arguments.");

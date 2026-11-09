@@ -175,7 +175,7 @@ static void exercise_live_gain_locale(App *a) {
     a->running = TRUE; a->tune_fd = fds[1];
     GPtrArray *source_args = a->stages[0].args;
     const struct { int source; double initial, low, high, step; } cases[] = {
-        {1, 40, 0, 116, 1}, {2, 30.5, 0, 76, 1},
+        {1, 44, 12, 64, 8}, {2, 30.5, 0, 76, 1},
         {3, -10, -20, 10, 10}, {SOURCE_AFEDRI, 14, -10, 35, 3},
         {SOURCE_FCDPP, 20, 0, 59, 1}, {SOURCE_LIME, 30, 0, 73, 1}
     };
@@ -1186,7 +1186,7 @@ static void exercise_usb(App *a) {
     int source_index=a->source;
     a->source=1; /* Up/down must still send hardware gain with the USB button focused. */
     double gain=g_key_file_get_double(a->config,"hackrf","gain",NULL);
-    g_key_file_set_double(a->config,"hackrf","gain",40);
+    g_key_file_set_double(a->config,"hackrf","gain",44);
     int control[2], saved_tune_fd=a->tune_fd;
     g_assert_cmpint(pipe(control),==,0); a->tune_fd=control[1];
     gtk_window_set_focus(GTK_WINDOW(a->window),a->usb_toggle);
@@ -1195,12 +1195,12 @@ static void exercise_usb(App *a) {
     g_assert_true(tuning_key(a->window,&event,a));
     char command[64]={0};
     g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
-    g_assert_cmpstr(command,==,"gain 41.0\n");
+    g_assert_cmpstr(command,==,"gain 52.0\n");
     event.keyval=GDK_KEY_Down;
     g_assert_true(tuning_key(a->window,&event,a));
     memset(command,0,sizeof(command));
     g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
-    g_assert_cmpstr(command,==,"gain 40.0\n");
+    g_assert_cmpstr(command,==,"gain 44.0\n");
     g_assert_cmpfloat(usb_receiver_frequency(a->usb_receiver),==,before);
     close(control[0]); close(control[1]); a->tune_fd=saved_tune_fd;
     g_key_file_set_double(a->config,"hackrf","gain",gain);
@@ -1794,12 +1794,35 @@ static gboolean exercise(gpointer data) {
         a->iq_view.active=FALSE;
         g_assert_cmpint(a->sr, ==, 125000);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 1);
+        const int gain_steps[]={12,20,28,36,44,52,54,56,58,60,62,64};
+        g_key_file_set_integer(a->config,"hackrf","gain",gain_steps[0]);
+        for (unsigned i=1;i<G_N_ELEMENTS(gain_steps);++i) {
+            gain_step(a,1);
+            g_assert_cmpint(g_key_file_get_integer(a->config,"hackrf","gain",NULL),==,gain_steps[i]);
+        }
+        gain_step(a,1);
+        g_assert_cmpint(g_key_file_get_integer(a->config,"hackrf","gain",NULL),==,64);
+        for (int i=G_N_ELEMENTS(gain_steps)-2;i>=0;--i) {
+            gain_step(a,-1);
+            g_assert_cmpint(g_key_file_get_integer(a->config,"hackrf","gain",NULL),==,gain_steps[i]);
+        }
+        gain_step(a,-1);
+        g_assert_cmpint(g_key_file_get_integer(a->config,"hackrf","gain",NULL),==,12);
+        g_assert_cmpstr(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->hackrf_amp_box)),==,"auto");
+        const char *amp_modes[]={"on","off","auto"};
+        for (unsigned i=0;i<G_N_ELEMENTS(amp_modes);++i) {
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->hackrf_amp_box),amp_modes[i]);
+            char *saved=setting(a,"hackrf","rf_amp");
+            g_assert_cmpstr(saved,==,amp_modes[i]); g_free(saved);
+            char *pipeline=describe(a), *option=g_strdup_printf("'--hackrf-amp' '%s'",amp_modes[i]);
+            g_assert_nonnull(strstr(pipeline,option)); g_free(option); g_free(pipeline);
+        }
         g_assert_true(gtk_widget_get_sensitive(a->frequency_box));
         g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->format_box)), ==, 1);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), 1252000);
         g_assert_cmpfloat(g_key_file_get_double(a->config, "hackrf", "frequency", NULL), ==, 1252000000);
-        while (g_key_file_get_double(a->config,"hackrf","gain",NULL) != 40)
-            gain_step(a,g_key_file_get_double(a->config,"hackrf","gain",NULL) < 40 ? 1 : -1);
+        while (g_key_file_get_double(a->config,"hackrf","gain",NULL) != 44)
+            gain_step(a,g_key_file_get_double(a->config,"hackrf","gain",NULL) < 44 ? 1 : -1);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box), 12000000);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), 2);
         g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->format_box)), ==, 0);
@@ -1893,7 +1916,7 @@ static gboolean exercise(gpointer data) {
         g_assert_true(gtk_widget_get_visible(a->rate_box));
         g_assert_false(gtk_widget_get_visible(a->sdriq_rate_box));
         g_assert_cmpfloat(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)), ==, 1252000);
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)), ==, "Gain 40 dB");
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)), ==, "LNA 32 / VGA 12 dB");
         g_assert_cmpint(gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)), ==, 12000000);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), 9);
