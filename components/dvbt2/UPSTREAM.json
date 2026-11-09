@@ -107,6 +107,7 @@
     "Windows live FEC background threads explicitly disable EcoQoS execution-speed throttling and log API acceptance/failure; existing thread priorities unchanged.",
     "Exclusive wall-time profiling alongside thread CPU time, with explicit resampler/pool waits and host input/TS stages for live bottleneck diagnosis.",
     "Runtime-dispatched AVX2 sample-clock correction with original filter and floating-point accumulation order; generic x86 A/B fallback and streaming equivalence tests.",
-    "AVX2 LDPC minima selected by input magnitude instead of connection index, with min/max second-minimum update; original layered arithmetic and retry policy preserved, 1008-case reference equivalence on normal/short rates."
+    "AVX2 LDPC minima selected by input magnitude instead of connection index, with min/max second-minimum update; original layered arithmetic and retry policy preserved, 1008-case reference equivalence on normal/short rates.",
+    "Detailed exclusive channel/equalizer profile stages; remove unused pre-phase pilot observations, reuse data-stream buffers, and directly select P2/data PLP cells into owned jobs without full concatenation; 42318-range equivalence and ownership tests."
   ]
 }

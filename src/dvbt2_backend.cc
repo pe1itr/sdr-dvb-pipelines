@@ -96,6 +96,7 @@ int dvbt2_backend_main(int argc, char** argv) {
             std::thread::hardware_concurrency(), configuredThreads(), prof::stageProfEnabled());
         fprintf(stderr, "DVB-T2 clock correction: %s\n", ClockCorrector::backendName());
         fprintf(stderr, "DVB-T2 LDPC: %s\n", t2LdpcBackendName());
+        fprintf(stderr, "DVB-T2 channel processing: direct PLP assembly, reusable buffers\n");
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;

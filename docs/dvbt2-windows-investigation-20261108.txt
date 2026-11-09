@@ -356,3 +356,44 @@ A fresh pre-update live baseline is saved as ldpc-investigation-20261109/
 live-before-profile.json: 57.356 s, 807,516 TS (14,079/s), 3,604,480 decoder
 IQ drops (0.6874% nominal), 14 FEC-frame drops. Conditions vary considerably
 from earlier intervals; do not attribute all change across runs to software.
+
+Follow-up: channel-stage decomposition and memory traffic (2026-11-09)
+--------------------------------------------------------------------
+The user authorised splitting and optimising channel estimation/equalisation.
+Detailed t2.ce.* and t2.eq.* stages show that the old t2.eqloop includes PLP
+assembly, buffer preparation and interference tracking, not just division by
+channel coefficients. In a slowed existing recording under Wine, preparing
+and submitting the PLP cost 0.397 s of a 1.097 s total over 11 frames. The
+actual equalisation arithmetic and channel interpolation were much smaller.
+
+Three changes preserve the signal processing arithmetic:
+- Remove pilot observations gathered before phase correction: they were
+  cleared without being read, then rebuilt from the corrected cells.
+- Keep data-cell/noise vectors with the frontend and resize once per frame.
+  Every position is overwritten through the existing interleaver permutation;
+  erased symbols explicitly write zeros/large noise. PLP jobs own their copy.
+- Copy the selected PLP range directly from gathered P2 and data symbols,
+  avoiding full concatenated intermediate cell/noise vectors. Bounds checks
+  reject invalid ranges before touching output. P2 noise arithmetic is identical.
+
+Both instrumented builds process the same existing recording at quarter speed.
+Linux full channel-stage CPU falls 0.635 -> 0.455 s (sync) and 0.679 -> 0.475 s
+(pipelined). Windows-under-Wine elapsed stage time falls 1.095 -> 0.824 s and
+1.097 -> 0.825 s, about 25%. These totals sum parent plus exclusive children,
+cover 11 profiled frames, and are NOT native Windows 5500H measurements or
+whole-receiver throughput. Startup marker:
+DVB-T2 channel processing: direct PLP assembly, reusable buffers
+
+42,318 PLP ranges match the original concatenation/slice method byte-for-byte,
+including P2/data boundaries, noise values, buffer reuse, empty ranges and
+job ownership. Invalid/overflowing ranges are rejected. Linux and Windows
+Wine pipeline/gap tests pass. Four candidate quarter-speed IQ replays retain
+46,257 packets, BCH 1801/212, zero input/FEC drops and exact previous TS hash.
+Profiling artifacts: build/t2-bench/channel-profile-before/after-*.json/.log.
+Investigation artifacts: build/t2-bench/channel-investigation-20261109/.
+Tracked comparison: benchmarks/dvbt2-channel-2026-11-09.json.
+
+Detailed profiler children are exclusive: t2.chanest+eq and t2.eqloop alone
+now represent only remaining unclassified work. Include t2.ce.* and t2.eq.*
+when comparing frontend totals with earlier versions. Native Windows live
+validation is pending at 9,142,857 sps, gain 53, four workers and GPU renderer.

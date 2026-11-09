@@ -185,6 +185,13 @@ iteraties met de onafhankelijke referentiedecoder, ook bij gelijke minima.
 Korte componenttests onder Wine geven 6-11% minder LDPC-tijd; het effect op
 live ontvangst op de Windows-pc moet afzonderlijk worden gemeten.
 
+Het frontend hergebruikt de databuffers en stelt de geselecteerde PLP direct
+samen, zonder eerst de volledige tussenstroom te kopiëren. Het log meldt
+`DVB-T2 channel processing: direct PLP assembly, reusable buffers`.
+De profielregels `t2.ce.*` en `t2.eq.*` splitsen kanaalverwerking verder op.
+Hun tijden worden niet meer in de bovenliggende `t2.chanest+eq` en
+`t2.eqloop` meegerekend: tel de onderdelen erbij om met oude logs te vergelijken.
+
 Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
 profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
 verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor

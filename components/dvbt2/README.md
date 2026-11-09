@@ -71,6 +71,21 @@ before LDPC. `test_dvbt2_gap_clock` reproduces this with a zero-clock-error
 synthetic signal and an absent PLP (no LDPC work). This fixes recovery after
 loss; it does not prevent the original input queue overflow.
 
+The data stage retains its cell/noise buffers across frames and writes every
+position, including erased symbols, before submitting a PLP. PLP assembly
+copies the selected range directly from gathered P2 cells and data cells into
+the job's own storage, avoiding a full concatenated intermediate stream.
+Pilot observations are built once, after phase correction; the previous
+uncorrected observations were discarded without being used.
+
+Detailed `t2.ce.*` and `t2.eq.*` profile stages separate phase correction,
+pilot/noise fitting, interpolation, cell processing and PLP submission.
+All stage times are exclusive: include these children when comparing with
+older `t2.chanest+eq` / `t2.eqloop` totals. Profiling remains optional.
+`test_dvbt2_pipeline` also checks 42,318 PLP ranges against the original
+concatenate-then-slice method, including P2/data boundaries, noise values,
+reused output storage, invalid ranges and independent ownership.
+
 On x86 with AVX2/FMA support, clock correction uses a runtime-selected AVX2
 kernel for two output samples at a time. The 24 taps, 512 phases, sample
 positions and generic floating-point accumulation order are preserved; the

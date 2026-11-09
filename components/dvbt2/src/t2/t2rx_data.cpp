@@ -1,5 +1,6 @@
 // The data stage of the DVB-T2 receiver: channel estimation from the scattered pilots and handing cells to the error correction.
 #include "t2rx_impl.h"
+#include "dect2/t2/plp_cells.h"
 #include "dect2/dsp/simd.h"
 
 namespace dect2 {
@@ -61,15 +62,11 @@ void T2Receiver::Impl::submitPlp(const std::vector<cf32>& dstream, const std::ve
         for (int l = 0; l < nP2; l++) { gs[l].resize(cP2); for (int j = 0; j < cP2; j++) gs[l][j] = p2G2[l][j]; }
         p2Gather(gs, nP2, cP2, nPre, nPost, g2s);
     }
-    std::vector<float> n0s(stream.size());
-    for (size_t i = 0; i < stream.size(); i++) n0s[i] = (float)(sigma2 / (2.0 * std::max(1e-12f, g2s[i].real())));
-    stream.insert(stream.end(), dstream.begin(), dstream.end());
-    n0s.insert(n0s.end(), dn0.begin(), dn0.end());
     const size_t start = (size_t)nPre + nPost + dy.start;
     const size_t need = (size_t)job.numBlocks * d.cellsPerBlock;
-    if (start + need > stream.size()) { plpSkipped++; return; }
-    job.cells.assign(stream.begin() + start, stream.begin() + start + need);
-    job.n0.assign(n0s.begin() + start, n0s.begin() + start + need);
+    if (!selectPlpCells(stream, g2s, dstream, dn0, start, need, sigma2, job.cells, job.n0)) {
+        plpSkipped++; return;
+    }
     plpValid = true; plpId = pc.id; plpFec = job.fec; plpBlocks = job.numBlocks;
     plpDec.submit(std::move(job));
 }
@@ -95,6 +92,7 @@ void T2Receiver::Impl::pollPlp() {
 
 void T2Receiver::Impl::runDataStage() {
     StageClock sc(5);
+    DECT2_STAGE_VAR(setupProfile, "t2.ce.setup");
     const FftMode* fm = fftModeFromS2(fftCode);
     if (!fm || !l1preOk) return;
     const int L = frameSyms, N = fftN, G = guard;
@@ -123,16 +121,9 @@ void T2Receiver::Impl::runDataStage() {
     std::vector<std::vector<Obs>> obs(M);
     const std::vector<std::vector<uint8_t>>& types = dsCache.types;
     auto erased = [&](int l) { return l < (int)symErased.size() && symErased[(size_t)l]; };
-    for (int l = 0; l < L; l++) {
-        if (erased(l)) continue;
-        for (int n = 0; n < M; n++) {
-            int k = dx * n;
-            uint8_t t = types[l][k];
-            if (t != kCellP2Pilot && t != kCellScattered && t != kCellContinual) continue;
-            cf32 pv = pm.pilot(l, k, t);
-            obs[n].push_back({l, frameCells[l][off + k] / pv.real(), t});
-        }
-    }
+    setupProfile.stop();
+    // Observations are needed only after phase correction. The former first
+    // pass was cleared without being read; build the corrected values once.
     if (getenv("DECT2_DEBUG")) {
         // which pilot configuration explains the received cells? coherence of consecutive symbols on that config's continual pilots
         for (int e2 = 0; e2 < 2; e2++) for (int ppc = 0; ppc < 8; ppc++) {
@@ -172,6 +163,7 @@ void T2Receiver::Impl::runDataStage() {
     // The symbol grid has integer-sample resolution, so the sub-sample timing error shows up as a phase slope
     // across the carriers (up to ~1 rad at the band edge for 32K); it is estimated and removed here.
     {
+        DECT2_STAGE_VAR(phaseProfile, "t2.ce.phase");
         double cumA = 0, cumB = 0;
         std::vector<int> cont;
         std::vector<cd> prod;
@@ -220,6 +212,7 @@ void T2Receiver::Impl::runDataStage() {
             cumB += beta;
             if (getenv("DECT2_DEBUG") && l < nP2 + 14) fprintf(stderr, "  [dbg] sym %d: alpha %+.3f beta*10k %+.3f (cum %+.2f, %+.2f) pilots %zu\n", l, alpha, beta * 1e4, cumA, cumB * 1e4, cont.size());
             // rotate by exp(-j (cumA + cumB (kk - (K-1)/2))): a phasor stepped along the carriers, re-anchored every 256 (a sin and cos per cell is slow)
+            DECT2_STAGE("t2.ce.rotate");
             const cd stepR(std::cos(-cumB), std::sin(-cumB));
             cf32* row = &frameCells[l][off];
             // four blocks side by side (four independent phasor chains instead of one; every cell gets the phasor it got before)
@@ -263,6 +256,8 @@ void T2Receiver::Impl::runDataStage() {
             }
             fprintf(stderr, "  [dbg] AFTER correction: scattered(dy) coherence %.3f (%d) phase %.2f\n", mag2 > 0 ? std::abs(tot2) / mag2 : 0.0, n3, std::arg(tot2));
         }
+        phaseProfile.stop();
+        DECT2_STAGE("t2.ce.observations");
         // rebuild the pilot observations from the phase-corrected cells
         for (int n = 0; n < M; n++) obs[n].clear();
         for (int l = 0; l < L; l++)
@@ -274,6 +269,7 @@ void T2Receiver::Impl::runDataStage() {
                 obs[n].push_back({l, frameCells[l][off + k] / pm.pilot(l, k, t).real(), t});
             }
     }
+    DECT2_STAGE_VAR(noiseProfile, "t2.ce.noise");
     // per-grid-point noise from scattered-pilot second differences
     std::vector<float> varN(M, 0.f), pw(M, 0.f);
     double sumSig = 0, sumNoise = 0;
@@ -327,8 +323,8 @@ void T2Receiver::Impl::runDataStage() {
         for (int n = 0; n < M; n++) if (varN[n] > 0) { sn += varN[n]; cn++; }
         sigma2 = cn ? sn / cn * amp2 : 0;
     }
-    std::vector<cf32> dstream; std::vector<float> dn0;
-    dstream.reserve((size_t)std::max(0, L - firstData) * (size_t)K); dn0.reserve((size_t)std::max(0, L - firstData) * (size_t)K);
+    auto& dstream = dsCache.stream;
+    auto& dn0 = dsCache.noise;
     // per carrier, linear between the grid points (never below a tenth of the average: a lucky quiet stretch is no reason for certainty)
     std::vector<float> noiseCar(K, 0.f);
     for (int kk = 0; kk < K; kk++) {
@@ -337,6 +333,8 @@ void T2Receiver::Impl::runDataStage() {
         noiseCar[kk] = std::max((float)(0.1 * sigma2), nGrid[n0i] + w * (nGrid[n1i] - nGrid[n0i]));
     }
     const bool wantPlp = l1postOk && !l1post.plps.empty() && !p2Sym.empty() && sigma2 > 0;
+    noiseProfile.stop();
+    DECT2_STAGE_VAR(fitProfile, "t2.ce.fit");
     // Per grid carrier: weighted least-squares fit of H(l) = a + b (l - lbar) over every pilot observation in the frame
     // (P2 symbols excluded: they carry a different phase/timing reference). The slope is shrunk towards zero when it is
     // not significant, which averages the pilot noise over the whole frame for a quasi-static channel.
@@ -374,6 +372,8 @@ void T2Receiver::Impl::runDataStage() {
         fb[n] = cf32((float)b0.real(), (float)b0.imag());
         flbar[n] = (float)lbar;
     }
+    fitProfile.stop();
+    DECT2_STAGE_VAR(segmentProfile, "t2.ce.segments");
     // A moving receiver: the channel is not a straight line over the frame (at 20 Hz Doppler a path turns by a whole radian in 60 ms). How far
     // the pilots stray from the frame's line, against their noise (from the second differences, varN), says how short the pieces must be: the
     // misfit of a line falls with the fourth power of its length, so each piece is cut to leave a quarter of the noise. Each piece gets its own
@@ -447,6 +447,8 @@ void T2Receiver::Impl::runDataStage() {
         }
     }
     auto segOf = [&](int l) { return nSeg > 1 ? std::min(nSeg - 1, std::max(0, (l - firstData) / segLen)) : 0; };
+    segmentProfile.stop();
+    DECT2_STAGE_VAR(symNoiseProfile, "t2.ce.symbol-noise");
     // Noise power of every data symbol: residual of the pilots against the fitted channel. Interference that comes and goes
     // (a few frames of raised noise, a burst) hits some symbols harder than the frame average that sigma2 describes; scaling the
     // cell noise variance per symbol keeps the LDPC input honest (over-confident wrong bits are far worse than weak ones).
@@ -477,6 +479,8 @@ void T2Receiver::Impl::runDataStage() {
             fprintf(stderr, "\n");
         }
     }
+    symNoiseProfile.stop();
+    DECT2_STAGE_VAR(interpProfile, "t2.ce.interpolate");
     // The grid is linear in the symbol index (a + b (l - lbar) per grid point) and the interpolator is linear, so it is run twice per
     // frame, on the grid at the middle data symbol and on the slopes, instead of once per symbol: H(l) = H(lc) + (l - lc) * Hslope.
     const int lc = firstData + (L - firstData) / 2;
@@ -497,9 +501,15 @@ void T2Receiver::Impl::runDataStage() {
         }
     }
     // the equalised cells are only kept for the display, which thins them to about 6000: store every step-th one
+    interpProfile.stop();
     DECT2_STAGE("t2.eqloop");
     size_t totalData = 0;
     for (int l = firstData; l < L; l++) totalData += dsCache.dataIdx[(size_t)l].size();
+    // Every data position is written below (Hi is a permutation), including
+    // erased symbols. Keep the storage across frames instead of zeroing a new
+    // pair of growing vectors for every symbol of every frame.
+    if (wantPlp) { dstream.resize(totalData); dn0.resize(totalData); }
+    size_t dataOffset = 0;
     const size_t dispStep = std::max<size_t>(1, totalData / 6000);
     size_t dispIdx = 0;
     H.resize(K);
@@ -516,40 +526,51 @@ void T2Receiver::Impl::runDataStage() {
             dl = (float)(l - lc);
             ha = reinterpret_cast<const float*>(Hmid.data()); hb = reinterpret_cast<const float*>(Hslope.data());
         }
-        axpy(ha, hb, dl, reinterpret_cast<float*>(H.data()), 2 * K);
+        { DECT2_STAGE("t2.eq.channel");
+          axpy(ha, hb, dl, reinterpret_cast<float*>(H.data()), 2 * K); }
         const std::vector<int>& di = dsCache.dataIdx[(size_t)l];
         const int cD = (int)di.size();
         {
+            DECT2_STAGE("t2.eq.constellation");
             const size_t first = (dispStep - dispIdx % dispStep) % dispStep;   // the first data cell of this symbol that the display takes
             for (size_t jj = first; jj < (size_t)cD; jj += dispStep) { const int kk = di[jj]; all.push_back(frameCells[l][off + kk] / H[kk]); }
             dispIdx += (size_t)cD;
         }
         if (wantPlp) {
-            // straight into the end of the PLP stream (every one of the cD places is written: Hi is a permutation), with the cached
+            // straight into the PLP stream (every one of the cD places is written: Hi is a permutation), with the cached
             // interleaver sequence by reference: no three vectors (a third of a megabyte at 32K) allocated, zeroed and copied per symbol
+            DECT2_STAGE_VAR(prepareProfile, "t2.eq.prepare");
             const std::vector<int>& Hi = freqInterleaverSeqRef(fftCode, cD, (l & 1) != 0);
-            const size_t d0 = dstream.size();
-            dstream.resize(d0 + (size_t)cD); dn0.resize(d0 + (size_t)cD);
+            const size_t d0 = dataOffset;
+            dataOffset += (size_t)cD;
             cf32* orig = dstream.data() + d0;
             float* on0 = dn0.data() + d0;
+            prepareProfile.stop();
             if (erased(l)) {
                 for (int jj = 0; jj < cD; jj++) { orig[Hi[(size_t)jj]] = cf32(0, 0); on0[Hi[(size_t)jj]] = 1e6f; }
             } else {
+                DECT2_STAGE_VAR(equaliseProfile, "t2.eq.divide");
                 equalise(reinterpret_cast<const float*>(&frameCells[l][off]), reinterpret_cast<const float*>(H.data()), noiseCar.data(), (float)symScale[(size_t)l],
                          reinterpret_cast<float*>(eqv.data()), n0v.data(), K);
+                equaliseProfile.stop();
                 if (flatN0) { double m = 0; for (int jj = 0; jj < cD; jj++) m += n0v[(size_t)di[(size_t)jj]]; m /= std::max(1, cD); for (int jj = 0; jj < cD; jj++) n0v[(size_t)di[(size_t)jj]] = (float)m; }   // A/B: the mean for all
-                if (carrierErase.enabled()) {   // only the data carriers (pilots have another power); gathered, tracked per carrier, scattered back
+                if (carrierErase.enabled()) {
+                    DECT2_STAGE("t2.eq.erase");   // only the data carriers (pilots have another power); gathered, tracked per carrier, scattered back
                     ceE.resize((size_t)cD); ceN.resize((size_t)cD);
                     for (int jj = 0; jj < cD; jj++) { ceE[(size_t)jj] = eqv[(size_t)di[(size_t)jj]]; ceN[(size_t)jj] = n0v[(size_t)di[(size_t)jj]]; }
                     carrierErase.apply(ceE.data(), ceN.data(), di.data(), cD, K);
                     for (int jj = 0; jj < cD; jj++) n0v[(size_t)di[(size_t)jj]] = ceN[(size_t)jj];
                 }
+                { DECT2_STAGE("t2.eq.scatter");
                 for (int jj = 0; jj < cD; jj++) { const int kk = di[(size_t)jj]; orig[Hi[(size_t)jj]] = eqv[(size_t)kk]; on0[Hi[(size_t)jj]] = n0v[(size_t)kk]; }
+                }
             }
         }
         if (l == firstData + (L - firstData) / 2) { chH = H; chK = K; } // keep a mid-frame channel snapshot for display
     }
-    if (wantPlp) submitPlp(dstream, dn0, sigma2);
+    { DECT2_STAGE("t2.eq.submit");
+      if (wantPlp) submitPlp(dstream, dn0, sigma2); }
+    DECT2_STAGE("t2.eq.display");
     eqData.clear();
     eqData = std::move(all);
     dataValid = true;

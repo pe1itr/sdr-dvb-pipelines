@@ -1,12 +1,52 @@
 // The asynchronous front end must preserve samples/gaps and drain at EOF.
 #include "dect2/t2/t2rx.h"
+#include "dect2/t2/plp_cells.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 using namespace dect2;
 static void check(bool ok, const char* message) {
     if (!ok) { fprintf(stderr, "%s\n", message); std::exit(1); }
+}
+static void plpSelection() {
+    unsigned cases = 0;
+    for (size_t np : {0u, 1u, 5u, 32u}) for (size_t nd : {0u, 1u, 7u, 65u}) {
+        std::vector<cf32> p2(np), power(np), data(nd);
+        std::vector<float> dn(nd);
+        for (size_t i=0; i<np; ++i) { p2[i] = cf32(float(i), -float(i)); power[i] = float(int(i%5)-1); }
+        for (size_t i=0; i<nd; ++i) { data[i] = cf32(float(i+100), -float(i)); dn[i] = float(i)*0.125f; }
+        for (double sigma : {0.0, 0.001, 5.0}) {
+            // Original concatenate-then-slice path is the independent oracle.
+            auto joined = p2;
+            joined.insert(joined.end(), data.begin(), data.end());
+            std::vector<float> noise(np);
+            for (size_t i=0; i<np; ++i) noise[i] = (float)(sigma/(2.0*std::max(1e-12f,power[i].real())));
+            noise.insert(noise.end(), dn.begin(), dn.end());
+            std::vector<cf32> out;
+            std::vector<float> n0;
+            for (size_t start=0; start<=joined.size(); ++start) for (size_t count=0; count<=joined.size()-start; ++count) {
+                check(selectPlpCells(p2,power,data,dn,start,count,sigma,out,n0), "valid PLP range rejected");
+                check(out.size()==count && n0.size()==count, "wrong PLP selection size");
+                if (count) {
+                    check(!std::memcmp(out.data(),joined.data()+start,count*sizeof(cf32)), "PLP cells changed");
+                    check(!std::memcmp(n0.data(),noise.data()+start,count*sizeof(float)), "PLP noise changed");
+                }
+                ++cases;
+            }
+            check(!selectPlpCells(p2,power,data,dn,joined.size()+1,0,sigma,out,n0), "invalid PLP start accepted");
+            check(!selectPlpCells(p2,power,data,dn,0,std::numeric_limits<size_t>::max(),sigma,out,n0), "overflowing PLP count accepted");
+        }
+    }
+    std::vector<cf32> p2{{1,2}}, power{{1,0}}, data{{3,4}}, out;
+    std::vector<float> dn{0.5f}, n0;
+    check(selectPlpCells(p2,power,data,dn,0,2,1.0,out,n0), "cross-boundary PLP failed");
+    p2[0]=data[0]=cf32(99,99); dn[0]=99;
+    check(out[0]==cf32(1,2) && out[1]==cf32(3,4) && n0[1]==0.5f, "PLP job borrowed reusable input");
+    power.clear();
+    check(!selectPlpCells(p2,power,data,dn,0,1,1.0,out,n0), "incomplete P2 powers accepted");
+    printf("PLP selection: %u ranges byte-identical; ownership and bounds passed\n",cases);
 }
 static void drain(T2Receiver& rx) {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -48,6 +88,7 @@ static RxTelemetry receive(bool pipeline, double rate, bool gaps) {
     return result;
 }
 int main() {
+    plpSelection();
     for (double rate : {10000000.0, 20000000.0, nativeRateHz(8)}) {
         for (bool gaps : {false, true}) {
             auto expected = receive(false, rate, gaps);

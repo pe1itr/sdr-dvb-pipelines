@@ -1,0 +1,1032 @@
+{
+  "baseline_commit": "7cf0eb33e2786f7a1edf1e78d445fc023ba954d9",
+  "changes": [
+    "Exclusive channel-stage profiling on both compared builds",
+    "Remove unused pre-phase pilot observations",
+    "Reuse fully overwritten data/noise buffers across frames",
+    "Assemble owned PLP job directly from selected P2/data slices"
+  ],
+  "host": "Linux AMD Ryzen 7 5800H; Windows binary under Wine, not native Ryzen 5 5500H",
+  "method": "Existing 3-second IQ recording at 10 MS/s replayed at quarter speed; one before/after run per OS build and sync/pipeline mode. Channel-stage totals from last periodic profile at 11 frames. No real-time throughput claim.",
+  "runs": [
+    {
+      "platform": "linux",
+      "frontend": "sync",
+      "before": {
+        "stages": {
+          "t2.eq.submit": {
+            "cpu_s": 0.169683,
+            "calls": 11,
+            "wall_s": 0.170896
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.111249,
+            "calls": 644,
+            "wall_s": 0.112174
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.051242,
+            "calls": 633,
+            "wall_s": 0.051499
+          },
+          "t2.ce.initial-observations": {
+            "cpu_s": 0.04364,
+            "calls": 11,
+            "wall_s": 0.043907
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.041131,
+            "calls": 11,
+            "wall_s": 0.041543
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.050299,
+            "calls": 649,
+            "wall_s": 0.050827
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.036759,
+            "calls": 11,
+            "wall_s": 0.037039
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.037127,
+            "calls": 644,
+            "wall_s": 0.037599
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.013491,
+            "calls": 11,
+            "wall_s": 0.013602
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.016695,
+            "calls": 11,
+            "wall_s": 0.016782
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.015222,
+            "calls": 644,
+            "wall_s": 0.015484
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.008347,
+            "calls": 11,
+            "wall_s": 0.008417
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.006491,
+            "calls": 11,
+            "wall_s": 0.00653
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.006361,
+            "calls": 649,
+            "wall_s": 0.006646
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.005466,
+            "calls": 11,
+            "wall_s": 0.004494
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.004904,
+            "calls": 11,
+            "wall_s": 0.004937
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.005036,
+            "calls": 649,
+            "wall_s": 0.005049
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.004771,
+            "calls": 11,
+            "wall_s": 0.004857
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.003715,
+            "calls": 11,
+            "wall_s": 0.003757
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.003475,
+            "calls": 11,
+            "wall_s": 0.003491
+          }
+        },
+        "cpu_s": 0.635104,
+        "wall_s": 0.6395299999999999,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "linux",
+          "frontend": "sync",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "after": {
+        "stages": {
+          "t2.eq.erase": {
+            "cpu_s": 0.110385,
+            "calls": 644,
+            "wall_s": 0.111311
+          },
+          "t2.eq.submit": {
+            "cpu_s": 0.059391,
+            "calls": 11,
+            "wall_s": 0.059767
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.049646,
+            "calls": 644,
+            "wall_s": 0.050168
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.043583,
+            "calls": 11,
+            "wall_s": 0.043872
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.04809,
+            "calls": 633,
+            "wall_s": 0.048157
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.040949,
+            "calls": 11,
+            "wall_s": 0.041556
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.013139,
+            "calls": 11,
+            "wall_s": 0.013204
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.014635,
+            "calls": 11,
+            "wall_s": 0.013758
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.015697,
+            "calls": 11,
+            "wall_s": 0.015806
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.013321,
+            "calls": 644,
+            "wall_s": 0.01364
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.00899,
+            "calls": 11,
+            "wall_s": 0.00906
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.006638,
+            "calls": 11,
+            "wall_s": 0.00664
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.0062,
+            "calls": 649,
+            "wall_s": 0.006448
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.002637,
+            "calls": 649,
+            "wall_s": 0.002655
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.004942,
+            "calls": 11,
+            "wall_s": 0.004966
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.004661,
+            "calls": 11,
+            "wall_s": 0.004693
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.004788,
+            "calls": 649,
+            "wall_s": 0.004793
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.003742,
+            "calls": 11,
+            "wall_s": 0.003763
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.003776,
+            "calls": 11,
+            "wall_s": 0.003807
+          }
+        },
+        "cpu_s": 0.45521,
+        "wall_s": 0.45806399999999997,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "linux",
+          "frontend": "sync",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "cpu_reduction_percent": 28.325124703985495,
+      "wall_reduction_percent": 28.374900317420604
+    },
+    {
+      "platform": "linux",
+      "frontend": "pipeline",
+      "before": {
+        "stages": {
+          "t2.eq.submit": {
+            "cpu_s": 0.205132,
+            "calls": 11,
+            "wall_s": 0.2066
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.11102,
+            "calls": 644,
+            "wall_s": 0.111978
+          },
+          "t2.ce.initial-observations": {
+            "cpu_s": 0.052085,
+            "calls": 11,
+            "wall_s": 0.052534
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.05038,
+            "calls": 633,
+            "wall_s": 0.050482
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.052086,
+            "calls": 649,
+            "wall_s": 0.052655
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.039911,
+            "calls": 11,
+            "wall_s": 0.040358
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.013912,
+            "calls": 11,
+            "wall_s": 0.013978
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.037284,
+            "calls": 644,
+            "wall_s": 0.037792
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.035432,
+            "calls": 11,
+            "wall_s": 0.035718
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.016765,
+            "calls": 11,
+            "wall_s": 0.016876
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.015689,
+            "calls": 644,
+            "wall_s": 0.016035
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.008297,
+            "calls": 11,
+            "wall_s": 0.008377
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.006349,
+            "calls": 649,
+            "wall_s": 0.006625
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.00501,
+            "calls": 11,
+            "wall_s": 0.005062
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.005581,
+            "calls": 11,
+            "wall_s": 0.004523
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.005069,
+            "calls": 11,
+            "wall_s": 0.005119
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.006193,
+            "calls": 11,
+            "wall_s": 0.006212
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.005136,
+            "calls": 649,
+            "wall_s": 0.005181
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.003807,
+            "calls": 11,
+            "wall_s": 0.003811
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.003569,
+            "calls": 11,
+            "wall_s": 0.003609
+          }
+        },
+        "cpu_s": 0.678707,
+        "wall_s": 0.683525,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "linux",
+          "frontend": "pipeline",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "after": {
+        "stages": {
+          "t2.eq.erase": {
+            "cpu_s": 0.111611,
+            "calls": 644,
+            "wall_s": 0.112729
+          },
+          "t2.eq.submit": {
+            "cpu_s": 0.061204,
+            "calls": 11,
+            "wall_s": 0.061654
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.057065,
+            "calls": 633,
+            "wall_s": 0.057394
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.052188,
+            "calls": 644,
+            "wall_s": 0.052753
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.048381,
+            "calls": 11,
+            "wall_s": 0.049048
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.041932,
+            "calls": 11,
+            "wall_s": 0.042207
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.01438,
+            "calls": 11,
+            "wall_s": 0.014472
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.01554,
+            "calls": 11,
+            "wall_s": 0.014638
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.015853,
+            "calls": 11,
+            "wall_s": 0.015989
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.01334,
+            "calls": 644,
+            "wall_s": 0.013686
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.007522,
+            "calls": 11,
+            "wall_s": 0.00758
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.002726,
+            "calls": 649,
+            "wall_s": 0.002754
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.006389,
+            "calls": 649,
+            "wall_s": 0.006637
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.005592,
+            "calls": 11,
+            "wall_s": 0.005587
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.00468,
+            "calls": 11,
+            "wall_s": 0.004706
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.004885,
+            "calls": 649,
+            "wall_s": 0.004902
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.004854,
+            "calls": 11,
+            "wall_s": 0.004865
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.003661,
+            "calls": 11,
+            "wall_s": 0.003689
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.003469,
+            "calls": 11,
+            "wall_s": 0.003504
+          }
+        },
+        "cpu_s": 0.475272,
+        "wall_s": 0.478794,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "linux",
+          "frontend": "pipeline",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "cpu_reduction_percent": 29.973906265884985,
+      "wall_reduction_percent": 29.952232910281275
+    },
+    {
+      "platform": "windows",
+      "frontend": "sync",
+      "before": {
+        "stages": {
+          "t2.eq.submit": {
+            "cpu_s": 0.29,
+            "calls": 11,
+            "wall_s": 0.267835
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.14,
+            "calls": 644,
+            "wall_s": 0.132409
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.03,
+            "calls": 649,
+            "wall_s": 0.022994
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.04,
+            "calls": 649,
+            "wall_s": 0.027341
+          },
+          "t2.ce.initial-observations": {
+            "cpu_s": 0.05,
+            "calls": 11,
+            "wall_s": 0.046483
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.06,
+            "calls": 11,
+            "wall_s": 0.072545
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.02,
+            "calls": 11,
+            "wall_s": 0.014987
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.06,
+            "calls": 633,
+            "wall_s": 0.064506
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.1,
+            "calls": 11,
+            "wall_s": 0.111469
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.03,
+            "calls": 644,
+            "wall_s": 0.033047
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.04,
+            "calls": 644,
+            "wall_s": 0.063296
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.026213
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.025556
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.027204
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.005364
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.08,
+            "calls": 649,
+            "wall_s": 0.1295
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.005307
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.003951
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.004263
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.010239
+          }
+        },
+        "cpu_s": 1.04,
+        "wall_s": 1.094509,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "windows",
+          "frontend": "sync",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "after": {
+        "stages": {
+          "t2.eqloop": {
+            "cpu_s": 0.1,
+            "calls": 11,
+            "wall_s": 0.121843
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.18,
+            "calls": 644,
+            "wall_s": 0.13276
+          },
+          "t2.eq.submit": {
+            "cpu_s": 0.09,
+            "calls": 11,
+            "wall_s": 0.121991
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.06,
+            "calls": 633,
+            "wall_s": 0.072798
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.014522
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.011292
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.09,
+            "calls": 644,
+            "wall_s": 0.085974
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.04,
+            "calls": 11,
+            "wall_s": 0.040063
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.005262
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.01,
+            "calls": 649,
+            "wall_s": 0.020453
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.02,
+            "calls": 649,
+            "wall_s": 0.02354
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.008009
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.01,
+            "calls": 644,
+            "wall_s": 0.032819
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.01,
+            "calls": 649,
+            "wall_s": 0.027139
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.005429
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.004254
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.00391
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.024619
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.04,
+            "calls": 11,
+            "wall_s": 0.067366
+          }
+        },
+        "cpu_s": 0.73,
+        "wall_s": 0.824043,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "windows",
+          "frontend": "sync",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "cpu_reduction_percent": 29.807692307692314,
+      "wall_reduction_percent": 24.711171858796956
+    },
+    {
+      "platform": "windows",
+      "frontend": "pipeline",
+      "before": {
+        "stages": {
+          "t2.eq.submit": {
+            "cpu_s": 0.27,
+            "calls": 11,
+            "wall_s": 0.267318
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.16,
+            "calls": 644,
+            "wall_s": 0.133525
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.1,
+            "calls": 11,
+            "wall_s": 0.112669
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.06,
+            "calls": 11,
+            "wall_s": 0.070804
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.08,
+            "calls": 644,
+            "wall_s": 0.065198
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.02,
+            "calls": 11,
+            "wall_s": 0.027485
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.014627
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.05,
+            "calls": 633,
+            "wall_s": 0.063751
+          },
+          "t2.ce.initial-observations": {
+            "cpu_s": 0.04,
+            "calls": 11,
+            "wall_s": 0.046443
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.03,
+            "calls": 644,
+            "wall_s": 0.033576
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.025362
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.05,
+            "calls": 649,
+            "wall_s": 0.023558
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.005461
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.01,
+            "calls": 649,
+            "wall_s": 0.027635
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.010561
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.04,
+            "calls": 649,
+            "wall_s": 0.129785
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.00427
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.003864
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.005212
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.026333
+          }
+        },
+        "cpu_s": 0.99,
+        "wall_s": 1.097437,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "windows",
+          "frontend": "pipeline",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "after": {
+        "stages": {
+          "t2.eq.submit": {
+            "cpu_s": 0.13,
+            "calls": 11,
+            "wall_s": 0.12488
+          },
+          "t2.eq.erase": {
+            "cpu_s": 0.15,
+            "calls": 644,
+            "wall_s": 0.133017
+          },
+          "t2.eq.scatter": {
+            "cpu_s": 0.06,
+            "calls": 644,
+            "wall_s": 0.085815
+          },
+          "t2.eqloop": {
+            "cpu_s": 0.11,
+            "calls": 11,
+            "wall_s": 0.120374
+          },
+          "t2.ce.rotate": {
+            "cpu_s": 0.07,
+            "calls": 633,
+            "wall_s": 0.071929
+          },
+          "t2.ce.observations": {
+            "cpu_s": 0.09,
+            "calls": 11,
+            "wall_s": 0.045162
+          },
+          "t2.ce.phase": {
+            "cpu_s": 0.03,
+            "calls": 11,
+            "wall_s": 0.0661
+          },
+          "t2.ce.fit": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.00559
+          },
+          "t2.ce.setup": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.013645
+          },
+          "t2.eq.prepare": {
+            "cpu_s": 0.03,
+            "calls": 649,
+            "wall_s": 0.020132
+          },
+          "t2.eq.divide": {
+            "cpu_s": 0.04,
+            "calls": 644,
+            "wall_s": 0.032017
+          },
+          "t2.ce.noise": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.024514
+          },
+          "t2.ce.segments": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.004211
+          },
+          "t2.ce.symbol-noise": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.004414
+          },
+          "t2.chanest+eq": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.007324
+          },
+          "t2.ce.interpolate": {
+            "cpu_s": 0.0,
+            "calls": 11,
+            "wall_s": 0.005522
+          },
+          "t2.eq.channel": {
+            "cpu_s": 0.01,
+            "calls": 649,
+            "wall_s": 0.026787
+          },
+          "t2.eq.constellation": {
+            "cpu_s": 0.0,
+            "calls": 649,
+            "wall_s": 0.023053
+          },
+          "t2.eq.display": {
+            "cpu_s": 0.01,
+            "calls": 11,
+            "wall_s": 0.010798
+          }
+        },
+        "cpu_s": 0.75,
+        "wall_s": 0.825284,
+        "profiled_frames": 11,
+        "replay": {
+          "platform": "windows",
+          "frontend": "pipeline",
+          "validation": "3 seconds of recorded IQ at quarter speed, correctness only; not a throughput benchmark",
+          "samples": 30000000,
+          "fields": {
+            "PLP": "0",
+            "L1": "1/1",
+            "BCH": "1801/212",
+            "TS": "46257",
+            "input_dropped": "0",
+            "fec_frames_dropped": "0",
+            "RMS": "-20.0",
+            "SNR": "24.5",
+            "CFO": "2118",
+            "GI": "1/8"
+          },
+          "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+        }
+      },
+      "cpu_reduction_percent": 24.242424242424242,
+      "wall_reduction_percent": 24.7989634029106
+    }
+  ],
+  "validation": "42318 PLP ranges byte-identical to original concatenate/slice method, bounds and independent ownership checked; Linux and Windows Wine pipeline/gap tests pass. All four candidate replays preserve 46257 packets, BCH 1801/212, zero input/FEC drops and exact previous TS SHA256.",
+  "limits": [
+    "Native Windows live benefit pending.",
+    "Windows thread CPU accounting is coarse; elapsed stage time also includes scheduling.",
+    "Stage times exclusive: parent plus child stages summed.",
+    "Small recording; RF variants not newly benchmarked."
+  ]
+}
