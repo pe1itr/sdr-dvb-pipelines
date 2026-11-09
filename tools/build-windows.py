@@ -63,6 +63,8 @@ def main():
     dab_dsp = ["components/dvbt2/src/dsp/resampler.cpp", "components/dvbt2/src/dsp/dsp_compat.cpp"]
     programs["dab_worker"] = ["src/dab_worker.cpp", *dab_sources, *dab_dsp]
     if args.tests:
+        programs["test_iq_output"] = ["tests/test_iq_output.c", "src/iq_output.c"]
+        programs["test_iq_output_backpressure"] = ["tests/test_iq_output_backpressure.c"]
         programs["test_sdr_rx_status"] = ["tests/test_sdr_rx_status.c"]
         programs["test_iq_monitor_async"] = ["tests/test_iq_monitor_async.c", "src/usb_tap.c"]
         programs["monitor_probe"] = ["tests/monitor_probe.c", "src/iq_monitor.c", "src/usb_tap.c"]

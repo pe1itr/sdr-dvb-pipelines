@@ -197,8 +197,12 @@ $(BUILD_DIR)/test_iq_output: tests/test_iq_output.c src/iq_output.c src/iq_outpu
 	$(CC) $(CPPFLAGS) $(CFLAGS) tests/test_iq_output.c src/iq_output.c -o $@ $(LDFLAGS) -pthread $(LDLIBS)
 
 .PHONY: test-iq-output
-test-iq-output: $(BUILD_DIR)/test_iq_output
+$(BUILD_DIR)/test_iq_output_backpressure: tests/test_iq_output_backpressure.c src/iq_output.c src/iq_output.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDFLAGS) -pthread $(LDLIBS)
+
+test-iq-output: $(BUILD_DIR)/test_iq_output $(BUILD_DIR)/test_iq_output_backpressure
 	./$(BUILD_DIR)/test_iq_output
+	./$(BUILD_DIR)/test_iq_output_backpressure
 
 test: test-iq-output
 

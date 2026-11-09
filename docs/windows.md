@@ -66,6 +66,26 @@ dan naar `./uhd-images/kintex7`, met SHA-256-controles naast de bestanden, en
 vult bij Device arguments `type=b200` in. Bewaar eigen wijzigingen met **W**.
 De generieke build vervangt die bestanden niet door standaard Ettus-images.
 
+De SDR-uitvoerschrijver wacht bij een volle Windows-pipe kort en onderbreekbaar
+(gevraagde wachttijd 1 ms, werkelijke hervatting afhankelijk van de scheduler).
+Dit voorkomt voortdurend opnieuw proberen wanneer Windows schrijfbereidheid
+meldt maar de pipe geen bytes aanneemt. Alleen de afzonderlijke schrijver
+wacht; de SDR-ontvangstthread blijft de bestaande begrensde uitvoerqueue vullen.
+De schrijver vraagt bij het openen eenmalig de Windows-pipecapaciteit op en
+begrenst grote schrijfverzoeken daarop. Dit voorkomt dat een opgehoopte queue
+als één verzoek groter dan de volledige pipe wordt aangeboden; onder Wine
+kan zo'n verzoek zelfs bij een lege pipe worden geweigerd.
+Een gesloten lezer wordt als pipefout afgehandeld, ook wanneer Windows
+`ERROR_NO_DATA` bij schrijven meldt; daarop wordt niet eindeloos opnieuw geprobeerd.
+Een volle uitvoerqueue blijft nieuwe blokken verwerpen en als drops tellen.
+Er worden geen headers of onderbrekingsmetadata aan de ruwe IQ-stream toegevoegd.
+De startmelding is `IQ writer: interruptible backpressure wait`; alleen bij
+dergelijke wachttijden verschijnt een intervalteller in het bestaande SDR-log.
+Deze optimalisatie bewijst niet dat de UHD/USB-overflows zijn opgelost:
+hardware-overflows, uitvoerqueue-drops en decoder-inputdrops blijven aparte
+verliespunten. De uitvoerqueue bevindt zich na UHD en kan hardwareverlies
+dus niet opvangen.
+
 Video, EPG/teletekst, TS- en IQ-opname, SRT-uitvoer via FFmpeg, USB/FM-monitoring,
 PCM-UDP, TCI en het ontvangstlogboek gebruiken dezelfde applicatiecode als Linux.
 Externe spelers en optionele leveranciersdrivers moeten, net als bij een

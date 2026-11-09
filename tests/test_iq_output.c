@@ -13,9 +13,18 @@ static double now(void) {
     struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec + t.tv_nsec/1e9;
 }
+static int small_pipe(int fds[2]) {
+#ifdef _WIN32
+    /* Keep OS capacity below one 256 KiB test block, as on Linux. Otherwise
+     * the writer can empty whole blocks before the full-queue assertion. */
+    return _pipe(fds,4096,_O_BINARY|_O_NOINHERIT);
+#else
+    return pipe(fds);
+#endif
+}
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
-    int pipefd[2]; assert(!pipe(pipefd));
+    int pipefd[2]; assert(!small_pipe(pipefd));
     unsigned char data[262144], received[4096];
     IQOutput *q = iq_output_create(pipefd[1], sizeof(data), 8); assert(q);
     /* No consumer yet: RX can enqueue two MiB without blocking on the pipe. */
@@ -62,13 +71,13 @@ int main(void) {
     iq_output_destroy(q); close(pipefd[0]); close(pipefd[1]);
 
     /* Stop must not hang with a stalled decoder and a full OS pipe. */
-    assert(!pipe(pipefd)); q = iq_output_create(pipefd[1], sizeof(data), 8); assert(q);
+    assert(!small_pipe(pipefd)); q = iq_output_create(pipefd[1], sizeof(data), 8); assert(q);
     for (int i = 0; i < 8; ++i) assert(!iq_output_push(q, data, sizeof(data)));
     double start = now(); iq_output_destroy(q); assert(now()-start < 1);
     close(pipefd[0]); close(pipefd[1]);
 
     /* A closed decoder pipe must propagate its error to the receiver. */
-    assert(!pipe(pipefd)); q = iq_output_create(pipefd[1], sizeof(data), 2); assert(q);
+    assert(!small_pipe(pipefd)); q = iq_output_create(pipefd[1], sizeof(data), 2); assert(q);
     close(pipefd[0]); assert(!iq_output_push(q, data, sizeof(data)));
     start = now();
     while (!iq_output_error(q) && now()-start < 2) {

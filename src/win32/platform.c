@@ -130,7 +130,14 @@ ssize_t lw_write(int fd,const void *buffer,size_t size) {
     HANDLE handle=(HANDLE)_get_osfhandle(fd);
     if (GetFileType(handle)==FILE_TYPE_PIPE) {
         DWORD written=0;
-        if (!WriteFile(handle,buffer,(DWORD)(size>INT_MAX ? INT_MAX : size),&written,NULL)) return win_error(GetLastError());
+        if (!WriteFile(handle,buffer,(DWORD)(size>INT_MAX ? INT_MAX : size),&written,NULL)) {
+            DWORD error=GetLastError();
+            /* NO_DATA on a write means the pipe is closing, not a full
+             * NOWAIT buffer (which succeeds with zero bytes). Read-side
+             * NO_DATA still means an empty nonblocking pipe. */
+            if (error==ERROR_NO_DATA) {errno=EPIPE;return -1;}
+            return win_error(error);
+        }
         if (!written) { errno=EAGAIN; return -1; }
         return written;
     }

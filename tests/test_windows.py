@@ -43,6 +43,12 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_iq_output_backpressure(self):
+        for name in ("test_iq_output", "test_iq_output_backpressure"):
+            with self.subTest(program=name):
+                p = run(name, timeout=15)
+                self.assertEqual(p.returncode, 0, (p.stderr+p.stdout).decode(errors="replace"))
+
     def test_sdr_receive_diagnostics(self):
         for name, args in [("test_sdr_rx_status", []), ("test_iq_monitor_async", []),
                            ("windows_gui_smoke", ["--test-sdr-status"])]:

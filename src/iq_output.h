@@ -4,7 +4,7 @@
 #include <stdint.h>
 typedef struct IQOutput IQOutput;
 typedef struct {
-    uint64_t accepted, written, dropped;
+    uint64_t accepted, written, dropped, write_stalls;
     size_t queued, capacity, peak;
 } IQOutputStats;
 void iq_output_stats(IQOutput *q, IQOutputStats *stats);

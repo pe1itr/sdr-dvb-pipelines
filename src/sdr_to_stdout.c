@@ -54,6 +54,10 @@ static void report_output(IQOutput *output, double rate, int sample_bytes,
             (stats.written-previous->written)/elapsed/sample_bytes/1e6,
             stats.queued/(rate*sample_bytes)*1000, stats.capacity/(rate*sample_bytes)*1000,
             stats.peak/(rate*sample_bytes)*1000, (unsigned long long)(stats.dropped/sample_bytes));
+    if (stats.write_stalls!=previous->write_stalls)
+        fprintf(stderr,"[SDR] IQ writer: %llu backpressure waits this interval (%llu total)\n",
+            (unsigned long long)(stats.write_stalls-previous->write_stalls),
+            (unsigned long long)stats.write_stalls);
     *previous = stats;
 }
 static double number(const char *s) {
@@ -357,6 +361,7 @@ int main(int argc, char **argv) {
     if (!output) { perror("IQ output queue"); goto done; }
     fprintf(stderr, "[SDR] Independent IQ writer: %.0f ms buffer, %.1f MiB\n",
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
+    fprintf(stderr,"[SDR] IQ writer: interruptible backpressure wait\n");
     spectrum_async = iq_monitor_start_async();
     fprintf(stderr, "[SDR] Spectrum processing: %s\n", spectrum_async>0 ? "asynchronous snapshots" :
             spectrum_async<0 ? "synchronous (worker unavailable)" : "synchronous or disabled");
