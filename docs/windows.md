@@ -177,6 +177,14 @@ Met `set DECT2_CLOCK_GENERIC=` en opnieuw starten wordt AVX2 weer automatisch
 gekozen. Dit versnelt één onderdeel; een live meting moet uitwijzen hoeveel
 ruimte dit op de Windows-ontvanger oplevert en of het IQ-verlies afneemt.
 
+De AVX2-LDPC-kernels gebruiken de twee kleinste waarden rechtstreeks, zonder
+hun posities bij te houden. Het opstartlog meldt
+`DVB-T2 LDPC: avx2 value-minima`. De iteratielimieten en herkansingen blijven
+gelijk. Regressietests vergelijken alle uitvoerbits, convergentie en aantallen
+iteraties met de onafhankelijke referentiedecoder, ook bij gelijke minima.
+Korte componenttests onder Wine geven 6-11% minder LDPC-tijd; het effect op
+live ontvangst op de Windows-pc moet afzonderlijk worden gemeten.
+
 Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
 profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
 verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor

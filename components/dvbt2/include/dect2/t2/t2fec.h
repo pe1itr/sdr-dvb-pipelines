@@ -45,6 +45,7 @@ const BchCode& bchFor(const PlpFec& f);
 // ---- the LDPC decoder of the data PLPs: LdpcCode::decodeFast's layered normalised min-sum, with the same results bit for bit, at less
 // cost per block (buffers kept per thread, no clearing, the parity check on sign bytes: core/src/t2/t2ldpc.cpp)
 bool t2LdpcDecode(const LdpcCode& code, const std::vector<float>& llr, int maxIter, std::vector<uint8_t>& hard, int* iters = nullptr, float alpha = 0.78f);
+const char* t2LdpcBackendName();
 
 // ---- bit interleaver: map[p] = index (in the LDPC codeword) of the bit carried by label bit p
 // (p = cell * bitsPerCell + position, position 0 = MSB of the cell label)

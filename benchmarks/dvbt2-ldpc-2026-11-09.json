@@ -1,0 +1,306 @@
+{
+  "linux": {
+    "rows": [
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000925
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000932
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000809
+      },
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000943
+      },
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000862
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000821
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004497
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003893
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003755
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004456
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004345
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003844
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.034606
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.029952
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.029315
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.034303
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.035144
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.029451
+      }
+    ],
+    "median_seconds_for_four_codewords": {
+      "0.25": {
+        "before": 0.000925,
+        "candidate": 0.000821,
+        "elapsed_time_reduction_percent": 11.243243243243251
+      },
+      "0.65": {
+        "before": 0.004456,
+        "candidate": 0.003844,
+        "elapsed_time_reduction_percent": 13.734290843806097
+      },
+      "0.85": {
+        "before": 0.034606,
+        "candidate": 0.029451,
+        "elapsed_time_reduction_percent": 14.896260764029346
+      }
+    }
+  },
+  "windows": {
+    "rows": [
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000943
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000869
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000797
+      },
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000925
+      },
+      {
+        "sigma": 0.25,
+        "variant": "before",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000873
+      },
+      {
+        "sigma": 0.25,
+        "variant": "candidate",
+        "iterations": 1,
+        "ok": 1,
+        "wall_s": 0.000893
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004185
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003841
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003695
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004153
+      },
+      {
+        "sigma": 0.65,
+        "variant": "before",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.004051
+      },
+      {
+        "sigma": 0.65,
+        "variant": "candidate",
+        "iterations": 6,
+        "ok": 1,
+        "wall_s": 0.003966
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.032412
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.031841
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.028989
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.033166
+      },
+      {
+        "sigma": 0.85,
+        "variant": "before",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.032921
+      },
+      {
+        "sigma": 0.85,
+        "variant": "candidate",
+        "iterations": 50,
+        "ok": 0,
+        "wall_s": 0.029242
+      }
+    ],
+    "median_seconds_for_four_codewords": {
+      "0.25": {
+        "before": 0.000925,
+        "candidate": 0.000869,
+        "elapsed_time_reduction_percent": 6.054054054054059
+      },
+      "0.65": {
+        "before": 0.004153,
+        "candidate": 0.003841,
+        "elapsed_time_reduction_percent": 7.5126414640019235
+      },
+      "0.85": {
+        "before": 0.032921,
+        "candidate": 0.029242,
+        "elapsed_time_reduction_percent": 11.175237690228112
+      }
+    }
+  },
+  "limits": [
+    "Short isolated CPU-component tests on Linux Ryzen 7 5800H; Windows binary under Wine, not native Windows Ryzen 5 5500H.",
+    "Normal 64800-bit code rate 3/5, synthetic BPSK LLR noise; convergence/iterations/all hard bits compared.",
+    "Median of three alternating measurements per decoder, each four codewords.",
+    "Good, intermediate and nonconverging examples; not a live receiver throughput prediction."
+  ],
+  "baseline_commit": "ddb90d244a2f336198e715c0cf31ba2c28d6cba7",
+  "candidate": "AVX2 value-based minima, min/max second minimum, original posterior ordering and decoder policy",
+  "method": "Three alternating before/candidate timings per synthetic noise level, four codewords per timing; warm buffers, input creation outside timed loop; equality of convergence, iteration count and all hard bits checked.",
+  "validation": "1008 reference-equivalence cases pass on Linux AVX2, Linux generic and Windows under Wine; four quarter-speed recording replays retain exact pre-change TS hash and zero input/FEC drops."
+}

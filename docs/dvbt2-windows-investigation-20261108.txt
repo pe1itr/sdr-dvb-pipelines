@@ -307,3 +307,52 @@ recording replays (Linux/Windows, synchronous/pipelined) again each produce
 SHA-256 5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e.
 Artifacts: build/t2-bench/clock-avx-correctness-*.json/.log and
 clock-avx-windows-tests.log. These verify decoder output, not live capacity.
+
+Follow-up: LDPC value-based minima (2026-11-09)
+---------------------------------------------
+The user requested prioritising LDPC. In the last GPU-renderer-confirmed
+89.356 s Windows interval, main LDPC accounted for 234.109 CPU seconds summed
+over its parallel workers; retries added only 4.641 s. Thus the main LDPC
+kernels, rather than retry limits alone, remain a useful CPU target.
+
+Both x86 AVX2 kernels (independent-group blocked layers and repeated-group
+buffered layers) now track only the two smallest magnitudes and the sign
+product. They no longer track which connection provided the minimum.
+Updating m2 as min(m2, max(m1, a)) before updating m1 preserves the second
+minimum. At message generation, an input whose magnitude equals m1 uses m2.
+If multiple inputs tie, m2 equals m1, so this gives the original magnitude
+for all tied connections. Sign calculation, floating-point subtraction and
+addition order, layer order, alpha, iteration limits and retry policy remain
+unchanged. This identity targets finite LLR values. Generic and NEON paths
+are unchanged. Runtime log: DVB-T2 LDPC: avx2 value-minima.
+
+Short alternating tests on the Linux Ryzen 7 5800H at normal 3/5 (64800 bits)
+compare four codewords per timed run, three runs per version, using synthetic
+LLRs with examples converging in 1 or 6 iterations and failing at 50. Linux
+median decoder time fell 11.2%, 13.7%, 14.9%; the Windows executable under
+Wine fell 6.1%, 7.5%, 11.2%. Identical hard bits, convergence and iteration
+counts were required. These are isolated component timings, NOT native
+Windows Ryzen 5 5500H live measurements or whole-receiver throughput claims.
+Source copies, test harness and logs: build/t2-bench/ldpc-investigation-20261109/.
+Tracked timings: benchmarks/dvbt2-ldpc-2026-11-09.json.
+
+Regression coverage expands from 504 to 1008 comparisons against the
+independent full-layer decoder across 14 normal/short rates, noise, erasures,
+retry alphas, iteration limits, tied magnitudes, signed zero, tiny LLRs and
+values at the minimum accumulator bound. Windows now builds and runs this
+same equivalence test. Native Windows live validation remains pending; keep
+9,142,857 sps, gain 53, four workers and the GPU renderer for comparison.
+
+Validation completed: all 1008 equivalence cases pass on native Linux AVX2,
+Linux with explicit SIMD disabled, and the Windows binary under Wine. Gap
+recovery and pipeline tests also pass. Four quarter-speed replays (Linux and
+Windows, synchronous and pipelined) each retain 46,257 packets, BCH 1801/212,
+zero input/FEC-frame loss and the exact pre-change transport-stream SHA-256
+5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e.
+Artifacts: build/t2-bench/ldpc-minima-correctness-*.json/.log and
+build/t2-bench/ldpc-investigation-20261109/*tests.log / *equivalence.log.
+
+A fresh pre-update live baseline is saved as ldpc-investigation-20261109/
+live-before-profile.json: 57.356 s, 807,516 TS (14,079/s), 3,604,480 decoder
+IQ drops (0.6874% nominal), 14 FEC-frame drops. Conditions vary considerably
+from earlier intervals; do not attribute all change across runs to software.

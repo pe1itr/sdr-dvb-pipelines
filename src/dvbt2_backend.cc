@@ -95,6 +95,7 @@ int dvbt2_backend_main(int argc, char** argv) {
         fprintf(stderr, "DVB-T2 runtime: logical_processors=%u configured_workers=%d profile=%d\n",
             std::thread::hardware_concurrency(), configuredThreads(), prof::stageProfEnabled());
         fprintf(stderr, "DVB-T2 clock correction: %s\n", ClockCorrector::backendName());
+        fprintf(stderr, "DVB-T2 LDPC: %s\n", t2LdpcBackendName());
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;

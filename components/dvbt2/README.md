@@ -166,11 +166,27 @@ on timing. This test does **not** establish loss-free deep-fade operation; it
 remains an area for further live scheduling investigation.
 
 `test_dvbt2_ldpc` compares all hard bits, convergence and iteration counts with
-the independent full-layer decoder: 504 cases across all 14 normal/short code
+the independent full-layer decoder: 1008 cases across all 14 normal/short code
 rates, noise, erasures, the actual retry alphas 0.66/0.78/0.9 and iteration limits
-1/2/50/150. Failures are compared too. The same cases also exercise a build
-with the explicit SIMD dispatch disabled. Full measurements and recording hashes
+1/2/50/150, plus tied magnitudes, signed zero, tiny values and the minimum
+accumulator bound at limits 1/2/7. Failures are compared too. The same cases
+also exercise a build with the explicit SIMD dispatch disabled. The original
+504-case measurements and recording hashes
 are in `benchmarks/dvbt2-ldpc-2026-11-05.json` at the repository root.
+
+The 2026-11-09 AVX2 update removes the connection-index accumulator from both
+LDPC layer kernels. The second minimum is updated as `min(m2, max(m1, a))`;
+message generation selects it when the input magnitude equals `m1`. If
+several inputs tie, `m2 == m1`, so the outgoing magnitude remains identical.
+This preserves the finite-LLR arithmetic, layered update order, iteration
+limits and retry policy. Startup reports `DVB-T2 LDPC: avx2 value-minima`.
+Generic and NEON kernels retain their previous implementation.
+
+Short alternating component tests at normal code rate 3/5 on Ryzen 7 5800H
+measured 11-15% lower decoder time for Linux and 6-11% for the Windows binary
+under Wine, covering examples that take 1, 6 and 50 iterations. These are
+not native Windows 5500H live measurements or whole-receiver speedups.
+Details: `benchmarks/dvbt2-ldpc-2026-11-09.json`.
 
 To repeat with a local headerless recording:
 

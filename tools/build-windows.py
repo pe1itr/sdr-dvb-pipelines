@@ -73,6 +73,7 @@ def main():
             programs[f"test_dvbt2_{name}"] = [f"components/dvbt2/tests/test_{name}.cpp"] + [s for s in gui_sources if s.startswith("components/dvbt2/")]
             if name == "gap_clock":
                 programs[f"test_dvbt2_{name}"].append("components/dvbt2/src/t2/t2gen.cpp")
+        programs["test_dvbt2_ldpc"] = ["tests/dvbt2_ldpc_equivalence.cpp"] + [s for s in gui_sources if s.startswith("components/dvbt2/")]
         for name in "dx_msc dx_pad stream_acquisition libdxdabsdr_tii_synthetic fic_identity_accumulator channel_filter mot_slideshow dynamic_label dab_plus_radio".split():
             programs[f"dab_test_{name}"] = [f"components/dab/tests/{name}_test.cpp", *dab_sources]
     sources = sorted({s for group in programs.values() for s in group} | {"src/win32/platform.c"})

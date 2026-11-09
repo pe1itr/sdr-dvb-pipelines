@@ -106,6 +106,7 @@
     "Exclude synthetic P1 spacing across known IQ gaps from sample-clock tracking; synthetic regression without LDPC.",
     "Windows live FEC background threads explicitly disable EcoQoS execution-speed throttling and log API acceptance/failure; existing thread priorities unchanged.",
     "Exclusive wall-time profiling alongside thread CPU time, with explicit resampler/pool waits and host input/TS stages for live bottleneck diagnosis.",
-    "Runtime-dispatched AVX2 sample-clock correction with original filter and floating-point accumulation order; generic x86 A/B fallback and streaming equivalence tests."
+    "Runtime-dispatched AVX2 sample-clock correction with original filter and floating-point accumulation order; generic x86 A/B fallback and streaming equivalence tests.",
+    "AVX2 LDPC minima selected by input magnitude instead of connection index, with min/max second-minimum update; original layered arithmetic and retry policy preserved, 1008-case reference equivalence on normal/short rates."
   ]
 }

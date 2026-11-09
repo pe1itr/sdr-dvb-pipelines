@@ -161,6 +161,11 @@ inline void layerBlocked(const LayerSrc* src, int nc, float* mr, float alpha) {
 #endif
 
 #if defined(DECT2_X86_DISPATCH)
+// Track only the two smallest magnitudes, not the connection index. An input
+// equal to min1 uses min2; if several inputs tie for min1, min2 == min1 and
+// choosing either produces the same message. min2 = min(min2, max(min1, a))
+// keeps the second minimum without a comparison/blend chain. Both identities
+// preserve the finite-LLR arithmetic and posterior update order.
 // The AVX2 twin of layerBlocked: the same per-element operations in the same order (so the same decisions and iteration counts), eight
 // checks per vector, kV8 vectors per block (24 checks; 360 = 15 blocks), min-sum state in registers across the connections.
 struct LayerSrcX { float* p; int shift; };
@@ -180,35 +185,30 @@ DECT2_AVX2_TARGET static void layerBlockedAvx2(const LayerSrcX* src, int nc, flo
     alignas(32) float Lb[64 * kBlk8];
     for (int m0 = 0; m0 < Z; m0 += kBlk8) {
         __m256 m1[kV8], m2[kV8], sg[kV8];
-        __m256i ix[kV8];
-        for (int v = 0; v < kV8; v++) { m1[v] = big; m2[v] = big; ix[v] = _mm256_set1_epi32(-1); sg[v] = _mm256_setzero_ps(); }
+        for (int v = 0; v < kV8; v++) { m1[v] = big; m2[v] = big; sg[v] = _mm256_setzero_ps(); }
         for (int j = 0; j < nc; j++) {
             float tmp[kBlk8];
             const float* sp = blockPtr8(src[j], m0, tmp);
             if (!sp) sp = tmp;
             const float* mj = mr + (size_t)j * Z + m0;
-            const __m256i jv = _mm256_set1_epi32(j);
             for (int v = 0; v < kV8; v++) {
                 __m256 x = _mm256_loadu_ps(sp + 8 * v);
                 if (!kFirst) x = _mm256_sub_ps(x, _mm256_loadu_ps(mj + 8 * v));
                 _mm256_store_ps(Lb + j * kBlk8 + 8 * v, x);
                 const __m256 a = _mm256_andnot_ps(signMask, x);
-                const __m256 lt = _mm256_cmp_ps(a, m1[v], _CMP_LT_OQ);
-                m2[v] = _mm256_blendv_ps(_mm256_min_ps(m2[v], a), m1[v], lt);
-                ix[v] = _mm256_castps_si256(_mm256_blendv_ps(_mm256_castsi256_ps(ix[v]), _mm256_castsi256_ps(jv), lt));
+                m2[v] = _mm256_min_ps(m2[v], _mm256_max_ps(m1[v], a));
                 m1[v] = _mm256_min_ps(m1[v], a);
                 sg[v] = _mm256_xor_ps(sg[v], _mm256_and_ps(x, signMask));
             }
         }
         for (int j = 0; j < nc; j++) {
-            const __m256i jv = _mm256_set1_epi32(j);
             float* mj = mr + (size_t)j * Z + m0;
             float tmp[kBlk8];
             float* dp = blockPtr8(src[j], m0, tmp);
             alignas(32) float d[kBlk8];
             for (int v = 0; v < kV8; v++) {
                 const __m256 x = _mm256_load_ps(Lb + j * kBlk8 + 8 * v);
-                const __m256 isMin = _mm256_castsi256_ps(_mm256_cmpeq_epi32(ix[v], jv));
+                const __m256 isMin = _mm256_cmp_ps(_mm256_andnot_ps(signMask, x), m1[v], _CMP_EQ_OQ);
                 const __m256 mag = _mm256_mul_ps(_mm256_blendv_ps(m1[v], m2[v], isMin), al);
                 const __m256 nm = _mm256_or_ps(mag, _mm256_xor_ps(sg[v], _mm256_and_ps(x, signMask)));
                 const __m256 old = kFirst ? _mm256_setzero_ps() : _mm256_loadu_ps(mj + 8 * v);
@@ -238,14 +238,10 @@ DECT2_AVX2_TARGET static void layerBufferedAvx2(float* Lb, int nc, float* mr, fl
     const __m256 signMask = _mm256_castsi256_ps(_mm256_set1_epi32((int)0x80000000u));
     for (int m = 0; m < Z; m += 8) {
         __m256 min1 = big, min2 = big, signs = _mm256_setzero_ps();
-        __m256i index = _mm256_set1_epi32(-1);
         for (int j = 0; j < nc; ++j) {
             const __m256 x = _mm256_loadu_ps(Lb + (size_t)j * Z + m);
             const __m256 a = _mm256_andnot_ps(signMask, x);
-            const __m256 lt = _mm256_cmp_ps(a, min1, _CMP_LT_OQ);
-            min2 = _mm256_blendv_ps(_mm256_min_ps(min2, a), min1, lt);
-            index = _mm256_castps_si256(_mm256_blendv_ps(_mm256_castsi256_ps(index),
-                _mm256_castsi256_ps(_mm256_set1_epi32(j)), lt));
+            min2 = _mm256_min_ps(min2, _mm256_max_ps(min1, a));
             min1 = _mm256_min_ps(min1, a);
             signs = _mm256_xor_ps(signs, _mm256_and_ps(x, signMask));
         }
@@ -253,7 +249,7 @@ DECT2_AVX2_TARGET static void layerBufferedAvx2(float* Lb, int nc, float* mr, fl
             float* Lj = Lb + (size_t)j * Z + m;
             float* mj = mr + (size_t)j * Z + m;
             const __m256 x = _mm256_loadu_ps(Lj);
-            const __m256 isMin = _mm256_castsi256_ps(_mm256_cmpeq_epi32(index, _mm256_set1_epi32(j)));
+            const __m256 isMin = _mm256_cmp_ps(_mm256_andnot_ps(signMask, x), min1, _CMP_EQ_OQ);
             const __m256 mag = _mm256_mul_ps(_mm256_blendv_ps(min1, min2, isMin), al);
             const __m256 nm = _mm256_or_ps(mag, _mm256_xor_ps(signs, _mm256_and_ps(x, signMask)));
             const __m256 old = kFirst ? _mm256_setzero_ps() : _mm256_loadu_ps(mj);
@@ -429,6 +425,17 @@ DECT2_AVX2_TARGET bool decodeAvx2(const LdpcCode& code, const std::vector<float>
 }
 #endif
 } // namespace
+
+const char* t2LdpcBackendName() {
+#if defined(DECT2_X86_DISPATCH)
+    if (cpuHasAvx2()) return "avx2 value-minima";
+#endif
+#if defined(__ARM_NEON) && !defined(DECT2_NO_SIMD)
+    return "neon";
+#else
+    return "generic";
+#endif
+}
 
 bool t2LdpcDecode(const LdpcCode& code, const std::vector<float>& llr, int maxIter, std::vector<uint8_t>& hard, int* iters, float alpha) {
     // a code without the quasi-cyclic 360 structure (none in DVB-T2): the general decoder

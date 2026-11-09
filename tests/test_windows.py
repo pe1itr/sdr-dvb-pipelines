@@ -43,6 +43,11 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_dvbt2_ldpc(self):
+        p = run("test_dvbt2_ldpc", timeout=120)
+        self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace") + p.stdout.decode(errors="replace"))
+        self.assertIn(b"1008 cases identical", p.stdout)
+
     def test_dvbt2_clock_correct(self):
         checksums = []
         for generic in ("1", "0"):
