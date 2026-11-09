@@ -1,6 +1,6 @@
 # DVB-T2 broadcast component
 
-Separate CPU receiver for 8 MHz DVB-T2 broadcasts. It does not change the
+Separate receiver for 8 MHz DVB-T2 broadcasts, using CPU FEC by default. It does not change the
 narrowband DVB-T or DVB-S/S2 receivers. Narrowband DVB-T2 is not supported by
 the host adapter.
 
@@ -42,7 +42,77 @@ needed. Initial tests alongside the running live decoder overloaded the replay
 and are not used to assess filter quality.
 Actual hardware/filter bandwidth still needs to cover the channel at lower
 sample rates. There is no global AVX2 build requirement: the imported runtime
-dispatch selects the available CPU implementation. GPU decoding is omitted.
+dispatch selects the available CPU implementation.
+
+## Optional GPU LDPC (experimental, Windows and Linux)
+
+The mode dialog has **Use GPU for DVB-T2 LDPC**. It is off by default and is
+saved as `[dvbt2] gpu_ldpc=false/true`. The selection takes effect at the next
+receiver start. CPU mode does not load GPU libraries, probe adapters or compile
+shaders. The CLI worker accepts `--ldpc cpu|gpu`; omission means CPU.
+
+Windows GPU mode uses Direct3D 11 compute, imported from the same pinned OnAir
+revision. It loads the Windows runtime dynamically, checks feature level 11,
+compiles the shaders and tests known normal and short codewords. Initialization
+failure retains CPU decoding. A failed GPU call is redone on CPU and disables
+GPU use for that receiver run. Linux uses Vulkan compute with bundled SPIR-V
+shaders (the GLSL sources and regeneration script are included). It dynamically
+loads the Vulkan loader, selects a compute-capable GPU and runs the same T2
+startup self-tests. Other platforms retain CPU fallback. Video rendering has
+its own setting.
+
+Only first-pass data-PLP LDPC runs on GPU; signalling, demapping, BCH and the
+existing paced retries remain on CPU. The GPU receives already available
+codewords without waiting for additional frames: at most 64 per Linux Vulkan
+dispatch and 16 per Windows Direct3D dispatch, subject to device limits.
+Queues remain bounded. Service Info and HTTP `decoder.ldpc_backend` report the
+last completed frame's first-pass route (`waiting`, `cpu`, `gpu`). Cumulative
+`ldpc_gpu_frames` and `ldpc_cpu_frames` count PLP jobs, not codewords; a GPU
+frame can still need CPU retries. `ldpc_gpu_requested` records the selection.
+The profile stages `t2.gpu-ldpc` and `t2.gpu-readback-wait` measure host CPU/wall
+time, not GPU execution time; sum their exclusive times for GPU-call latency.
+On Linux, `DECT2_GPU_TIMING=1` additionally reports cumulative GPU timestamp
+duration and total host latency. Device duration includes the kernel's accesses
+to mapped input/output buffers; it does not separate pure arithmetic from data
+transfer. Profiling is optional and does not enable GPU decoding.
+
+The Linux Vulkan kernel keeps FP32 arithmetic and the CPU's layered update
+order. It stores scaled minima and packed signs/index instead of one float per
+edge, specializes temporary arrays by check degree, and caches a bounded prefix
+of posteriors in workgroup shared memory. The iteration limit, normalization,
+BCH and CPU retry policy are unchanged. `DECT2_VULKAN_SCHEDULE=layered` selects
+the previous kernel for A/B testing; the default is the compact cached kernel.
+Regenerate its bundled SPIR-V with `python3 components/dvbt2/tools/gen_cached_spirv.py`
+(requires libshaderc on the developer machine only).
+
+Design references: [cuLDPC](https://github.com/robertwgh/cuLDPC) and
+[Liu and Zhao, 2024](https://doi.org/10.1186/s13634-024-01190-8).
+The latter studies 8-bit 5G/WiMAX codes on other GPUs; its throughput is not a
+DVB-T2 prediction. Our implementation retains FP32. A multi-workgroup flooding
+prototype was also measured, but the compact layered kernel was faster in the
+heavy test and preserves the existing decoding schedule. Research artifacts
+and measurements are in `build/t2-bench/gpu-parallel-20261109/`.
+The final report is `benchmarks/dvbt2-gpu-2026-11-09.json`: on the Linux
+RTX 3050, the new GPU kernel takes about 234 ms versus 535 ms previously for
+183 normal 3/5 codewords at 50 iterations. Automatic-worker CPU decoding
+takes about 184 ms in that same synthetic workload. Thus the GPU kernel
+improves, but does not beat this CPU in the component test. A 3-second IQ
+replay at 10 MS/s preserves all 46,257 TS packets and the reference hash with
+zero input/FEC queue drops. Later short Linux live observations reached about
+19,443 TS packets/s with GPU LDPC and the internal player, without new input
+or FEC drops over 57 seconds. With the external GPU player, a preceding
+43-second interval had 24 FEC-frame drops and visible stuttering. The cause
+is still open. The [GPU/player investigation](../../docs/dvbt2-gpu-player-investigation-20261109.txt)
+records the evidence and follow-up goal: make GPU LDPC and GPU video work
+smoothly together. Sustained, controlled coexistence validation remains open.
+
+`linrad_dvb.exe --decoder-worker=dvbt2 --gpu-check` probes the device and runs
+the startup self-test without IQ input. Exit 0 means a usable, self-tested GPU;
+exit 1 means CPU fallback. `test_dvbt2_gpu.exe`, built with `--tests`, compares
+GPU output, convergence and iterations against the CPU for 14 rates and
+normal/short frames, noise, ties and batch boundaries. Exit 77 is an explicit
+skip, not a successful GPU test. Live GPU throughput and coexistence with GPU playback require validation on
+each target GPU. Component or Wine timings are not native Windows speedups.
 
 FEC, QPSK/16/64/256-QAM, FFT and guard interval are read from L1. PLP -1 selects
 the first type-1 data PLP; 0..255 requests that ID explicitly. A missing explicit
@@ -230,3 +300,19 @@ lists Eindhoven RTS on channel 33, with Omroep Brabant and L1.
 public channels are free to air. Commercial Digitenne bouquets need a
 subscription and are outside this component's scope. HEVC-capable VLC codecs
 are needed to display the broadcast video.
+
+On Linux use `./build/linrad_dvb --decoder-worker=dvbt2 --gpu-check`.
+The optional extended correctness test is `./build/test_dvbt2_gpu`; stop live
+reception before running it. `DECT2_GPU_ADAPTER` can select an adapter index
+from the startup log when more than one GPU is present. No GPU is probed in
+CPU mode. `DECT2_NOGPU=1` forces unavailable-GPU fallback for testing.
+
+Validation on the local RTX 3050: the earlier 882 cases matched CPU decisions,
+convergence and iteration counts on Linux Vulkan and Windows Direct3D under
+Wine/DXVK. The new Linux compact kernel passes 1,142 cases, including the
+64-codeword batch boundary, mixed noise and signed zeros. Correctness tests
+are not throughput claims; native Windows validation is separate.
+GPU context/shader initialization can briefly fill the live input queue at
+startup. The recorded-IQ correctness comparison waits for backend readiness;
+startup loss from a first attempt is retained separately in the validation
+artifacts. Use interval deltas after acquisition for live comparisons.

@@ -65,7 +65,9 @@ class DecoderStatus(ctypes.Structure):
                 + [('mer_db',ctypes.c_float)]
                 + [(k, ctypes.c_int32) for k in ('modcod','short_frame','pilots')]
                 + [(k, ctypes.c_uint64) for k in ('input_dropped','fec_frames_dropped')]
-                + [('plp_id', ctypes.c_int32)])
+                + [('plp_id', ctypes.c_int32)]
+                + [(k, ctypes.c_uint32) for k in ('ldpc_gpu_requested','ldpc_backend')]
+                + [(k, ctypes.c_uint64) for k in ('ldpc_gpu_frames','ldpc_cpu_frames')])
 
 
 class LeanDvbTests(unittest.TestCase):

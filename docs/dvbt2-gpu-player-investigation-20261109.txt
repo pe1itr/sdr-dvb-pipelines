@@ -1,0 +1,87 @@
+DVB-T2 GPU LDPC and GPU video coexistence
+2026-11-09
+
+Status: OPEN — investigate the cause and implement a fix.
+
+Objective
+---------
+Keep GPU LDPC available alongside CPU decoding through the existing checkbox,
+and make simultaneous GPU LDPC and GPU video decoding/rendering work smoothly.
+Using the internal player is a temporary workaround, not completion of this
+task. The user explicitly requested this follow-up when authorizing the GPU
+LDPC commit. DVB-S2 GPU LDPC is outside this change.
+
+Observed behavior
+-----------------
+Linux Ryzen 7 5800H, NVIDIA RTX 3050 Laptop GPU; HackRF at 570 MHz,
+10 MS/s, gain 62 (u8), NPO 1 / PLP 0, 32K 256-QAM 3/5 GI 1/8.
+Pipelined frontend, automatic CPU workers, profiling off. GPU LDPC uses the
+compact layered FP32 Vulkan kernel with shared cache and batches up to 64.
+The measured binary was compiled Nov 9 at 16:13:24 from base 0603f9ead002
+with the uncommitted GPU changes; it does not identify the later commit.
+
+Fresh endpoint intervals (counts below are interval deltas):
+
+Phase                         Seconds    TS/s     IQ drops  FEC drops  Bad BCH
+Initial GPU LDPC observation    53.867   19,451          0          0       22
+External GPU player            42.669   16,747          0         24        0
+Return to internal player      57.304   19,443          0          0        0
+
+GPU LDPC remained active: respectively 223, 152 and 237 GPU PLP jobs,
+with zero CPU first-pass jobs in these intervals. CPU BCH/retries remain
+part of the normal GPU route. SDR output queue drop counts stayed zero.
+The user reported stuttering with the GPU player. After returning to the
+internal player, the cumulative FEC drop counter stayed at 66 throughout
+the measured interval. Counters reset between the initial observation and
+the external-player run; do not subtract across that reset.
+
+Full snapshots and summaries are retained locally under
+build/t2-bench/gpu-parallel-20261109/:
+  live-linux-20261109T152118Z/measurement.json
+  live-linux-gpu-renderer-20261109T152533Z/measurement.json
+  live-linux-internal-return-20261109T152726Z/measurement.json
+Offline correctness/performance results are tracked separately in
+benchmarks/dvbt2-gpu-2026-11-09.json; its pending-live statement describes
+the earlier test session, before these live observations.
+
+What is and is not established
+-----------------------------
+The observations associate the GPU player with FEC queue loss and reduced
+TS throughput. GPU resource contention is plausible; its exact mechanism
+has not been measured. These are sequential live intervals, not a controlled
+repeat with identical RF and LDPC iteration work. Player selection is
+user-reported, not independently exposed by the HTTP endpoint.
+The default external-player command in src/video_view.c selects ffplay
+CUDA video decoding and Vulkan device=NVIDIA. Actual process arguments,
+adapter selection, engine utilization and scheduling still need checking.
+Video decode, rendering and LDPC compute need not use the same GPU engine.
+There is no evidence yet identifying GPU saturation, memory bandwidth,
+driver scheduling, CPU contention or output backpressure as the cause.
+HackRF hardware losses are not fully observable from these counters.
+Native Windows performance and coexistence require separate validation.
+
+Investigation and fix
+---------------------
+1. Reproduce matched internal/external-player runs, including repeated mode
+   switches. Keep RF settings, LDPC mode and worker count fixed. Use existing
+   IQ recordings for repeatable comparisons; no new raw IQ capture is needed.
+   Stop live reception before heavy benchmarks or competing decoder replays.
+2. Confirm actual player process arguments and GPU adapter. Distinguish video
+   decode, video rendering and LDPC compute; measure their engine load,
+   memory use, clocks and scheduling where the driver exposes them.
+3. Correlate timestamped FEC/input queue loss and backlog with player frame
+   timing, TS delivery/backpressure, CPU/wall stages (DECT2_STAGE_PROF=1)
+   and device/host LDPC timing (DECT2_GPU_TIMING=1). These switches are
+   diagnostic only; normal GPU reception does not require them.
+4. Use the measured bottleneck to select a fix. Candidates include shorter
+   LDPC dispatches through smaller batches, queue scheduling/pacing, or player
+   resource use. Do not assume a larger queue solves a throughput deficit.
+   Preserve FP32 correctness, iteration/retry policy and CPU fallback unless
+   a separately justified change is validated.
+5. Validate the fix with repeated sustained runs of both GPU functions,
+   including high-iteration workloads and player switches. Check smooth
+   picture/audio and no additional decoder IQ or FEC loss versus a matched
+   internal-player reference. Verify GPU LDPC remains active, so CPU fallback
+   does not hide the problem. Retain CPU/GPU equivalence checks and the
+   recorded-IQ output comparison. Report hardware/OS coverage and remaining
+   limitations explicitly before closing this task.

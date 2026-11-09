@@ -66,7 +66,8 @@ public:
     // 0 = CPU, 1 = GPU, 2 = auto
     // Auto means: the GPU whenever there is one (decoding on the CPU only keeps up on easy signals, and a frame that is late is a hole in the picture).
     // On Windows only a discrete graphics card counts: integrated graphics (not measured) starts on the CPU and is tried when that falls behind.
-    void setMode(int m) { mode_ = m; autoGpu_ = m == 2 && autoStartsOnGpu(); switched_ = false; pathFrames_ = 0; slowRun_ = 0; }
+    // Configure before feeding jobs. CPU mode never initializes the GPU.
+    void setMode(int m);
     bool autoStartsOnGpu() const;
     int mode() const { return mode_; }
     bool gpuAvailable() const { return gpuOk_; }
@@ -85,9 +86,9 @@ private:
     std::atomic<uint64_t> dropped_{0};
     std::atomic<int> backlog_{0};   // jobs waiting behind the one being decoded
     bool busy_ = false;
-    std::atomic<int> mode_{2};
+    std::atomic<int> mode_{0};
     std::atomic<bool> autoGpu_{false};
-    bool gpuOk_ = false;
+    std::atomic<bool> gpuOk_{false};
     uint64_t lastDropped_ = 0;
     double emaGpuMs_ = 0, emaCpuMs_ = 0;   // smoothed decode time of each path (Auto mode)
     int slowRun_ = 0, pathFrames_ = 0;

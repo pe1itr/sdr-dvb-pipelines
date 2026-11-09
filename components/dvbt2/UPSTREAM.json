@@ -93,7 +93,14 @@
     "rust/onair_fec/src/ffi.rs": "974e9cd363917b545e7db98086214ef819299435265403128b5199edfdc1fc34",
     "rust/onair_fec/src/bch_tables.rs": "f2e3e85de6749bd7332b2822f5416deb87da9e8f794808e2bd881d8a4d45d5bf",
     "rust/onair_fec/src/bch.rs": "e1661b3cb813876aee0f4dee06c68878fbf6f5b64d930a0801c4f2f350e90194",
-    "include/dect2/common/stable_random.h": "8a8fdeb5b1b5841565a1b1fb2eda283c17d31472847e41e08d6d2e732e4dbaf5"
+    "include/dect2/common/stable_random.h": "8a8fdeb5b1b5841565a1b1fb2eda283c17d31472847e41e08d6d2e732e4dbaf5",
+    "src/dsp/gpu_ldpc_d3d11.cpp": "e9ab6c34488b0d14fc27f63f473bded9dc4e52ac49581ce77b440ed62640f41a",
+    "src/dsp/gpu_ldpc_vulkan.cpp": "553a652770129fc0b1243c6128a92f72930558a68cedcec63d9a36ee2ab72567",
+    "tools/gen_vulkan_spirv.sh": "5ce809edd6d7fbfbc90d374560e01f363145c2300fedf941cc256ce7a6e3b38c",
+    "src/dsp/vulkan/ldpc_spirv.h": "6efee68e63887c39a753613746ee954a46a8d6e575a0bb639947330a99c6b1a6",
+    "src/dsp/vulkan/vk_min.h": "3885f12a787c14be1ebcbe2454fe4a1b6951c038135028b93b3d84af6019585b",
+    "src/dsp/vulkan/ldpc_t2.comp": "57689e12a07567dffa69bbfb7242a58eb760e45bad71de94255590bc2738dcb1",
+    "src/dsp/vulkan/ldpc_qc.comp": "2a76b76ad0efeb731185c4c1cd3f03c5fffac192902d538b2dc10024a090a1e3"
   },
   "local_changes": [
     "T2-only telemetry header (unrelated receiver modes removed).",
@@ -108,6 +115,9 @@
     "Exclusive wall-time profiling alongside thread CPU time, with explicit resampler/pool waits and host input/TS stages for live bottleneck diagnosis.",
     "Runtime-dispatched AVX2 sample-clock correction with original filter and floating-point accumulation order; generic x86 A/B fallback and streaming equivalence tests.",
     "AVX2 LDPC minima selected by input magnitude instead of connection index, with min/max second-minimum update; original layered arithmetic and retry policy preserved, 1008-case reference equivalence on normal/short rates.",
-    "Detailed exclusive channel/equalizer profile stages; remove unused pre-phase pilot observations, reuse data-stream buffers, and directly select P2/data PLP cells into owned jobs without full concatenation; 42318-range equivalence and ownership tests."
+    "Detailed exclusive channel/equalizer profile stages; remove unused pre-phase pilot observations, reuse data-stream buffers, and directly select P2/data PLP cells into owned jobs without full concatenation; 42318-range equivalence and ownership tests.",
+    "Opt-in Windows Direct3D 11 LDPC alongside the default CPU path; lazy initialization, bounded batches, failure fallback and GPU diagnostics. Imported GPU source and stable_random.h from the same pinned revision.",
+    "Optional Linux Vulkan T2 LDPC from the same pinned revision, precompiled shaders with source/regenerator included; DTMB path not enabled; bounded 16-codeword batches and normal/short T2 self-tests.",
+    "Linux Vulkan compact check minima/signs, degree-specialized register arrays, bounded shared posterior cache and up to 64 existing codewords per batch; preserves layered FP32 update order. Original kernel retained for A/B; optional GPU timestamps; smaller startup allocations and pre-allocation batch budget trimming. New shader written locally; research references documented in README."
   ]
 }

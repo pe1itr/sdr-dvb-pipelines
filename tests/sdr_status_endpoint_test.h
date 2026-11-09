@@ -6,6 +6,9 @@ static void exercise_sdr_status(void) {
     record_log(&a,line+25,strlen(line)-25);g_assert_cmpint(a.sdr_status_time,>,0);
     a.decoder_view.status_time=g_get_monotonic_time();
     a.decoder_view.status.input_dropped=123;
+    a.decoder_view.status.ldpc_gpu_requested=1;
+    a.decoder_view.status.ldpc_backend=2;
+    a.decoder_view.status.ldpc_gpu_frames=42;
     char *text=network_status(&a);json_object *root=json_tokener_parse(text);g_free(text);
     json_object *s=json_object_object_get(root,"sdr");g_assert_nonnull(s);
     g_assert_cmpuint(json_object_get_uint64(json_object_object_get(s,"hardware_overflows")),==,7);
@@ -13,6 +16,10 @@ static void exercise_sdr_status(void) {
     g_assert_true(json_object_get_boolean(json_object_object_get(s,"spectrum_async")));
     g_assert_cmpfloat(json_object_get_double(json_object_object_get(s,"service_gap_max_ms")),==,8.1);
     g_assert_cmpuint(json_object_get_uint64(json_object_object_get(json_object_object_get(root,"decoder"),"input_dropped")),==,123);
+    json_object *decoder=json_object_object_get(root,"decoder");
+    g_assert_true(json_object_get_boolean(json_object_object_get(decoder,"ldpc_gpu_requested")));
+    g_assert_cmpstr(json_object_get_string(json_object_object_get(decoder,"ldpc_backend")),==,"gpu");
+    g_assert_cmpuint(json_object_get_uint64(json_object_object_get(decoder,"ldpc_gpu_frames")),==,42);
     json_object_put(root);
     const char *bad="[SDR] RX timing: calls=broken\n";
     record_log(&a,bad,strlen(bad));g_assert_cmpuint(a.sdr_status.overflows,==,7);

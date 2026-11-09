@@ -24,6 +24,9 @@ $(BUILD_DIR)/test_dvbt2_gap_clock: $(DVBT2_DIR)/tests/test_gap_clock.cpp $(BUILD
 $(BUILD_DIR)/test_dvbt2_%: $(DVBT2_DIR)/tests/test_%.cpp $(DVBT2_OBJECTS) $(DVBT2_RUST)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
 .PHONY: test-dvbt2
+$(BUILD_DIR)/test_dvbt2_gpu_fallback: tests/dvbt2_gpu_fallback.cpp $(filter-out $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_stub.o $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_d3d11.o $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_vulkan.o,$(DVBT2_OBJECTS)) $(DVBT2_RUST)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
+test-dvbt2: $(BUILD_DIR)/test_dvbt2_gpu_fallback
 $(BUILD_DIR)/dvbt2_worker: tests/dvbt2_worker_main.cpp $(DVBT2_LINK)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
 $(BUILD_DIR)/test_dvbt2_ldpc: tests/dvbt2_ldpc_equivalence.cpp $(DVBT2_OBJECTS) $(DVBT2_RUST)
@@ -37,6 +40,7 @@ $(BUILD_DIR)/test_dvbt2_ldpc_generic: tests/dvbt2_ldpc_equivalence.cpp $(filter-
 test-dvbt2: $(BUILD_DIR)/test_dvbt2_clock_correct $(BUILD_DIR)/test_dvbt2_stage_prof $(BUILD_DIR)/test_dvbt2_ldpc $(BUILD_DIR)/test_dvbt2_ldpc_generic $(BUILD_DIR)/test_dvbt2_pipeline $(BUILD_DIR)/test_dvbt2_gap_clock
 test-dvbt2: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/dvbt2_fixture $(BUILD_DIR)/test_dvbt2_fec $(BUILD_DIR)/test_dvbt2_l1
 	./$(BUILD_DIR)/test_dvbt2_ldpc
+	./$(BUILD_DIR)/test_dvbt2_gpu_fallback
 	./$(BUILD_DIR)/test_dvbt2_ldpc_generic
 	python3 tests/test_dvbt2_clock_correct.py
 	./$(BUILD_DIR)/test_dvbt2_stage_prof

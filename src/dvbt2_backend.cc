@@ -6,6 +6,7 @@
 #include "dect2/common/stage_prof.h"
 #include "dect2/common/threadpool.h"
 #include "dect2/dsp/clock_correct.h"
+#include "dect2/dsp/gpu_ldpc.h"
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <atomic>
@@ -57,13 +58,22 @@ template<class T> void publish(int fd, const T& msg) {
 int dvbt2_backend_main(int argc, char** argv) {
     double rate = 0, bandwidth = 8000000, plp = -1;
     const char* format = "s16";
+    bool useGpu = false;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
             fprintf(stderr, "DVB-T2 broadcast: IQ on stdin, MPEG-TS on stdout.\n"
                 "--sample-rate HZ --input-format u8|s16|cf32 --bandwidth 8000000 --plp -1..255\n"
+                "--ldpc cpu|gpu (default cpu; GPU failures fall back to CPU)\n"
+                "--gpu-check: initialize and self-test the optional GPU, then exit.\n"
                 "FEC, constellation and guard interval are detected from L1.\n"
                 "Bounded live input: overload drops samples, never slows the SDR clock.\n");
             return 0;
+        }
+        if (!strcmp(argv[i], "--gpu-check")) {
+            const auto& gpu = GpuLdpc::instance();
+            fprintf(stderr, "DVB-T2 GPU check: %s (%s)\n",
+                gpu.available() ? "self-test passed" : "unavailable; CPU fallback", gpu.deviceName());
+            return gpu.available() ? 0 : 1;
         }
         if (i + 1 == argc) { fprintf(stderr, "DVB-T2: missing option value\n"); return 2; }
         const char* key = argv[i++]; const char* value = argv[i];
@@ -71,6 +81,12 @@ int dvbt2_backend_main(int argc, char** argv) {
         else if (!strcmp(key, "--bandwidth")) bandwidth = number(value);
         else if (!strcmp(key, "--plp")) plp = number(value);
         else if (!strcmp(key, "--input-format")) format = value;
+        else if (!strcmp(key, "--ldpc")) {
+            if (strcmp(value, "cpu") && strcmp(value, "gpu")) {
+                fprintf(stderr, "DVB-T2: --ldpc must be cpu or gpu\n"); return 2;
+            }
+            useGpu = !strcmp(value, "gpu");
+        }
         else { fprintf(stderr, "DVB-T2: unknown option %s\n", key); return 2; }
     }
     const int sampleBytes = !strcmp(format, "u8") ? 2 : !strcmp(format, "s16") ? 4 :
@@ -84,7 +100,7 @@ int dvbt2_backend_main(int argc, char** argv) {
     std::atomic<bool> failed{false};
     const int monitor = monitorSocket();
     std::thread decoder([&] {
-        T2Receiver rx; rx.configure(rate, 8); rx.selectPlp((int)plp); rx.setComputeMode(0);
+        T2Receiver rx; rx.configure(rate, 8); rx.selectPlp((int)plp); rx.setComputeMode(useGpu ? 1 : 0);
         // Resampling can overlap demodulation, instead of both occupying the
         // one thread that drains the input queue. Keep a synchronous fallback
         // for comparisons with recordings and platform regressions.
@@ -96,10 +112,17 @@ int dvbt2_backend_main(int argc, char** argv) {
             std::thread::hardware_concurrency(), configuredThreads(), prof::stageProfEnabled());
         fprintf(stderr, "DVB-T2 clock correction: %s\n", ClockCorrector::backendName());
         fprintf(stderr, "DVB-T2 LDPC: %s\n", t2LdpcBackendName());
+        fprintf(stderr, "DVB-T2 LDPC selection: requested=%s active=%s device=%s\n",
+            useGpu ? "gpu" : "cpu",
+            useGpu && GpuLdpc::instance().available() ? "gpu" : "cpu",
+            useGpu ? GpuLdpc::instance().deviceName() : "not initialized");
         fprintf(stderr, "DVB-T2 channel processing: direct PLP assembly, reusable buffers\n");
         BbUnpacker unpack;
         uint64_t packets = 0, next = 0, lastPackets = 0, lastGood = 0;
         int previousFrame = -1;
+        uint64_t gpuFrames = 0, cpuFrames = 0;
+        unsigned ldpcBackend = 0;
+        double ldpcIterations = 0;
         unpack.setSink([&](const uint8_t* packet) {
             if (failed) return;
             if (fwrite(packet, 1, 188, stdout) != 188) failed = true;
@@ -107,6 +130,11 @@ int dvbt2_backend_main(int argc, char** argv) {
         });
         rx.setPlpCallback([&](const PlpResult& r) {
             DECT2_STAGE("host.ts-delivery");
+            if (r.blocks > 0) {
+                ldpcBackend = r.usedGpu ? 2 : 1;
+                if (r.usedGpu) ++gpuFrames; else ++cpuFrames;
+                ldpcIterations = r.avgLdpcIters;
+            }
             if (previousFrame >= 0 && r.numT2Frames > 0 &&
                 r.t2Frame != (previousFrame + r.frameInterval) % r.numT2Frames) unpack.lost();
             previousFrame = r.t2Frame;
@@ -136,6 +164,9 @@ int dvbt2_backend_main(int argc, char** argv) {
             s.packets = s.written_packets = packets; s.rs_ok = t.blocksOk; s.rs_uncorrectable = t.blocksBad;
             s.input_dropped = input.dropped; s.fec_frames_dropped = t.plpFramesDropped;
             s.plp_id = t.plpSelectedId;
+            s.ldpc_gpu_requested = useGpu;
+            s.ldpc_backend = ldpcBackend;
+            s.ldpc_gpu_frames = gpuFrames; s.ldpc_cpu_frames = cpuFrames;
             { std::lock_guard<std::mutex> lock(input.mutex);
               s.buffer_valid = 1; s.buffer_percent = 100.0 * input.queue.size() / queueLimit; }
             static const char* mods[] = {"QPSK", "16QAM", "64QAM", "256QAM"};
@@ -175,6 +206,9 @@ int dvbt2_backend_main(int argc, char** argv) {
                 lastProfile = Clock::now();
             }
             if (final || Clock::now() - lastLog >= std::chrono::seconds(1)) {
+                if (useGpu) fprintf(stderr, "DVB-T2 LDPC processing: active=%s GPU_frames=%llu CPU_frames=%llu last_mean_iterations=%.2f\n",
+                    ldpcBackend == 2 ? "gpu" : ldpcBackend == 1 ? "cpu" : "waiting",
+                    (unsigned long long)gpuFrames, (unsigned long long)cpuFrames, ldpcIterations);
                 fprintf(stderr, "DVB-T2%s: PLP=%d L1=%d/%d BCH=%llu/%llu TS=%llu input_dropped=%llu fec_frames_dropped=%llu RMS=%.1f SNR=%.1f CFO=%.0f %s %s GI=%s\n",
                     final ? " final" : "", t.plpSelectedId, t.l1preOk, t.l1postOk,
                     (unsigned long long)t.blocksOk, (unsigned long long)t.blocksBad, (unsigned long long)packets,

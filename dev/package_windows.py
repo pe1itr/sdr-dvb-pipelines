@@ -145,6 +145,8 @@ def main():
     (stage / "start-met-log.cmd").write_bytes(diagnostic.replace("\n", "\r\n").encode("ascii"))
     profile = (ROOT / "dev/start-dvbt2-profile.cmd").read_text()
     (stage / "start-dvbt2-profile.cmd").write_bytes(profile.replace("\n", "\r\n").encode("ascii"))
+    gpu_check = (ROOT / "dev/check-dvbt2-gpu.cmd").read_text()
+    (stage / "check-dvbt2-gpu.cmd").write_bytes(gpu_check.replace("\n", "\r\n").encode("ascii"))
     config = (ROOT / "linrad-dvb.example.ini").read_text()
     for name in ["sdr_to_stdout", "linrad_udp_to_stdout", "iq_file_to_stdout", "dab_worker"]:
         config = config.replace("build/" + name, "./" + name + ".exe")

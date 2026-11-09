@@ -66,7 +66,7 @@ typedef struct {
     GtkWidget *hackrf_amp_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
-    GtkWidget *t2_plp_box;
+    GtkWidget *t2_plp_box, *t2_gpu_box;
     DabView dab;
     GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
     GtkWidget *video_frame, *dab_previous, *dab_next;
@@ -482,6 +482,8 @@ static void build_pipeline(App *a) {
         add(s, "--input-format"); add(s, format);
         add_number(s, "--sample-rate", sample_rate); add_number(s, "--bandwidth", a->sr);
         add_number(s, "--plp", integer_setting(a, "dvbt2", "plp", -1, 255));
+        add(s, "--ldpc");
+        add(s, g_key_file_get_boolean(a->config,"dvbt2","gpu_ldpc",NULL) ? "gpu" : "cpu");
     } else if (a->standard == 2) {
         s = &a->stages[a->stage_count++];
         s->args = g_ptr_array_new_with_free_func(g_free);
@@ -2108,6 +2110,7 @@ static void populate_fecs(App *a) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->constellation_box),a->standard == 1 ? a->constellation : 0);
     g_signal_handlers_unblock_by_func(a->constellation_box, constellation_changed, a);
     if (a->t2_plp_box) gtk_widget_set_sensitive(a->t2_plp_box, a->standard == 3);
+    if (a->t2_gpu_box) gtk_widget_set_sensitive(a->t2_gpu_box, a->standard == 3);
     gtk_widget_set_sensitive(a->constellation_box, a->standard == 1);
     if (a->ldpc_mode_box) {
         gboolean soft=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box))==0;
@@ -2129,6 +2132,11 @@ static void constellation_changed(GtkWidget *widget, gpointer data) {
 static void t2_plp_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     g_key_file_set_integer(a->config,"dvbt2","plp",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget)));
+    refresh_preview(a);
+}
+static void t2_gpu_changed(GtkWidget *widget, gpointer data) {
+    App *a = data;
+    g_key_file_set_boolean(a->config,"dvbt2","gpu_ldpc",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));
     refresh_preview(a);
 }
 static void standard_changed(GtkWidget *widget, gpointer data) {
@@ -2344,6 +2352,8 @@ static void source_defaults(App *a) {
     }
     if (!g_key_file_has_key(a->config,"dvbt2","plp",NULL))
         g_key_file_set_integer(a->config,"dvbt2","plp",-1);
+    if (!g_key_file_has_key(a->config,"dvbt2","gpu_ldpc",NULL))
+        g_key_file_set_boolean(a->config,"dvbt2","gpu_ldpc",FALSE);
     const char *srt_keys[] = {"url", "loss_timeout_ms", "retry_interval_ms", "fps", "video_bitrate_kbps", "x264_preset", "video_threads", "filter_threads"};
     const char *srt_values[] = {"", "2000", "2000", "25", "4000", "veryfast", "0", "0"};
     for (unsigned i = 0; i < G_N_ELEMENTS(srt_keys); ++i)
@@ -3459,13 +3469,18 @@ static void create_mode_renderer(App *a) {
     a->t2_plp_box=spin(a->controls,"DVB-T2 PLP (-1 = auto)",10,-1,255,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),integer_setting(a,"dvbt2","plp",-1,255));
     g_signal_connect(a->t2_plp_box,"value-changed",G_CALLBACK(t2_plp_changed),a);
+    a->t2_gpu_box=gtk_check_button_new_with_label("Use GPU for DVB-T2 LDPC (experimental)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box),g_key_file_get_boolean(a->config,"dvbt2","gpu_ldpc",NULL));
+    gtk_widget_set_tooltip_text(a->t2_gpu_box,"Off: CPU LDPC. On: try GPU LDPC with CPU fallback. Applies at the next reception start; video rendering is a separate setting.");
+    gtk_grid_attach(GTK_GRID(a->controls),a->t2_gpu_box,0,11,2,1);
+    g_signal_connect(a->t2_gpu_box,"toggled",G_CALLBACK(t2_gpu_changed),a);
     GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
     gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
-    gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,11,2,1);
+    gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,12,2,1);
     a->dab_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->dab_controls),8);
     gtk_grid_set_column_spacing(GTK_GRID(a->dab_controls),12);
-    gtk_grid_attach(GTK_GRID(a->controls),a->dab_controls,0,12,2,1);
+    gtk_grid_attach(GTK_GRID(a->controls),a->dab_controls,0,13,2,1);
     a->dab_free_box=gtk_check_button_new_with_label("Free frequency");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),dab_free_tuning(a));
     gtk_grid_attach(GTK_GRID(a->dab_controls),a->dab_free_box,0,0,2,1);
@@ -3939,6 +3954,12 @@ static char *network_status(gpointer data) {
             STR(d,"service",v->service);STR(d,"provider",v->provider);
             STR(d,"modulation",v->modulation);STR(d,"fec",v->fec);STR(d,"guard",v->guard);
             NUM(d,"plp_id",v->plp_id);
+            if (a->standard==3) {
+                BOOL(d,"ldpc_gpu_requested",v->ldpc_gpu_requested);
+                STR(d,"ldpc_backend",v->ldpc_backend==2 ? "gpu" : v->ldpc_backend==1 ? "cpu" : "waiting");
+                json_object_object_add(d,"ldpc_gpu_frames",json_object_new_uint64(v->ldpc_gpu_frames));
+                json_object_object_add(d,"ldpc_cpu_frames",json_object_new_uint64(v->ldpc_cpu_frames));
+            }
         }
         json_object_object_add(root,"decoder",d);
     }

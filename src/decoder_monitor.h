@@ -22,6 +22,9 @@ typedef struct {
     /* DVB-T2 broadcast worker: cumulative live losses and selected PLP. */
     uint64_t input_dropped, fec_frames_dropped;
     int32_t plp_id;
+    /* T2 first-pass LDPC backend; GPU frames can still have CPU retries/BCH. */
+    uint32_t ldpc_gpu_requested, ldpc_backend; /* 0 waiting/unknown, 1 CPU, 2 GPU */
+    uint64_t ldpc_gpu_frames, ldpc_cpu_frames;
 } DecoderStatus;
 typedef struct {
     uint32_t magic, type, count;

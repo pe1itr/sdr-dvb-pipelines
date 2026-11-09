@@ -73,11 +73,15 @@ PlpResult PlpDecoder::decodeNow(const PlpJob& job, int threads, bool useGpu, con
     if (useGpu && GpuLdpc::instance().available()) {
         gLlr.resize((size_t)nb * d.nLdpc);
         parallelFor(nb, threads, [&](int b) {
+            DECT2_STAGE("t2.demap");
             qamDemapBlockToCodeword(job.fec, rx.data() + (size_t)b * cells, n0.data() + (size_t)b * cells, cells, gLlr.data() + (size_t)b * d.nLdpc);
         });
         gHard.resize((size_t)nb * d.nLdpc); gOk.resize(nb); gIt.resize(nb);
         if (GpuLdpc::instance().decode(ldpc, gLlr.data(), nb, 50, gHard.data(), gOk.data(), gIt.data())) res.usedGpu = true;
-        else { gLlr.clear(); }
+        else {
+            fprintf(stderr, "DVB-T2 LDPC: GPU call failed; decoding this frame on CPU\n");
+            gLlr.clear();
+        }
     }
     const bool gpuDone = res.usedGpu;
     std::atomic<int> tried{0}, failedFirst{0};
@@ -225,10 +229,19 @@ bool PlpDecoder::autoStartsOnGpu() const {
 }
 
 PlpDecoder::PlpDecoder(int threads) {
-    gpuOk_ = GpuLdpc::instance().available();
-    autoGpu_ = autoStartsOnGpu();   // Auto starts on the GPU
     threads_ = threads > 0 ? threads : std::max(1u, std::thread::hardware_concurrency());
     th_ = dect2::namedThread("onair-t2plp", [this] { loop(); });
+}
+
+void PlpDecoder::setMode(int m) {
+    // The host changes this at receiver startup, never mid-frame. Also make
+    // callers that reconfigure an idle receiver wait for outstanding work.
+    std::unique_lock<std::mutex> lk(mu_);
+    idle_.wait(lk, [&] { return jobs_.empty() && !busy_; });
+    gpuOk_ = m != 0 && GpuLdpc::instance().available();
+    mode_ = m;
+    autoGpu_ = m == 2 && autoStartsOnGpu();
+    switched_ = false; pathFrames_ = 0; slowRun_ = 0;
 }
 
 PlpDecoder::~PlpDecoder() {
@@ -277,6 +290,10 @@ void PlpDecoder::loop() {
         const int mode = mode_.load();
         const bool wantGpu = gpuOk_ && (mode == 1 || (mode == 2 && autoGpu_));
         PlpResult r = decodeNow(job, threads_, wantGpu, &backlog_);
+        if (wantGpu && r.blocks > 0 && !r.usedGpu) {
+            gpuOk_ = false;
+            fprintf(stderr, "DVB-T2 LDPC: GPU disabled for this receiver run; CPU fallback\n");
+        }
         if (mode == 2 && gpuOk_) {
             // Auto: run wherever the decoder keeps up. Both paths are timed; a path that takes more than 70 % of a frame's duration for
             // three frames in a row (or that makes frames get dropped) is left for the other one, unless the other one is known to be slower.

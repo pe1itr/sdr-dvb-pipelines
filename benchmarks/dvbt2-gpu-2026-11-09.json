@@ -1,0 +1,304 @@
+{
+  "date": "2026-11-09",
+  "target": "Native Linux, Ryzen 7 5800H / NVIDIA RTX 3050 Laptop GPU",
+  "base_commit": "0603f9ead00215b80f2b883b5c5405826ae8432d",
+  "source_state": "uncommitted GPU changes",
+  "implementation": {
+    "selected": "FP32 layered Vulkan with compact minima/sign storage, degree-specialized arrays, bounded shared posterior cache, batch up to 64",
+    "selection": "Existing DVB-T2 GPU checkbox; CPU remains default; unavailable/failing GPU falls back to CPU",
+    "unchanged": "LDPC update order, alpha, iteration limits, BCH, retry policy and reception queues",
+    "input_output": "LLRs to GPU, all LDPC iterations and convergence on GPU, hard bits/status back; BCH and existing retries on CPU",
+    "alternative_rejected": "Multi-workgroup flooding was implemented and CPU-reference tested (882 cases) but was slower than the final layered variant on the heavy workload; artifacts archived only",
+    "diagnostics": "DECT2_VULKAN_SCHEDULE=layered selects original 16-word kernel for A/B. DECT2_GPU_TIMING=1 enables GPU timestamps and total host-call timing; mapped buffer access is inside device duration."
+  },
+  "tests": {
+    "gpu_cpu_equivalence_cases": 1142,
+    "rates": 14,
+    "coverage": [
+      "normal/short frames",
+      "noise",
+      "ties/signed zeros",
+      "1/17/65/3 batch sizes",
+      "mixed convergence",
+      "buffer reuse"
+    ],
+    "cpu_default_and_settings": "passed tests/test_dvbt2_gpu_option.py",
+    "injected_gpu_failure": "passed build/test_dvbt2_gpu_fallback",
+    "pipeline_and_gap_recovery": "passed build/test_dvbt2_pipeline and build/test_dvbt2_gap_clock"
+  },
+  "component_method": "183 normal 64800-bit rate-3/5 codewords; 50-iteration limit; deterministic AWGN; median of three calls after one warm-up, includes input/output and host-call costs; GPU timestamp diagnostics enabled; live source stopped. This measures LDPC work, not successful TS throughput. sigma 0.85 and 1.2 deliberately fail all codewords at 50 iterations.",
+  "component_results": [
+    {
+      "mode": "cpu",
+      "sigma": 0.65,
+      "codewords": 183,
+      "median_ms": 23.241,
+      "coded_Mbps": 510.231,
+      "converged": 183,
+      "mean_iterations": 5.158,
+      "bit_errors": 0,
+      "undetected_errors": 0,
+      "backend": "cpu-auto"
+    },
+    {
+      "mode": "cpu",
+      "sigma": 0.65,
+      "codewords": 183,
+      "median_ms": 32.179,
+      "coded_Mbps": 368.515,
+      "converged": 183,
+      "mean_iterations": 5.158,
+      "bit_errors": 0,
+      "undetected_errors": 0,
+      "backend": "cpu-4"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 0.65,
+      "codewords": 183,
+      "median_ms": 119.194,
+      "coded_Mbps": 99.488,
+      "converged": 183,
+      "mean_iterations": 5.158,
+      "bit_errors": 0,
+      "undetected_errors": 0,
+      "backend": "layered"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 0.65,
+      "codewords": 183,
+      "median_ms": 64.612,
+      "coded_Mbps": 183.533,
+      "converged": 183,
+      "mean_iterations": 5.158,
+      "bit_errors": 0,
+      "undetected_errors": 0,
+      "backend": "cached"
+    },
+    {
+      "mode": "cpu",
+      "sigma": 0.85,
+      "codewords": 183,
+      "median_ms": 183.667,
+      "coded_Mbps": 64.565,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 1567185,
+      "undetected_errors": 0,
+      "backend": "cpu-auto"
+    },
+    {
+      "mode": "cpu",
+      "sigma": 0.85,
+      "codewords": 183,
+      "median_ms": 282.713,
+      "coded_Mbps": 41.945,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 1567185,
+      "undetected_errors": 0,
+      "backend": "cpu-4"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 0.85,
+      "codewords": 183,
+      "median_ms": 534.726,
+      "coded_Mbps": 22.177,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 1567185,
+      "undetected_errors": 0,
+      "backend": "layered"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 0.85,
+      "codewords": 183,
+      "median_ms": 233.735,
+      "coded_Mbps": 50.734,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 1567185,
+      "undetected_errors": 0,
+      "backend": "cached"
+    },
+    {
+      "mode": "cpu",
+      "sigma": 1.2,
+      "codewords": 183,
+      "median_ms": 187.664,
+      "coded_Mbps": 63.19,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 2555125,
+      "undetected_errors": 0,
+      "backend": "cpu-auto"
+    },
+    {
+      "mode": "cpu",
+      "sigma": 1.2,
+      "codewords": 183,
+      "median_ms": 282.329,
+      "coded_Mbps": 42.002,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 2555125,
+      "undetected_errors": 0,
+      "backend": "cpu-4"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 1.2,
+      "codewords": 183,
+      "median_ms": 536.492,
+      "coded_Mbps": 22.104,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 2555125,
+      "undetected_errors": 0,
+      "backend": "layered"
+    },
+    {
+      "mode": "gpu",
+      "sigma": 1.2,
+      "codewords": 183,
+      "median_ms": 228.686,
+      "coded_Mbps": 51.855,
+      "converged": 0,
+      "mean_iterations": 50.0,
+      "bit_errors": 2555125,
+      "undetected_errors": 0,
+      "backend": "cached"
+    }
+  ],
+  "comparisons": [
+    {
+      "sigma": 0.65,
+      "old_gpu_ms": 119.194,
+      "new_gpu_ms": 64.612,
+      "cpu_auto_ms": 23.241,
+      "cpu_four_helpers_ms": 32.179,
+      "gpu_speedup_vs_previous": 1.8447656782021917,
+      "mean_iterations": 5.158,
+      "all_methods_same_bit_errors": true
+    },
+    {
+      "sigma": 0.85,
+      "old_gpu_ms": 534.726,
+      "new_gpu_ms": 233.735,
+      "cpu_auto_ms": 183.667,
+      "cpu_four_helpers_ms": 282.713,
+      "gpu_speedup_vs_previous": 2.2877446681070444,
+      "mean_iterations": 50.0,
+      "all_methods_same_bit_errors": true
+    },
+    {
+      "sigma": 1.2,
+      "old_gpu_ms": 536.492,
+      "new_gpu_ms": 228.686,
+      "cpu_auto_ms": 187.664,
+      "cpu_four_helpers_ms": 282.329,
+      "gpu_speedup_vs_previous": 2.345976579239656,
+      "mean_iterations": 50.0,
+      "all_methods_same_bit_errors": true
+    }
+  ],
+  "recorded_iq": {
+    "source": "build/windows-dvbt2-o3-check/short.iq",
+    "seconds": 3,
+    "feed_sps": 10000000,
+    "waited_for_backend_initialization": true,
+    "runs": [
+      {
+        "choice": "cpu",
+        "feed_sps": 10000000,
+        "elapsed": 3.0316043610000634,
+        "fields": {
+          "PLP": "0",
+          "L1": "1/1",
+          "BCH": "1801/212",
+          "TS": "46257",
+          "input_dropped": "0",
+          "fec_frames_dropped": "0",
+          "RMS": "-20.0",
+          "SNR": "24.5",
+          "CFO": "2118",
+          "GI": "1/8"
+        },
+        "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e"
+      },
+      {
+        "choice": "layered",
+        "feed_sps": 10000000,
+        "elapsed": 3.714817268002662,
+        "fields": {
+          "PLP": "0",
+          "L1": "1/1",
+          "BCH": "1801/212",
+          "TS": "46257",
+          "input_dropped": "0",
+          "fec_frames_dropped": "0",
+          "RMS": "-20.0",
+          "SNR": "24.5",
+          "CFO": "2118",
+          "GI": "1/8"
+        },
+        "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e",
+        "gpu_timing_after_selftest": {
+          "batches": 132.0,
+          "words": 2013.0,
+          "device_ms": 2234.075,
+          "host_ms": 2361.726
+        }
+      },
+      {
+        "choice": "cached",
+        "feed_sps": 10000000,
+        "elapsed": 3.163886526999704,
+        "fields": {
+          "PLP": "0",
+          "L1": "1/1",
+          "BCH": "1801/212",
+          "TS": "46257",
+          "input_dropped": "0",
+          "fec_frames_dropped": "0",
+          "RMS": "-20.0",
+          "SNR": "24.5",
+          "CFO": "2118",
+          "GI": "1/8"
+        },
+        "sha256": "5196ccf17685cea50b7b748cbfe80ad3ebf45e36193939d4fcd19410cf5d826e",
+        "gpu_timing_after_selftest": {
+          "batches": 33.0,
+          "words": 2013.0,
+          "device_ms": 1049.5349999999999,
+          "host_ms": 1140.329
+        }
+      }
+    ]
+  },
+  "limitations": [
+    "CPU automatic-worker mode remains faster in the tested standalone LDPC workloads.",
+    "Three seconds of recorded IQ does not prove sustained live throughput.",
+    "Native Linux live check pending; no Windows performance claim.",
+    "No new IQ capture or active INI modification; Windows release not rebuilt in this change."
+  ],
+  "sha256": {
+    "components/dvbt2/src/dsp/gpu_ldpc_vulkan.cpp": "b1ed5814b239e8ef33c853b3fe28fe960e5006e879c7b266d6532731ff11526f",
+    "components/dvbt2/src/dsp/vulkan/ldpc_t2_cached.comp": "9a5e17dfdeea0194ff2882cc4df807acb2ddba237ec23b99f5c0f2d7dca3ad0a",
+    "components/dvbt2/src/dsp/vulkan/ldpc_t2_cached_spirv.h": "7de8fbe2b8a2ea9bcd8bc04edb18ce38ca16326da483c58e45d3ee33f28416f5",
+    "components/dvbt2/tools/gen_cached_spirv.py": "48549243816589f8ba1ae14114a3c02b00552a60d7232d28cf7b70ddfc4be0a7",
+    "components/dvbt2/tests/test_gpu.cpp": "95ef530579f79ad7ab7394a784031d833c99e64f06228e9316a12cb1b3c3bac9",
+    "components/dvbt2/tests/test_gpu_bench.cpp": "2f79ae164d441ed3c3fa6747a1d8de1543b70e2ea21867a3f79a99065252ae4f",
+    "build/linrad_dvb": "94cd4684c8ea7ef040a0ab40ac48770253ca77ddad8da523965075adfd7e3e6f",
+    "build/dvbt2_worker": "48c05739eee8407877ddcd76fcc79a8b14a08b86b6f59c8292209dae02c856a0"
+  },
+  "references": [
+    "https://github.com/robertwgh/cuLDPC",
+    "https://doi.org/10.1109/AERO.2018.8396831",
+    "https://doi.org/10.1186/s13634-024-01190-8",
+    "https://dblib.rsreu.ru/data/publications/7995_text.pdf"
+  ]
+}

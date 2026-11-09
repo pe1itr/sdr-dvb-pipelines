@@ -1,5 +1,24 @@
 # Native Windows x64
 
+## Optionele GPU-LDPC voor DVB-T2
+
+In het modevenster staat **Use GPU for DVB-T2 LDPC (experimental)**. Uit blijft
+de bestaande CPU-decoder actief, zonder GPU-initialisatie. Aan probeert de
+ontvanger Direct3D 11-LDPC; bij een ontbrekende GPU, mislukte zelftest of
+GPU-fout wordt de CPU gebruikt. De keuze wordt opgeslagen en geldt bij de
+volgende ontvangststart. DVB-S2 en de keuze van videorenderer staan hier los van.
+
+Service Info toont `LDPC: GPU`, `CPU` of `CPU (fallback)` na een verwerkt frame.
+Het statusendpoint bevat `ldpc_gpu_requested`, `ldpc_backend`,
+`ldpc_gpu_frames` en `ldpc_cpu_frames`. GPU betreft de eerste LDPC-poging;
+BCH en eventuele herkansingen blijven op CPU. Het is een proefversie zonder
+aangetoonde versnelling op de Windows-laptop.
+
+Met `check-dvbt2-gpu.cmd` kan de GPU-zelftest afzonderlijk worden uitgevoerd.
+Sluit de ontvanger daarvoor af; het resultaat staat in `dvbt2-gpu-check.log`.
+De zelftest controleert bekende korte en normale codewoorden. Een geslaagde
+zelftest is nog geen volledige vergelijking van ontvangstkwaliteit of snelheid.
+
 Dit is een experimentele native Windows-port van Linrad DVB. Het ZIP-package
 bevat echte Windows `.exe`-bestanden, DLL's en plugins. WSL en MSYS2 zijn niet
 nodig om het programma te gebruiken. Gebruik Windows 10/11, 64-bit.

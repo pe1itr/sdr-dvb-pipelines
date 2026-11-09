@@ -1607,13 +1607,26 @@ static void exercise_t2_mode(App *a) {
     g_assert_false(gtk_widget_get_sensitive(a->gi_box));
     g_assert_false(gtk_widget_get_sensitive(a->constellation_box));
     g_assert_true(gtk_widget_get_sensitive(a->t2_plp_box));
+    g_assert_true(gtk_widget_get_sensitive(a->t2_gpu_box));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box)));
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),7);
     g_assert_cmpint(integer_setting(a,"dvbt2","plp",-1,255),==,7);
     char *pipeline=describe(a);
     g_assert_nonnull(strstr(pipeline,"--decoder-worker=dvbt2"));
     g_assert_nonnull(strstr(pipeline,"'--bandwidth' '8000000'"));
     g_assert_nonnull(strstr(pipeline,"'--plp' '7'"));
+    g_assert_nonnull(strstr(pipeline,"'--ldpc' 'cpu'"));
     g_free(pipeline);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box),TRUE);
+    g_assert_true(g_key_file_get_boolean(a->config,"dvbt2","gpu_ldpc",NULL));
+    pipeline=describe(a);
+    g_assert_nonnull(strstr(pipeline,"'--ldpc' 'gpu'"));
+    g_free(pipeline);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
+    g_assert_false(gtk_widget_get_sensitive(a->t2_gpu_box));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),3);
+    g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box)));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box),FALSE);
     /* Live filtering must never send a saved narrowband width to T2. */
     const char *section=sources[a->source];
     int saved_rate=g_key_file_get_integer(a->config,section,"sample_rate",NULL);

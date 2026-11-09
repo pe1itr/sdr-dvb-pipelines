@@ -1,4 +1,5 @@
-// This embedded receiver uses CPU FEC on every platform.
+#if !defined(_WIN32) && !defined(__linux__)
+// Platforms without a GPU backend keep the CPU decoder.
 #include "dect2/dsp/gpu_ldpc.h"
 #include <cstdint>
 
@@ -20,3 +21,5 @@ bool GpuLdpc::decodeQc(const QcLdpc&, const float*, int, int, uint8_t*, uint8_t*
 bool GpuLdpc::boxCorrKernels() const { return false; }
 
 } // namespace dect2
+
+#endif // !_WIN32

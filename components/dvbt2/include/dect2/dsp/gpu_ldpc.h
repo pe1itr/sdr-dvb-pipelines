@@ -1,5 +1,6 @@
-// GPU LDPC decoder (Metal on macOS, Direct3D 11 on Windows, Vulkan on Linux): layered normalised min-sum, one threadgroup (360 threads, one per
-// check of a layer) per FEC block.
+// Optional GPU LDPC decoder (Direct3D 11 on Windows, Vulkan on Linux): layered normalised min-sum, one threadgroup (360 threads, one per
+// check of a layer) per FEC block. Linux stores compact check minima and caches
+// posteriors in shared memory without changing the layered FP32 update order.
 #pragma once
 #include "ldpc.h"
 #include "qc_ldpc.h"

@@ -304,8 +304,9 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     }
     char text[512];
     g_snprintf(text,sizeof(text),"%s · %s",mode,!active ? "stopped" : fresh ? "live" : "waiting for decoder status");
-    if (t2 && fresh) g_snprintf(text,sizeof(text),"DVB-T2 · PLP %d · IQ lost: %" G_GUINT64_FORMAT " · FEC frames lost: %" G_GUINT64_FORMAT,
-        s->plp_id,s->input_dropped,s->fec_frames_dropped);
+    if (t2 && fresh) g_snprintf(text,sizeof(text),"DVB-T2 · PLP %d · LDPC: %s · IQ lost: %" G_GUINT64_FORMAT " · FEC frames lost: %" G_GUINT64_FORMAT,
+        s->plp_id,s->ldpc_backend==2 ? "GPU" : s->ldpc_backend==1 ?
+            (s->ldpc_gpu_requested ? "CPU (fallback)" : "CPU") : "waiting",s->input_dropped,s->fec_frames_dropped);
     gtk_label_set_text(GTK_LABEL(v->state),text);
     const char *names[]={dab ? "Sync" : satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", dab ? "FIC" : "FEC", dab ? "Ensemble" : "TS", dab ? "Audio" : "Service"};
     for (int i=0;i<4;++i) {
