@@ -2,6 +2,7 @@
 #define main application_main
 #include "../src/linrad_dvb.c"
 #undef main
+#include "sdr_status_endpoint_test.h"
 
 static const char *transport_path;
 static gboolean checked;
@@ -61,6 +62,7 @@ static gboolean exercise(gpointer data) {
 }
 
 int main(int argc,char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--test-sdr-status")) {exercise_sdr_status();return 0;}
     g_assert_cmpint(argc,==,3);
     App a={.sr=125000,.tune_fd=-1};
     a.config=g_key_file_new(); a.config_path=g_canonicalize_filename(argv[1],NULL);

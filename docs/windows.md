@@ -192,12 +192,12 @@ De profielregels `t2.ce.*` en `t2.eq.*` splitsen kanaalverwerking verder op.
 Hun tijden worden niet meer in de bovenliggende `t2.chanest+eq` en
 `t2.eqloop` meegerekend: tel de onderdelen erbij om met oude logs te vergelijken.
 
-Live DVB-T2 op Windows is nog niet verliesvrij gevalideerd. De native
-profielmeting liet interne IQ-verliezen zien terwijl de SDR-uitvoerwachtrij
-verliesvrij bleef. De parallelle verwerking is bedoeld om meer ruimte voor
-demodulatie te maken, maar het effect op live Windows-ontvangst moet nog
-worden gecontroleerd. Vertraagde IQ-replay en FEC/L1-tests controleren de
-decodeeruitkomst, niet de realtime doorvoer.
+De native meting na de kanaaloptimalisatie, met GPU-videorenderer aan,
+leverde over 102,373 seconden nul nieuwe decoder-IQ- en FEC-frameverliezen.
+De buffer stond op de meetmomenten op 19%, 9% en 20%. Er waren nog
+UHD-overflows en 1.642 onherstelbare BCH-blokken; verliesvrije ontvangst
+is dus nog niet aangetoond. Deze live intervallen zijn geen gecontroleerde
+vergelijking met exact dezelfde IQ-invoer.
 
 Het pakket bevat ook de librsvg-pixbuf-loader voor de ingebouwde SVG-iconen
 van GTK's Adwaita-thema. Een melding `Could not load a pixbuf` met een pad
@@ -217,11 +217,57 @@ privénetwerk; dit uitleesendpoint heeft geen authenticatie.
 DAB probeert tijdelijk vergrendelde slideshowbestanden opnieuw;
 de IQ-ontvangst blijft doorlopen. Paden met Unicode-tekens worden ondersteund.
 
+## SDR-ontvangstdiagnostiek
+
+Voor de B210/UHD-bron publiceert `/status` nu een apart `sdr`-object.
+`hardware_overflows`, `recv_timeouts`, `received_samples`, `recv_calls`,
+`output_dropped_samples`, `service_gaps_over_5ms` en
+`spectrum_snapshots_dropped` zijn cumulatief sinds de start van de bron.
+Een hardware-overflow is een gebeurtenis, geen aantal verloren samples.
+`received_samples` telt wat UHD retourneert, inclusief eventuele samples
+bij een foutmelding; het is geen schatting van de ontbrekende samples.
+De bestaande decodervelden `input_dropped` en `fec_frames_dropped` blijven
+aparte tellers. `sdr.sample_rate` is de werkelijk ingestelde UHD-samplerate;
+het bovenste `rate` blijft de geselecteerde kanaalbandbreedte.
+
+Elke circa één seconde verschijnt een `[SDR] RX timing:`-regel. Het
+`sdr`-object bevat de laatste regel, met eigen `telemetry_age_ms` en
+`telemetry_fresh` (minder dan drie seconden oud en ontvanger actief).
+Zonder UHD-meting is `sdr` null. Vergelijk twee verse snapshots voor
+verliesdelta's; timingmaxima gelden alleen voor `interval_ms`, niet voor
+de hele sessie. Voor pieken tussen snapshots blijven de logregels beschikbaar.
+
+- `recv_mean_ms` / `recv_max_ms`: verstreken tijd binnen UHD `recv`, inclusief
+  wachten op samples en eventuele onderbreking door de Windows-scheduler.
+- `service_gap_max_ms`: langste tijd van terugkeer uit `recv` tot de volgende
+  aanroep; omvat eigen verwerking, loggen en schedulervertraging.
+- `call_interval_max_ms`: langste tijd tussen het begin van twee leesacties.
+- `overflow_service_gap_max_ms`: grootste voorafgaande servicepauze bij een
+  aanroep die een overflow rapporteert. UHD kan een overflow vertraagd melden;
+  deze correlatie bewijst geen oorzaak. Nul kan ook betekenen: geen overflow
+  in dit interval; controleer de cumulatieve overflowdelta.
+- `monitor_max_ms` / `output_push_max_ms`: langste monitor/tap-aanroep en
+  overdracht naar de bestaande IQ-uitvoerwachtrij in het rapportinterval.
+
+Het SDR-proces verplaatst spectrum-FFT's naar een aparte thread. Alleen
+acht aaneengesloten FFT-vensters per spectrumupdate worden gekopieerd,
+met één wachtende en één verwerkte snapshot. Een trage spectrumthread mag
+een spectrumupdate laten vallen; dit verandert de decoder-IQ en de audio-tap
+niet. `spectrum_async=true` en het opstartlog
+`[SDR] Spectrum processing: asynchronous snapshots` bevestigen dit pad.
+Voor een vergelijking met dezelfde meetcode en de oude synchrone
+spectrumverwerking kan vóór het starten `LINRAD_IQ_MONITOR_SYNC=1` worden gezet.
+Threadprioriteiten, UHD-transportbuffers en decoderinstellingen zijn hierbij
+niet veranderd. Het effect op native Windows-overflows moet nog live worden
+gemeten; de unit-/Wine-tests bewijzen geen USB- of schedulerverbetering.
+
+
 ## Bouwen en packagen op Linux
 
 Vereist Python 3 met `pefile`, CMake, pkg-config, GNU tar/zstd, MinGW-w64 GCC/G++ met
 `-mcrtdll=ucrt`, en een Rust-toolchain met target `x86_64-pc-windows-gnu`.
 Rust-compiler en targetbibliotheek moeten uit dezelfde toolchain komen.
+
 De C/C++-code en de SDK gebruiken de Windows UCRT. Bij GCC 15 met een GCC 16
 SDK koppelt de builder de TLS-destructorhelper uit de eigen `libsupc++.a`
 statisch mee; die static library moet dus ook geïnstalleerd zijn.

@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class MonitorTests(unittest.TestCase):
     def test_frequency_power_and_unchanged_iq(self):
-        for rate in (111111, 158730, 196078):
-            with self.subTest(rate=rate), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        for rate, asynchronous in ((r,a) for r in (111111,158730,196078,9142857) for a in (False,True)):
+            with self.subTest(rate=rate, asynchronous=asynchronous), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.bind(('127.0.0.1', 0))
                 sock.settimeout(2)
                 env = dict(os.environ, LINRAD_IQ_MONITOR_PORT=str(sock.getsockname()[1]))
@@ -19,7 +19,8 @@ class MonitorTests(unittest.TestCase):
                 # Positive complex frequency, amplitude 0.25 full scale.
                 raw = b''.join(struct.pack('<hh', round(8192*math.cos(2*math.pi*123*i/2048)),
                                           round(8192*math.sin(2*math.pi*123*i/2048))) for i in range(n))
-                out = subprocess.run([str(ROOT/'build/monitor_probe'), str(rate)], input=raw,
+                command=[str(ROOT/'build/monitor_probe'),str(rate)] + (['async'] if asynchronous else [])
+                out = subprocess.run(command, input=raw,
                                      stdout=subprocess.PIPE, check=True, env=env).stdout
                 self.assertEqual(out, raw)
                 frame = sock.recv(65535)

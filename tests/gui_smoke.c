@@ -2,6 +2,7 @@
 #define main application_main
 #include "../src/linrad_dvb.c"
 #undef main
+#include "sdr_status_endpoint_test.h"
 #include "../src/tune_control.h"
 #include "../src/decoder_margin.h"
 
@@ -2103,6 +2104,7 @@ static gboolean exercise(gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--test-sdr-status")) {exercise_sdr_status();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=dvbt2")) return dvbt2_backend_main(argc-1,argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))

@@ -43,6 +43,13 @@ def run(name, *args, data=None, timeout=40):
 
 
 class WindowsTests(unittest.TestCase):
+    def test_sdr_receive_diagnostics(self):
+        for name, args in [("test_sdr_rx_status", []), ("test_iq_monitor_async", []),
+                           ("windows_gui_smoke", ["--test-sdr-status"])]:
+            with self.subTest(program=name):
+                p = run(name, *args)
+                self.assertEqual(p.returncode, 0, (p.stderr+p.stdout).decode(errors="replace"))
+
     def test_dvbt2_ldpc(self):
         p = run("test_dvbt2_ldpc", timeout=120)
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace") + p.stdout.decode(errors="replace"))

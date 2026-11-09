@@ -21,6 +21,7 @@
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
 #include "iq_record.h"
+#include "sdr_rx_status.h"
 #include <fcntl.h>
 #include <errno.h>
 #include <math.h>
@@ -180,6 +181,8 @@ int main(int argc, char **argv) {
     IQBandFilter *filter = iq_bandfilter_create(rate, bandwidth);
     if (!filter) { fprintf(stderr, "Cannot create IQ bandfilter\n"); return 1; }
     unsigned long overflows = 0;
+    SdrRxTiming rx_timing = {0};
+    int spectrum_async = 0;
 
     /* Blocks are kept large to amortize pipe and driver overhead at 10+ MS/s. */
     int16_t iq[65536 * 2]; unsigned char packed[65536 * 2];
@@ -354,6 +357,9 @@ int main(int argc, char **argv) {
     if (!output) { perror("IQ output queue"); goto done; }
     fprintf(stderr, "[SDR] Independent IQ writer: %.0f ms buffer, %.1f MiB\n",
             slots * (double)block_samples / rate * 1000, slots * (double)block_samples * (u8 ? 2 : 4) / 1048576);
+    spectrum_async = iq_monitor_start_async();
+    fprintf(stderr, "[SDR] Spectrum processing: %s\n", spectrum_async>0 ? "asynchronous snapshots" :
+            spectrum_async<0 ? "synchronous (worker unavailable)" : "synchronous or disabled");
     if (lime) { if (lime_rx_start(mini)) goto done; }
     else if (afedri) { if (afedri_start(net)) goto done; }
     else if (soapy) { S(SoapySDRDevice_activateStream(dev, stream, 0, 0, 0)); }
@@ -378,11 +384,21 @@ int main(int argc, char **argv) {
         fprintf(stderr,"B210 mixer full-duplex startup conditioning complete\n");
     }
     double last_report = monotonic_seconds();
+    double last_rx_report = last_report;
     IQOutputStats previous = {0};
     capture.rate = actual;
     uint64_t dab_generation=0;
     size_t dab_settle=0;
     while (!stopped) {
+        /* Runs even after timeout/overflow continuations: loss diagnostics must
+         * not depend on successfully enqueuing a block. Currently UHD only. */
+        double loop_now = monotonic_seconds();
+        if (rx_timing.status.calls && loop_now-last_rx_report>=1) {
+            IQOutputStats stats; iq_output_stats(output,&stats);
+            sdr_rx_report(stderr,&rx_timing,actual,loop_now-last_rx_report,
+                stats.dropped/(u8 ? 2 : 4),iq_monitor_dropped(),spectrum_async>0);
+            last_rx_report=loop_now;
+        }
         if (dab_lo && atomic_load(&mixer.failed)) goto done;
         iq_record_feed(&capture, NULL, 0, 0);
         double requested = freq, requested_gain = gain, requested_bw = bandwidth;
@@ -504,8 +520,12 @@ int main(int argc, char **argv) {
             if (n < 0) { fprintf(stderr, "SDR receive: %s (decoder/USB may not keep up)\n", SoapySDR_errToStr(n)); goto done; }
             got = (size_t)n;
         } else {
+            sdr_rx_begin(&rx_timing,monotonic_seconds());
             U(uhd_rx_streamer_recv(rx, buffers, 65536, &md, .1, false, &got));
+            double recv_end = monotonic_seconds();
             uhd_rx_metadata_error_code_t code; U(uhd_rx_metadata_error_code(md, &code));
+            sdr_rx_end(&rx_timing,recv_end,got,code==UHD_RX_METADATA_ERROR_CODE_OVERFLOW,
+                code==UHD_RX_METADATA_ERROR_CODE_TIMEOUT);
             if (code == UHD_RX_METADATA_ERROR_CODE_TIMEOUT) continue;
             if (code == UHD_RX_METADATA_ERROR_CODE_OVERFLOW) {
                 ++overflows;
@@ -541,7 +561,10 @@ int main(int argc, char **argv) {
             else iq_cs16_to_u8(iq, packed, got);
         }
         unsigned char *out = u8 ? packed : (unsigned char *)iq;
+        double monitor_start = monotonic_seconds();
         iq_monitor_feed(out, got, u8, rate);
+        rx_timing.status.monitor_max_ms=fmax(rx_timing.status.monitor_max_ms,
+            (monotonic_seconds()-monitor_start)*1000);
         if (receiver_offset != 0) {
             /* Raw spectrum/audio/recording are tapped above. Preserve float
              * headroom through mixing + filtering; quantize only at output. */
@@ -552,7 +575,10 @@ int main(int argc, char **argv) {
             iq_shift_pack(shifted,out,got,u8);
         } else iq_bandfilter_process(filter, out, got, u8);
         size_t bytes = got * (u8 ? 2 : 4);
+        double output_start = monotonic_seconds();
         int queued = iq_output_push(output, out, bytes);
+        rx_timing.status.output_max_ms=fmax(rx_timing.status.output_max_ms,
+            (monotonic_seconds()-output_start)*1000);
         if (queued < 0) {
             fprintf(stderr, "IQ output: %s\n", strerror(iq_output_error(output)));
             goto done;
@@ -572,6 +598,7 @@ int main(int argc, char **argv) {
     }
     result = 0;
 done:
+    iq_monitor_stop_async();
     free(shifted);
     pluto_source_close(pluto_rx);
     lime_rx_close(mini);

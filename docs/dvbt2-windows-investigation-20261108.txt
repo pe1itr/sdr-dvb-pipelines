@@ -397,3 +397,30 @@ Detailed profiler children are exclusive: t2.chanest+eq and t2.eqloop alone
 now represent only remaining unclassified work. Include t2.ce.* and t2.eq.*
 when comparing frontend totals with earlier versions. Native Windows live
 validation is pending at 9,142,857 sps, gain 53, four workers and GPU renderer.
+
+2026-11-09: receive-loop diagnostics and spectrum isolation
+-------------------------------------------------------
+Native GPU-renderer-ON baseline after channel optimization:102.373s,
+1,927,590 TS packets (18,829/s), zero new decoder IQ or FEC-frame drops,
+75,035 good / 1,642 bad BCH, buffer snapshots18.75/9.375/20.3125%.
+Hardware overflows still occur despite an emptying decoder queue.
+Full snapshots in build/t2-bench/channel-investigation-20261109/gpu-renderer-on/.
+
+The next change adds a separate sdr endpoint object from once-per-second
+UHD receive diagnostics. Cumulative overflow events and output-queue sample
+drops stay separate from decoder IQ/FEC loss. Receive-call duration, time
+outside receive, start-to-start intervals, monitor/tap and output-enqueue
+peaks are wall times, including OS scheduling. Report max/mean values refer
+to the most recent interval; counters last for the source process lifetime.
+A preceding service gap at an overflow is correlation only: UHD can report
+previously lost data later. No precise hardware lost-sample total is claimed.
+
+Spectrum FFTs move to one worker with one pending contiguous 8x2048-sample
+snapshot. The producer samples at the original update cadence and never
+waits for that worker. A busy monitor loses spectrum snapshots, not decoder
+IQ; the existing USB/audio tap remains synchronous and unchanged. Startup
+reports asynchronous snapshots. LINRAD_IQ_MONITOR_SYNC=1 keeps the old
+spectrum path with the same timing instrumentation for a live comparison.
+No priority, affinity, UHD transport-buffer, LDPC or renderer settings changed.
+Correctness tests cover unchanged IQ and PSD plus a deliberately blocked
+FFT worker. Native Windows effect on hardware overflows remains to be measured.

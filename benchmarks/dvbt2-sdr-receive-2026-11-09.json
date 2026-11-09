@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-09",
+  "purpose": "Baseline before UHD receive timing and asynchronous spectrum worker",
+  "baseline_source": "build/t2-bench/channel-investigation-20261109/gpu-renderer-on/profile.json",
+  "baseline_build": "d468336",
+  "native_windows_gpu_renderer_on": {
+    "duration_s": 102.373,
+    "decoder_deltas": {
+      "packets": 1927590.0,
+      "rs_ok": 75035.0,
+      "rs_uncorrectable": 1642.0,
+      "input_dropped": 0,
+      "fec_frames_dropped": 0,
+      "cc_errors": 0.0
+    },
+    "buffer_snapshots": [
+      18.75,
+      9.375,
+      20.3125
+    ],
+    "snr_db_snapshots": [
+      23.216604232788086,
+      23.444377899169922,
+      23.963014602661133
+    ],
+    "packets_per_second": 18829.085794105868,
+    "bad_bch_fraction": 0.021414505001499797,
+    "renderer": "GPU ON explicitly confirmed by user before interval; not independently exposed by endpoint",
+    "limits": [
+      "Sequential live intervals, not controlled GPU-only A/B; previous renderer toggle timing not established.",
+      "Profile publication windows approximate; parallel CPU sums not Task Manager utilization.",
+      "Buffer snapshots are not continuous min/max.",
+      "No precise hardware missing-sample counter. UHD O markers identify continuing overflow, not lost sample total.",
+      "Startup sample-rate/gain/worker settings aged out; presumed unchanged, not verified this interval."
+    ]
+  },
+  "baseline_hardware_overflows": "Fresh retained log subset contains 24 UHD O markers; exact event/sample loss not exposed in baseline endpoint.",
+  "new_native_measurement": "Pending installation; no live improvement claim for receive-loop update.",
+  "change": "One bounded pending spectrum snapshot, FFT on worker; UHD calls/gaps/overflows reported each second to independent sdr endpoint object. Audio tap and decoder IQ remain on existing path.",
+  "validation": {
+    "linux": "Timing/parser unit test, endpoint fragmented/stale/stopped test, eight spectrum rate/mode checks, blocked-worker bounded-loss test, four HTTP endpoint tests passed.",
+    "windows_wine": "Timing/parser test, blocked spectrum worker, endpoint fragmented/stale/stopped test and executable help/pipeline checks passed; no SDR hardware opened."
+  }
+}

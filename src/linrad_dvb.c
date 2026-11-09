@@ -36,6 +36,7 @@
 #include "reception_log.h"
 #include "dab_view.h"
 #include "status_http.h"
+#include "sdr_rx_status.h"
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
@@ -46,6 +47,8 @@ typedef struct {
     GKeyFile *config;
     StatusHttp *status_http;
     GString *status_log;
+    SdrRxStatus sdr_status;
+    gint64 sdr_status_time;
     char *status_message;
     char *config_path, *directory;
     int standard, sr, fec, gi, exit_code, source, constellation;
@@ -682,6 +685,8 @@ static void record_log(App *a, const char *text, size_t length) {
         if (text[i] == '\n') {
             a->record_log_line[a->record_log_used] = 0;
             const char *line = a->record_log_line;
+            if (a->running && !a->stopping && sdr_rx_status_parse(line,&a->sdr_status))
+                a->sdr_status_time=g_get_monotonic_time();
             if (g_str_has_prefix(line, "[iq-record] ")) {
                 a->recording = a->running && !a->stopping && g_str_has_prefix(line, "[iq-record] started ");
                 a->record_pending = FALSE;
@@ -992,6 +997,7 @@ static void start_pipeline(App *a) {
     }
     if ((a->window || a->status_http) && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decoder telemetry unavailable; reception continues.\n");
+    a->sdr_status=(SdrRxStatus){0};a->sdr_status_time=0;a->record_log_used=0;
     a->running = TRUE;
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, FALSE);
@@ -3828,6 +3834,28 @@ static char *network_status(gpointer data) {
     double age=stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
     NUM(root,"telemetry_age_ms",age);
     BOOL(root,"telemetry_fresh",a->running && !a->stopping && isfinite(age) && age<2000);
+    json_object *sdr=NULL;
+    if (a->sdr_status_time) {
+        sdr=json_object_new_object();SdrRxStatus *s=&a->sdr_status;
+        double sdr_age=(g_get_monotonic_time()-a->sdr_status_time)/1000.0;
+        NUM(sdr,"telemetry_age_ms",sdr_age);
+        BOOL(sdr,"telemetry_fresh",a->running && !a->stopping && sdr_age<3000);
+        STR(sdr,"driver","uhd");NUM(sdr,"sample_rate",s->rate);
+#define COUNT(k,v) json_object_object_add(sdr,k,json_object_new_uint64(v))
+        COUNT("recv_calls",s->calls);COUNT("received_samples",s->samples);
+        COUNT("hardware_overflows",s->overflows);COUNT("recv_timeouts",s->timeouts);
+        COUNT("output_dropped_samples",s->output_dropped);
+        COUNT("service_gaps_over_5ms",s->gaps_over_5ms);
+        COUNT("spectrum_snapshots_dropped",s->spectrum_dropped);
+#undef COUNT
+        BOOL(sdr,"spectrum_async",s->spectrum_async);
+        NUM(sdr,"interval_ms",s->interval_ms);NUM(sdr,"recv_mean_ms",s->recv_mean_ms);
+        NUM(sdr,"recv_max_ms",s->recv_max_ms);NUM(sdr,"service_gap_max_ms",s->gap_max_ms);
+        NUM(sdr,"call_interval_max_ms",s->call_interval_max_ms);
+        NUM(sdr,"overflow_service_gap_max_ms",s->overflow_gap_max_ms);
+        NUM(sdr,"monitor_max_ms",s->monitor_max_ms);NUM(sdr,"output_push_max_ms",s->output_max_ms);
+    }
+    json_object_object_add(root,"sdr",sdr);
     if (a->standard==4) json_object_object_add(root,"dab",json_object_get(a->dab.snapshot));
     else {
         json_object *d=NULL;
