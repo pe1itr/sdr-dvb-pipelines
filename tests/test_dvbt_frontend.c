@@ -186,8 +186,54 @@ static void check_carrier_layout(void)
     }
 }
 
+static void check_iq_ring_overrun_between_reads(void)
+{
+    enum { CAPACITY = 8 };
+    complexf_t output[CAPACITY];
+    rbdvbt_complex_t input[20];
+    uint64_t dropped = 99;
+    for (unsigned i = 0; i < 20; ++i) {
+        input[i].i = (float)i;
+        input[i].q = -(float)i;
+    }
+    live_iq_ring.items = calloc(CAPACITY, sizeof(*live_iq_ring.items));
+    assert(live_iq_ring.items);
+    live_iq_ring.cap = CAPACITY;
+    live_iq_ring.eof = 1; /* No hardware/reader thread; short reads must return. */
+
+    live_iq_ring_push(input, 3);
+    assert(live_iq_ring_read(output, 2, &dropped) == 2 && dropped == 0);
+    for (unsigned i = 0; i < 2; ++i)
+        assert(output[i].re == (float)i && output[i].im == -(float)i);
+
+    /* Overflow occurs entirely between consumer reads, with wraparound. */
+    live_iq_ring_push(input + 3, 8);
+    assert(live_iq_ring_read(output, CAPACITY, &dropped) == CAPACITY && dropped == 1);
+    for (unsigned i = 0; i < CAPACITY; ++i)
+        assert(output[i].re == (float)(i + 3) && output[i].im == -(float)(i + 3));
+
+    /* Input larger than the ring, followed by another overflow before read. */
+    live_iq_ring_push(input + 8, 12);
+    assert(live_iq_ring_read(output, 5, &dropped) == 5 && dropped == 4);
+    for (unsigned i = 0; i < 5; ++i)
+        assert(output[i].re == (float)(i + 12) && output[i].im == -(float)(i + 12));
+    live_iq_ring_push(input, 7);
+    assert(live_iq_ring_read(output, CAPACITY, &dropped) == CAPACITY && dropped == 2);
+    assert(output[0].re == 19.0f && output[0].im == -19.0f);
+    for (unsigned i = 1; i < CAPACITY; ++i)
+        assert(output[i].re == (float)(i - 1) && output[i].im == -(float)(i - 1));
+    assert(live_iq_ring_read(output, CAPACITY, &dropped) == 0 && dropped == 0);
+    assert(live_iq_ring.overrun_samples == 7);
+    free(live_iq_ring.items);
+    live_iq_ring.items = NULL;
+    live_iq_ring.cap = live_iq_ring.head = live_iq_ring.count = live_iq_ring.max_count = 0;
+    live_iq_ring.overrun_samples = live_iq_ring.reported_overrun_samples = 0;
+    live_iq_ring.eof = 0;
+}
+
 int main(void)
 {
+    check_iq_ring_overrun_between_reads();
     check_carrier_layout();
     rbdvbt_dvbt_2k_model_init();
     check_signal(FFT/32,40000,0.0);      /* 35 kHz BW */

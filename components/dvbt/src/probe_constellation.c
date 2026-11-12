@@ -131,6 +131,7 @@ typedef struct {
     size_t count;
     size_t max_count;
     uint64_t overrun_samples;
+    uint64_t reported_overrun_samples;
     uint64_t producer_waits;
     uint64_t producer_wait_samples;
 } live_iq_ring_t;
@@ -144,6 +145,7 @@ static live_iq_ring_t live_iq_ring = {
     0,
     RBDVBT_INPUT_S16,
     NULL,
+    0u,
     0u,
     0u,
     0u,
@@ -1838,6 +1840,7 @@ static int live_iq_ring_start(rbdvbt_input_format_t format,
     live_iq_ring.eof = 0;
     live_iq_ring.format = format;
     live_iq_ring.overrun_samples = 0u;
+    live_iq_ring.reported_overrun_samples = 0u;
     live_iq_ring.producer_waits = 0u;
     live_iq_ring.producer_wait_samples = 0u;
     live_iq_ring_gui_enabled = gui_enabled;
@@ -1894,10 +1897,7 @@ static void live_iq_ring_snapshot(size_t *fill,
 static size_t live_iq_ring_read(complexf_t *out, size_t want, uint64_t *overrun_delta)
 {
     size_t got = 0u;
-    uint64_t overrun_before;
-
     pthread_mutex_lock(&live_iq_ring.mutex);
-    overrun_before = live_iq_ring.overrun_samples;
     while (live_iq_ring.count < want && !live_iq_ring.eof) {
         pthread_cond_wait(&live_iq_ring.not_empty, &live_iq_ring.mutex);
     }
@@ -1911,8 +1911,11 @@ static size_t live_iq_ring_read(complexf_t *out, size_t want, uint64_t *overrun_
     }
     pthread_cond_broadcast(&live_iq_ring.not_full);
     if (overrun_delta != NULL) {
-        *overrun_delta = live_iq_ring.overrun_samples - overrun_before;
+        /* Include losses while OFDM was processing the preceding chunk,
+         * not only those occurring while this read waits for more IQ. */
+        *overrun_delta = live_iq_ring.overrun_samples - live_iq_ring.reported_overrun_samples;
     }
+    live_iq_ring.reported_overrun_samples = live_iq_ring.overrun_samples;
     pthread_mutex_unlock(&live_iq_ring.mutex);
     return got;
 }
