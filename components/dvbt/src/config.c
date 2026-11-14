@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -243,6 +244,17 @@ int rbdvbt_parse_args(int argc, char **argv, rbdvbt_config_t *cfg)
                 fprintf(stderr, "invalid --loglevel value; expected quiet, error, warn, info, debug, or trace\n");
                 return -1;
             }
+        } else if (strcmp(arg, "--channel-filter") == 0) {
+            cfg->channel_filter = 1;
+        } else if (strcmp(arg, "--frequency-offset") == 0 && i + 1 < argc) {
+            char *end;
+            const char *text=argv[++i];
+            errno=0;
+            cfg->frequency_offset_hz=strtod(text, &end);
+            if (errno || end == text || *end || !isfinite(cfg->frequency_offset_hz)) {
+                fprintf(stderr, "invalid --frequency-offset value\n");
+                return -1;
+            }
         } else if (strcmp(arg, "--sample-rate") == 0 && i + 1 < argc) {
             if (parse_u32(argv[++i], &cfg->sample_rate_hz) != 0) {
                 fprintf(stderr, "invalid --sample-rate value\n");
@@ -407,6 +419,15 @@ int rbdvbt_parse_args(int argc, char **argv, rbdvbt_config_t *cfg)
         fprintf(stderr, "missing required --sr\n");
         return -1;
     }
+    if (cfg->channel_filter && (!cfg->live_mode || !cfg->resample_to_dvbt_rate)) {
+        fprintf(stderr, "--channel-filter requires --live --resample-to-dvbt-rate\n");
+        return -1;
+    }
+    if (cfg->frequency_offset_hz != 0 &&
+        fabs(cfg->frequency_offset_hz) + (double)cfg->symbol_rate/2 > cfg->sample_rate_hz*.475) {
+        fprintf(stderr, "--frequency-offset plus channel BW exceeds the IQ passband\n");
+        return -1;
+    }
     if (cfg->resample_x4 && cfg->resample_to_dvbt_rate) {
         fprintf(stderr, "--resample-x4 and --resample-to-dvbt-rate are mutually exclusive\n");
         return -1;
@@ -446,6 +467,8 @@ void rbdvbt_print_info(const char *argv0)
     printf("  --stdin                         Read IQ from stdin\n");
     printf("  --input-format s16|u8            Input IQ format, default s16\n");
     printf("  --sample-rate HZ                 Input IQ sample rate\n");
+    printf("  --channel-filter                 Experimental longer live anti-alias FIR for multichannel RX\n");
+    printf("  --frequency-offset HZ            Experimental channel offset from SDR center (signed)\n");
     printf("  --sr RATE                        Symbol rate: 35k, 40k, 125k, 150k, 250k, 333k, 500k, or numeric Hz\n");
     printf("  --gi auto|1/8|1/16|1/32          Guard interval\n");
     printf("  --fec auto|1/2|2/3|3/4|5/6|7/8   Inner FEC code rate\n");

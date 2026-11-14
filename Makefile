@@ -426,3 +426,14 @@ endif
 test-status-http: $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/linrad_udp_to_stdout
 	python3 tests/test_status_http.py
 test: test-status-http
+
+# Experimental shared-SDR headless DVB-T repeater (Linux supervisor).
+$(BUILD_DIR)/test_dvbt_multichannel: tests/test_dvbt_multichannel.c $(DVBT_DIR)/src/probe_constellation.c $(DVBT_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/components/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+
+.PHONY: test-dvbt-multirx
+test-dvbt-multirx: $(BUILD_DIR)/test_dvbt_multichannel $(BUILD_DIR)/linrad_dvb
+	./$(BUILD_DIR)/test_dvbt_multichannel
+	python3 tests/test_dvbt_multirx.py
+
+test: test-dvbt-multirx

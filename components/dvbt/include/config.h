@@ -56,6 +56,8 @@ typedef struct {
     int resample_to_dvbt_rate;
     uint32_t dvbt_ir;
     uint32_t sample_rate_hz;
+    int channel_filter; /* Longer anti-alias FIR for shared-SDR reception. */
+    double frequency_offset_hz; /* Channel center minus shared SDR center. */
     rbdvbt_symbol_rate_t symbol_rate;
     rbdvbt_guard_interval_t guard_interval;
     rbdvbt_fec_t fec;

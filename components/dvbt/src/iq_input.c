@@ -4,6 +4,32 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/* Mix before channel filtering/resampling, retaining float headroom. Positive
+ * offsets select channels above the SDR center. Never reset between reads. */
+void rbdvbt_iq_mixer_init(rbdvbt_iq_mixer_t *m, double rate, double offset)
+{
+    double angle = -6.28318530717958647693 * offset / rate;
+    *m = (rbdvbt_iq_mixer_t){.re=1, .step_re=cos(angle), .step_im=sin(angle),
+                            .enabled=offset != 0};
+}
+
+void rbdvbt_iq_mixer_apply(rbdvbt_iq_mixer_t *m, rbdvbt_complex_t *samples, size_t count)
+{
+    if (!m->enabled) return;
+    for (size_t n=0; n<count; ++n) {
+        double i=samples[n].i, q=samples[n].q;
+        samples[n].i=(float)(i*m->re-q*m->im);
+        samples[n].q=(float)(i*m->im+q*m->re);
+        double re=m->re*m->step_re-m->im*m->step_im;
+        m->im=m->im*m->step_re+m->re*m->step_im;
+        m->re=re;
+        if (++m->phase_count == 4096) {
+            double norm=hypot(m->re,m->im);
+            m->re/=norm; m->im/=norm; m->phase_count=0;
+        }
+    }
+}
+
 static float abs_float(float value)
 {
     return value < 0.0f ? -value : value;

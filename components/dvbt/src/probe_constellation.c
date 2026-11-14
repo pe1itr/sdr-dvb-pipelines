@@ -1619,12 +1619,13 @@ static void status_apply_iq_stats(rbdvbt_status_context_t *status,
 static int live_iq_ring_start(rbdvbt_input_format_t format,
                               size_t chunk_samples,
                               int gui_enabled,
-                              uint32_t sample_rate_hz);
+                              uint32_t sample_rate_hz, double frequency_offset_hz);
 static size_t live_iq_ring_read(complexf_t *out, size_t want, uint64_t *overrun_delta);
 static int live_iq_discontinuity_pending;
 static uint64_t live_iq_overrun_pending_samples;
 static int live_iq_ring_gui_enabled;
 static uint32_t live_iq_ring_sample_rate_hz;
+static rbdvbt_iq_mixer_t live_iq_mixer;
 
 static int read_probe_samples(const rbdvbt_config_t *cfg,
                               complexf_t **out_samples,
@@ -1634,6 +1635,8 @@ static int read_probe_samples(const rbdvbt_config_t *cfg,
     uint64_t sample_limit = cfg->max_samples != 0 ? cfg->max_samples : DEFAULT_PROBE_MAX_SAMPLES;
     complexf_t *samples = calloc((size_t)sample_limit, sizeof(*samples));
     rbdvbt_complex_t block[4096];
+    rbdvbt_iq_mixer_t mixer;
+    rbdvbt_iq_mixer_init(&mixer, cfg->sample_rate_hz, cfg->frequency_offset_hz);
     size_t count = 0;
     uint64_t status_period_samples = (uint64_t)cfg->status_period_packets * STATUS_INPUT_BLOCK_SAMPLES;
     uint64_t next_status_samples = status_period_samples;
@@ -1648,7 +1651,7 @@ static int read_probe_samples(const rbdvbt_config_t *cfg,
         live_iq_ring_start(cfg->input_format,
                            (size_t)sample_limit,
                            cfg->gui,
-                           cfg->sample_rate_hz) != 0) {
+                           cfg->sample_rate_hz, cfg->frequency_offset_hz) != 0) {
         free(samples);
         return -1;
     }
@@ -1681,6 +1684,7 @@ static int read_probe_samples(const rbdvbt_config_t *cfg,
             }
         } else {
             got = rbdvbt_read_iq(stdin, cfg->input_format, block, want);
+            rbdvbt_iq_mixer_apply(&mixer, block, got);
             rbdvbt_iq_stats_update(stats, block, got);
             for (n = 0; n < got; ++n) {
                 samples[count + n].re = block[n].i;
@@ -1794,6 +1798,7 @@ static void *live_iq_ring_reader_main(void *arg)
             pthread_mutex_unlock(&live_iq_ring.mutex);
             return NULL;
         }
+        rbdvbt_iq_mixer_apply(&live_iq_mixer, block, got);
         live_iq_ring_push(block, got);
         if (live_iq_ring_gui_enabled) {
             complexf_t gui_block[4096];
@@ -1810,7 +1815,7 @@ static void *live_iq_ring_reader_main(void *arg)
 static int live_iq_ring_start(rbdvbt_input_format_t format,
                               size_t chunk_samples,
                               int gui_enabled,
-                              uint32_t sample_rate_hz)
+                              uint32_t sample_rate_hz, double frequency_offset_hz)
 {
     size_t cap = chunk_samples * 4u;
 
@@ -1845,6 +1850,7 @@ static int live_iq_ring_start(rbdvbt_input_format_t format,
     live_iq_ring.producer_wait_samples = 0u;
     live_iq_ring_gui_enabled = gui_enabled;
     live_iq_ring_sample_rate_hz = sample_rate_hz;
+    rbdvbt_iq_mixer_init(&live_iq_mixer, sample_rate_hz, frequency_offset_hz);
     live_iq_ring.started = 1;
     pthread_mutex_unlock(&live_iq_ring.mutex);
 
@@ -2108,7 +2114,6 @@ static int live_resampler_build_coeffs(live_resampler_state_t *st)
     int t;
 
     st->phase_count = RBDVBT_RESAMPLER_PHASES;
-    st->radius = RBDVBT_RESAMPLER_RADIUS;
     st->taps = st->radius * 2 + 1;
 
     if (st->phase_count <= 0 || st->radius <= 0 || st->taps <= 0) {
@@ -2148,8 +2153,15 @@ static int live_resampler_build_coeffs(live_resampler_state_t *st)
 
 static int live_resampler_configure(double ratio,
                                     uint32_t input_rate_hz,
-                                    uint32_t output_rate_hz)
+                                    uint32_t output_rate_hz, int channel_filter)
 {
+    /* Keep the old single-channel path exact. In multichannel mode, scale
+     * support in INPUT samples so transition width survives large decimation. */
+    int radius = channel_filter ? (int)ceil(12.0 / fmin(ratio, 1.0)) : RBDVBT_RESAMPLER_RADIUS;
+    if (radius > 4096) {
+        fprintf(stderr, "channel filter decimation ratio exceeds experimental limit\n");
+        return -1;
+    }
     live_resampler_state_t *st = &live_resampler_state;
 
     if (st->valid &&
@@ -2157,7 +2169,7 @@ static int live_resampler_configure(double ratio,
         st->output_rate_hz == output_rate_hz &&
         fabs(st->ratio - ratio) <= 1e-12 &&
         st->phase_count == RBDVBT_RESAMPLER_PHASES &&
-        st->radius == RBDVBT_RESAMPLER_RADIUS) {
+        st->radius == radius) {
         return 0;
     }
 
@@ -2167,6 +2179,7 @@ static int live_resampler_configure(double ratio,
     st->output_rate_hz = output_rate_hz;
     st->ratio = ratio;
     st->step = 1.0 / ratio;
+    st->radius = radius;
     st->next_x = 0.0;
     st->output_seq = 0u;
     st->cutoff = ratio < 1.0 ? ratio * 0.5 : 0.5;
@@ -2219,7 +2232,7 @@ static int resample_sinc_ratio_live(const complexf_t *in,
                                     size_t in_count,
                                     double ratio,
                                     uint32_t input_rate_hz,
-                                    uint32_t output_rate_hz,
+                                    uint32_t output_rate_hz, int channel_filter,
                                     complexf_t **out_samples,
                                     size_t *out_count)
 {
@@ -2237,7 +2250,7 @@ static int resample_sinc_ratio_live(const complexf_t *in,
         return -1;
     }
 
-    if (live_resampler_configure(ratio, input_rate_hz, output_rate_hz) != 0) {
+    if (live_resampler_configure(ratio, input_rate_hz, output_rate_hz, channel_filter) != 0) {
         return -1;
     }
 
@@ -9245,7 +9258,7 @@ int rbdvbt_run_constellation_probe(const rbdvbt_config_t *cfg)
                                          count,
                                          ratio,
                                          effective_cfg.sample_rate_hz,
-                                         target_rate_hz,
+                                         target_rate_hz, effective_cfg.channel_filter,
                                          &resampled,
                                          &resampled_count) != 0) {
                 goto done;

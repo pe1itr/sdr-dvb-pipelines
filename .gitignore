@@ -18,6 +18,7 @@
 !/tools/
 !/dev/
 !/docs/
+!/examples/
 
 # Generated files inside the included directories also stay local.
 __pycache__/

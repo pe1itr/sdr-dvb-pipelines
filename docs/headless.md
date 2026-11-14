@@ -229,3 +229,119 @@ bash tools/build_odroid_n2.sh --check
 ./build-odroid-n2/linrad_dvb --config pi6ehv-odroid.ini \
   --print-pipeline --rtlsdr-serial 1002
 ```
+
+### Experimenteel: meerdere DVB-T-kanalen uit één SDR naar ATV-mozaic
+
+Voor Linux is er een aparte headless launcher, zonder GUI of FFmpeg:
+
+```bash
+make -j2 build/linrad_dvb build/sdr_to_stdout
+python3 tools/dvbt_multirx.py --config examples/dvbt-multirx.ini --print-pipeline
+python3 tools/dvbt_multirx.py --config examples/dvbt-multirx.ini
+```
+
+Python 3.9 of nieuwer is nodig; er zijn geen extra Python-pakketten vereist.
+`--print-pipeline` controleert de configuratie en toont de opdrachten zonder
+SDR of netwerk te openen. De launcher schrijft niets naar je actieve
+`linrad-dvb.ini`. Bewaar een eigen kopie van het voorbeeld in `examples/`, of
+pas bij verplaatsen de relatieve paden in `[paths]` aan. Alle frequenties en
+bandbreedtes in dit bestand zijn in Hz.
+
+Het voorbeeld opent **één RTL-SDR op 144,550 MHz, 2,4 MS/s** en start twee
+onafhankelijke ingebouwde DVB-T-decoders:
+
+| Kanaal | Offset ten opzichte van SDR | BW | FEC | MPEG-TS via UDP |
+| --- | --- | --- | --- | --- |
+| 144,525 MHz | −25 kHz | 40 kHz | 1/2 | 127.0.0.1:10000 |
+| 144,575 MHz | +25 kHz | 40 kHz | 1/2 | 127.0.0.1:10001 |
+
+De decoder verschuift elk kanaal vóór resampling en gebruikt in deze modus
+een langere anti-alias FIR. De test met gelijktijdige tonen in beide kanalen
+controleert de richting, doorlaatband en minimaal 40 dB onderdrukking van de
+geteste tonen uit het andere kanaal, op beide voorbeeldsamplerates. Dat is
+geen garantie voor ontvangst bij willekeurige vermogensverschillen tussen
+zenders. De bestaande korte filter en de instellingen van de gewone GUI-modus
+blijven behouden. De uitvoer bevat de ontvangen MPEG-TS zonder video/audio
+opnieuw te encoderen; er wordt geen lokaal TS-bestand geschreven.
+
+Voor een **FUNcube Dongle Pro+** vervang je uitsluitend de betreffende
+instellingen onder `[sdr]`:
+
+```ini
+[sdr]
+source=fcdpp
+frequency=144550000
+sample_rate=192000
+gain=30
+args=
+```
+
+Een specifieke FUNcube kun je selecteren met bijvoorbeeld
+`args=hid=/dev/hidraw3`; de helper ondersteunt ook `lna=0|1,mixer=0|1`.
+Een RTL-SDR selecteer je via bijvoorbeeld `args=driver=rtlsdr,serial=1002`.
+SDR-frequentie, samplerate en gain zijn gedeeld door alle kanalen. Elk kanaal
+heeft een eigen FEC/GI, decoderstatus in de log en UDP-bestemming. Standaard
+is GI `auto`; gebruik `gi=1/32` als dat de bekende zenderinstelling is.
+
+Maak in ATV-mozaic twee MPEG-TS/UDP-ingangen die luisteren op **10000** en
+**10001**. Bij een FFmpeg/VLC-achtige invoersyntaxis zijn dat bijvoorbeeld
+`udp://@:10000` en `udp://@:10001`; gebruik de luistersyntaxis die jouw
+ATV-mozaic-versie ondersteunt. Staat ATV-mozaic op een andere computer, zet
+dan bij beide `[channel:...]`-secties `udp_host` op het IPv4-adres van die
+computer en laat die computer de twee UDP-poorten ontvangen. Dit is ruwe
+MPEG-TS over UDP, geen RTP of SRT.
+
+Je kunt 1 tot 8 `[channel:NAAM]`-secties definiëren. De eerste experimentele
+versie ondersteunt alleen DVB-T BW 40 kHz en bronnen `rtlsdr` en `fcdpp`.
+Alle kanalen moeten binnen de gedeelde IQ-doorlaatband vallen; CPU-capaciteit
+en ontvangstcondities bepalen het praktisch haalbare aantal. De voorbeeldkanalen
+beslaan samen 90 kHz, inclusief 10 kHz tussenruimte. Ook met de FUNcube op
+192 kS/s passen beide binnen de ingestelde digitale bandgrenzen.
+
+Voor de tweekanaalsproef bevat het voorbeeld ook **experimentele CPU-affiniteit**:
+
+```ini
+[channel:144525]
+cpu_affinity=2
+# ... overige kanaalinstellingen behouden
+
+[channel:144575]
+cpu_affinity=3
+# ... overige kanaalinstellingen behouden
+```
+
+Hiermee draait de eerste decoder op logische CPU 2 en de tweede op CPU 3.
+CPU-nummers beginnen bij 0; bekijk de nummers op de doelmachine met `lscpu -e`.
+Dit kiest geen fysieke kern op basis van snelheid. Controleer bij verschillende
+CPU-clusters dus zelf welke CPU's je wilt gebruiken. De binding geldt voor
+**alle threads van de betreffende decoder**, inclusief IQ, OFDM en FEC.
+De gedeelde SDR-helper en Python-launcher krijgen geen extra binding. Andere
+processen mogen nog op de gekozen CPU's draaien; dit reserveert geen cores.
+
+De launcher gebruikt `taskset` uit `util-linux`, vóór het starten van de
+decoderthreads. Een ontbrekend programma of een CPU buiten de voor de launcher
+toegestane set geeft een fout voordat de SDR wordt geopend. Dit houdt ook
+rekening met CPU-beperkingen van een service of container. `--print-pipeline`
+toont de `taskset`-opdrachten maar controleert de CPU-beschikbaarheid pas bij
+echt starten, zodat je een bestand voor een andere machine kunt voorbereiden.
+Verwijder `cpu_affinity`, laat de waarde leeg of gebruik `cpu_affinity=auto`
+om Linux weer over de beschikbare CPU's te laten verdelen. De binding is een
+proef en bewijst geen snelheidswinst; de native ODROID-vergelijking staat nog open.
+
+Stoppen met Ctrl+C of SIGTERM sluit alle subprocessen en de SDR af. De Python
+IQ-verdeling heeft per decoder een begrensde buffer (`queue_ms`, standaard
+500 ms). Bij een volle verdelingsbuffer of een gestopt subprocess stopt de
+hele opstelling met foutstatus; de launcher laat daar geen stille IQ-gaten
+ontstaan. Bestaande hardware-overflows, decoder-ringverliezen en UDP-sendfouten
+worden door de native processen gelogd en blijven afzonderlijk relevant.
+Er is nog geen gezamenlijk HTTP-statusendpoint of automatische herstart per
+kanaal. Voor een repeater kun je de launcher onder systemd draaien met
+`Restart=on-failure`, `RestartSec=3`, een absolute `--config` en het juiste
+`WorkingDirectory`. Gebruik een gebruiker met SDR-/audio-/HID-rechten.
+
+Validatie: `make test-dvbt-multirx` controleert de echte native mixer en
+kanaalfilter, configuratiefouten, byte-identieke IQ-verdeling, overbelasting
+en procesopruiming. De tests controleren ook afzonderlijke CPU-maskers voor
+twee decoderprocessen en hun nieuwe threads, met behoud van de CPU-maskers
+van launcher en SDR-helper. Twee echte DVB-T-kanalen tegelijk, langdurig gebruik en
+de koppeling met ATV-mozaic moeten nog live worden gevalideerd.

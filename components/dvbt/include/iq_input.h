@@ -13,6 +13,14 @@ typedef struct {
 } rbdvbt_complex_t;
 
 typedef struct {
+    double re, im, step_re, step_im;
+    unsigned phase_count;
+    int enabled;
+} rbdvbt_iq_mixer_t;
+void rbdvbt_iq_mixer_init(rbdvbt_iq_mixer_t *m, double rate, double offset);
+void rbdvbt_iq_mixer_apply(rbdvbt_iq_mixer_t *m, rbdvbt_complex_t *samples, size_t count);
+
+typedef struct {
     uint64_t samples;
     double sum_i;
     double sum_q;

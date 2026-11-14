@@ -147,6 +147,8 @@ int rbdvbt_run_receiver(const rbdvbt_config_t *cfg)
     uint64_t remaining = cfg->max_samples;
 
     print_config(cfg);
+    if (cfg->frequency_offset_hz != 0)
+        fprintf(stderr, "[channel] frequency_offset=%+.0f Hz (before resampling)\n", cfg->frequency_offset_hz);
 
     if (cfg->probe_constellation) {
         if (cfg->live_mode) {
@@ -155,6 +157,8 @@ int rbdvbt_run_receiver(const rbdvbt_config_t *cfg)
         return rbdvbt_run_constellation_probe(cfg);
     }
 
+    rbdvbt_iq_mixer_t mixer;
+    rbdvbt_iq_mixer_init(&mixer, cfg->sample_rate_hz, cfg->frequency_offset_hz);
     rbdvbt_iq_stats_init(&stats);
 
     for (;;) {
@@ -175,6 +179,7 @@ int rbdvbt_run_receiver(const rbdvbt_config_t *cfg)
             break;
         }
 
+        rbdvbt_iq_mixer_apply(&mixer, samples, got);
         rbdvbt_iq_stats_update(&stats, samples, got);
 
         if (cfg->max_samples != 0) {
