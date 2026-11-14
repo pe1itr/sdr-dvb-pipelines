@@ -2,9 +2,28 @@
 
 An SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2 and DAB/DAB+**,
 with a GTK interface for spectrum, waterfall, constellation, decoder status
-and television playback. Developed by **Rob Hardenberg / PE1ITR** for amateur
-DATV, weak-signal DX and broadcast reception. Linux is the main development
-platform; a native Windows x64 package is also available, with the
+and television playback, for amateur DATV, weak-signal DX and broadcast reception.
+
+Linrad DVB is developed and integrated by Rob Hardenberg / PE1ITR, combining
+project-developed receivers with existing open-source decoder components.
+
+| Component | Original code and authors | Work developed in this project by Rob Hardenberg / PE1ITR |
+| --- | --- | --- |
+| Application and receiver integration | Project-developed application, using external SDR, GUI and media libraries | GTK interface, hardware control, receiver settings, spectrum and status displays, service selection, recording, network output and player integration. |
+| Narrowband DVB-T receiver | Rob Hardenberg / PE1ITR — [rbdvbt](components/dvbt/README.md) | DVB-T acquisition, OFDM, equalization, demapping, error correction, TS output and application integration. |
+| DVB-T2 receiver core | [OnAir](https://github.com/adswill/OnAir) by Kristijonas Adomaitis (adswill) and contributors | Integration of the complete IQ-to-TS core; fixes for clock recovery after sample gaps, AVX2 clock correction and LDPC optimizations, channel/equalizer memory optimizations, Windows adaptations and profiling. The original core supplies resampling, P1/P2 synchronization, L1 signalling, OFDM/equalization, demapping, deinterleaving, LDPC/BCH and BBFRAME-to-TS conversion. |
+| DVB-T2 GPU LDPC | OnAir by Kristijonas Adomaitis and contributors — original Direct3D 11 and Vulkan implementations | Optional GPU integration, bounded batching, CPU fallback, validation and an additional optimized Vulkan kernel. |
+| DVB-S/S2 receiver | [LeanSDR / LeanDVB](https://github.com/pabr/leansdr) by pabr@pabr.org; acquisition corrections by Ondřej OK1CDJ | Embedded decoder integration, telemetry, asynchronous LDPC worker management, BCH optimizations and LDPC table corrections. |
+| DVB-S2 LDPC helper | Ahmet Inan (xdsopl), with [helper adaptation by pabr](https://github.com/pabr/xdsopl-LDPC-pabr) | Runtime portable/AVX2 selection, bounded batch protocol, partial-batch handling and process-pool integration. |
+| DAB/DAB+ receiver | Rob Hardenberg / PE1ITR — developed from his dab-monitor project; sample-rate conversion also reuses OnAir's generic resampler and libsamplerate; AAC decoding uses FAAD2 | DAB demodulation, FIC/TII, DAB+ transport and audio pipeline, weak/DX recovery, labels, MOT slides and application integration. |
+| TSscatterFix | Rob Hardenberg / PE1ITR — [TSscatterFix](components/tsscatterfix/README.md) | Image recovery from incomplete MPEG transport streams, recovery status and application integration. |
+
+Bundled code retains its original author and license notices. See
+[licenses and acknowledgements](docs/credits.md) for component licenses and
+dependencies, and the [DVB-T2 provenance record](components/dvbt2/UPSTREAM.json)
+for the imported OnAir revision and local changes.
+
+Linux is the main development platform; a native Windows x64 package is also available, with the
 [DVB-T2 performance limitations described below](#dvb-t2-on-windows).
 
 This is the main development repository for **linrad_dvb**, the **DVB-T receiver
