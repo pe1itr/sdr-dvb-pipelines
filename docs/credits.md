@@ -2,6 +2,41 @@
 
 [Back to README](../README.md)
 
+## Where the name comes from
+
+Linrad DVB began as an add-on to the network IQ output of
+[Linrad](https://www.sm5bsz.com/linuxdsp/linrad.htm), the SDR receiver created by
+Leif Åsbrink / SM5BSZ. Linrad was initially the SDR frontend: it controlled
+the radio hardware and sent IQ samples over the network to linrad_dvb,
+which provided digital television decoding. The project later developed
+into a standalone receiver with direct SDR support.
+
+Rob Hardenberg has kept the name both to acknowledge those origins and
+out of personal appreciation for Linrad, a program he enjoys using.
+Linrad UDP input remains supported.
+
+Linrad also served as a reference for the AFEDRI network control and the
+signal meter. The current [AFEDRI implementation](../src/afedri.c) follows
+the device protocol and Linrad's `afedri.c`; the [meter](../src/signal_meter.h)
+adopts Linrad's visual layout and scrolling behaviour. These are acknowledgements
+of implementation references and design influence, rather than claims that
+the current files are unmodified copies of Linrad sources.
+
+## Development by Rob Hardenberg / PE1ITR
+
+Rob Hardenberg develops and maintains Linrad DVB, including its application
+architecture, GTK interface, direct SDR control, receiver settings, signal
+displays, recording, network output and player integration. The DVB-T receiver,
+TSscatterFix and the DAB/DAB+ receiver developed from his dab-monitor project
+are his own receiver and recovery components.
+
+His work on the imported LeanSDR and OnAir components includes application
+integration, recovery and error-correction fixes, CPU optimizations, optional
+GPU integration and an additional optimized Vulkan kernel, Windows support
+and live performance diagnostics. Those contributions extend the original
+decoders; their authors retain credit for the underlying receiver cores.
+The component records below document both origins and subsequent local changes.
+
 ## License
 
 Linrad DVB is licensed under **GNU GPL version 3 only (`GPL-3.0-only`)**.
@@ -13,15 +48,23 @@ Copyright (c) 2026 Rob Hardenberg / PE1ITR
 
 Bundled components retain their own licenses and credits:
 
-| Component | Credit | License and provenance |
+| Component | Authors | License / source record |
 | --- | --- | --- |
-| LeanSDR / LeanDVB | pabr@pabr.org; acquisition corrections by Ondřej OK1CDJ ([issue #41](https://github.com/pabr/leansdr/issues/41)) | [GPL-3.0-or-later](../third_party/leansdr/LICENSE.txt), [ORIGIN](../third_party/leansdr/ORIGIN) |
-| DVB-S2 LDPC helper | Ahmet Inan (xdsopl); external decoder adaptation by pabr@pabr.org | [0BSD](../third_party/ldpc/LICENSE), [ORIGIN](../third_party/ldpc/ORIGIN) |
-| DVB-T / rbdvbt | Rob Hardenberg / PE1ITR | [GPL-3.0-only](../components/dvbt/LICENSE), [component history](../components/dvbt/README.md) |
-| DVB-T2 / OnAir | [adswill and contributors](https://github.com/adswill/OnAir); integration and local optimizations maintained here | [GPL-3.0](../components/dvbt2/LICENSE), [UPSTREAM.json](../components/dvbt2/UPSTREAM.json), [component documentation](../components/dvbt2/README.md) |
-| DAB DSP and integration | Rob Hardenberg / PE1ITR; developed from his own dab-monitor project | Project GPL-3.0-only; [provenance](../components/dab/ORIGIN) |
-| DAB polyphase resampler and DSP support | OnAir, adswill and contributors; reuses the generic DSP sources bundled with the DVB-T2 component | [GPL-3.0](../components/dvbt2/LICENSE), [UPSTREAM.json](../components/dvbt2/UPSTREAM.json) |
-| TSscatterFix | Rob Hardenberg / PE1ITR | [MIT](../components/tsscatterfix/LICENSE), [component history](../components/tsscatterfix/README.md) |
+| LeanSDR / LeanDVB | pabr | [GPL-3.0+](../third_party/leansdr/LICENSE.txt) · [Origin](../third_party/leansdr/ORIGIN) |
+| DVB-S2 LDPC helper | Ahmet Inan / xdsopl; pabr | [0BSD](../third_party/ldpc/LICENSE) · [Origin](../third_party/ldpc/ORIGIN) |
+| DVB-T / rbdvbt | Rob Hardenberg / PE1ITR | [GPL-3.0-only](../components/dvbt/LICENSE) · [History](../components/dvbt/README.md) |
+| DVB-T2 / OnAir | Kristijonas Adomaitis / adswill and contributors | [GPL-3.0](../components/dvbt2/LICENSE) · [Origin](../components/dvbt2/UPSTREAM.json) |
+| DAB / DAB+ | Rob Hardenberg / PE1ITR | GPL-3.0-only · [Origin](../components/dab/ORIGIN) |
+| DAB shared DSP | OnAir contributors | [GPL-3.0](../components/dvbt2/LICENSE) · [Origin](../components/dvbt2/UPSTREAM.json) |
+| TSscatterFix | Rob Hardenberg / PE1ITR | [MIT](../components/tsscatterfix/LICENSE) · [History](../components/tsscatterfix/README.md) |
+
+LeanSDR includes DVB-S2 acquisition corrections by Ondřej OK1CDJ
+([issue #41](https://github.com/pabr/leansdr/issues/41)). The LDPC helper
+combines Ahmet Inan's decoder with pabr's external decoder adaptation.
+OnAir supplies the DVB-T2 receiver core, its original GPU LDPC implementations
+and the generic resampler and DSP support reused by DAB. Integration, fixes
+and local optimizations are maintained in this repository. The DAB component
+was developed from Rob Hardenberg's own dab-monitor project.
 
 The combined executable is distributed under GPLv3; the component license
 notices remain attached to their respective sources. `make package` copies
