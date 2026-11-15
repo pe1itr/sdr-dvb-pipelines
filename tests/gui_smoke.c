@@ -690,6 +690,31 @@ static void exercise_file_selection(App *a) {
     g_assert_no_error(error);
     file_selection_sync(a);
     g_assert_cmpint(a->source, ==, SOURCE_FILE);
+    /* File selection can precede the first opening of Input. GtkStack
+     * ignores selection of a page that has not been shown yet. */
+    for (int opening=0; opening<2; ++opening) {
+        show_config(NULL,a);
+        GtkWidget *page=gtk_stack_get_visible_child(GTK_STACK(a->hardware_stack));
+        g_assert_true(page==gtk_widget_get_parent(a->file_path));
+        g_assert_true(gtk_widget_is_visible(a->file_path));
+        GtkWidget *browse=gtk_grid_get_child_at(GTK_GRID(page),2,0);
+        g_assert_true(GTK_IS_BUTTON(browse));
+        g_assert_true(gtk_widget_is_visible(browse));
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->file_path)),==,path);
+        gtk_widget_hide(a->config_dialog);
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_RTLSDR);
+    show_config(NULL,a);
+    g_assert_cmpstr(gtk_stack_get_visible_child_name(GTK_STACK(a->hardware_stack)),==,sources[SOURCE_RTLSDR]);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_FILE);
+    g_assert_true(gtk_stack_get_visible_child(GTK_STACK(a->hardware_stack))==gtk_widget_get_parent(a->file_path));
+    gtk_widget_hide(a->config_dialog);
+    a->running=TRUE;
+    show_config(NULL,a);
+    g_assert_true(gtk_widget_is_visible(a->file_path));
+    g_assert_true(gtk_stack_get_visible_child(GTK_STACK(a->hardware_stack))==gtk_widget_get_parent(a->file_path));
+    gtk_widget_hide(a->config_dialog);
+    a->running=FALSE;
     g_assert_cmpint(a->standard, ==, 2);
     g_assert_cmpint(a->sr, ==, 40000);
     g_assert_cmpfloat(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->rate_box)), ==, 250000);

@@ -2728,6 +2728,9 @@ static gboolean config_close(GtkWidget *widget, GdkEvent *event, gpointer data) 
 static void show_config(GtkWidget *widget, gpointer data) {
     (void)widget; App *a = data;
     gtk_widget_show_all(a->config_dialog);
+    /* GtkStack ignores requests for pages that are still hidden during
+     * construction. Select again after showing them, including while running. */
+    gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), sources[a->source]);
     gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
     gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
     gtk_window_present(GTK_WINDOW(a->config_dialog));
