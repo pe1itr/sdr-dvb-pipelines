@@ -6,6 +6,8 @@
 static void apply_receiver_theme(void) {
     static const char css[] =
         "#frequency-display { font-family: monospace; font-size: 24px; font-weight: bold; }"
+        "#frequency-tune { padding: 0; min-width: 0; min-height: 0; border: none; background-color: transparent; background-image: none; box-shadow: none; }"
+        "#frequency-tune label { background-color: transparent; }"
         "#gain-display, #mode-display { font-family: monospace; font-size: 16px; font-weight: bold; }"
         "frame > border { border: 1px solid #777777; border-radius: 3px; }"
         "#receiver-menu { background-color: #151515; }"

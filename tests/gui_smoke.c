@@ -342,6 +342,67 @@ static void exercise_model_limits(App *a) {
     populate_rates(a); refresh_preview(a);
 }
 
+typedef struct { const char *text; int response; } FrequencyDialogAnswer;
+static gboolean answer_frequency_dialog(gpointer data) {
+    FrequencyDialogAnswer *answer=data;
+    GtkWidget *dialog=NULL;
+    GList *windows=gtk_window_list_toplevels();
+    for (GList *l=windows;l;l=l->next)
+        if (GTK_IS_DIALOG(l->data) && gtk_widget_get_visible(l->data) &&
+            !strcmp(gtk_window_get_title(GTK_WINDOW(l->data)),"Tune frequency")) dialog=l->data;
+    g_assert_nonnull(dialog);
+    if (answer->text) {
+        GList *children=gtk_container_get_children(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(dialog))));
+        GtkWidget *entry=NULL;
+        for (GList *l=children;l;l=l->next) if (GTK_IS_ENTRY(l->data)) entry=l->data;
+        g_assert_nonnull(entry);
+        gtk_entry_set_text(GTK_ENTRY(entry),answer->text);
+        g_assert_true(gtk_entry_get_activates_default(GTK_ENTRY(entry)));
+        g_list_free(children);
+    }
+    gtk_dialog_response(GTK_DIALOG(dialog),answer->response);
+    g_list_free(windows);
+    return G_SOURCE_REMOVE;
+}
+
+static void exercise_direct_frequency(App *a) {
+    int source=a->source;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),2);
+    double frequency=g_key_file_get_double(a->config,"b210","frequency",NULL);
+    double lo=g_key_file_get_double(a->config,"b210","lo_offset",NULL);
+    double offset=g_key_file_get_double(a->config,"b210","receiver_offset",NULL);
+    /* Cancel leaves reception and settings alone. */
+    FrequencyDialogAnswer answer={NULL,GTK_RESPONSE_CANCEL};
+    g_idle_add(answer_frequency_dialog,&answer);
+    gtk_button_clicked(GTK_BUTTON(a->frequency_button));
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","frequency",NULL),==,frequency);
+    int pipes[2]; g_assert_cmpint(pipe(pipes),==,0);
+    a->running=TRUE; a->tune_fd=pipes[1];
+    GPtrArray *args=a->stages[0].args;
+    g_key_file_set_double(a->config,"b210","lo_offset",1000000000);
+    g_key_file_set_double(a->config,"b210","receiver_offset",125000);
+    answer=(FrequencyDialogAnswer){" 1570,125000 ",GTK_RESPONSE_ACCEPT};
+    g_idle_add(answer_frequency_dialog,&answer);
+    gtk_button_clicked(GTK_BUTTON(a->frequency_button));
+    char command[80]={0};
+    g_assert_cmpint(read(pipes[0],command,sizeof(command)-1),==,10);
+    g_assert_cmpstr(command,==,"570000000\n");
+    g_assert_true(a->running); g_assert_true(a->stages[0].args==args);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","frequency",NULL),==,570000000);
+    const char *invalid[]={"", "oops", "nan", "inf", "570 MHz", "1.2.3", "-1", "999999999"};
+    for (unsigned i=0;i<G_N_ELEMENTS(invalid);++i) g_assert_false(tune_frequency_text(a,invalid[i]));
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","frequency",NULL),==,570000000);
+    close(pipes[1]); a->tune_fd=-1;
+    g_assert_false(tune_frequency_text(a,"1600"));
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","frequency",NULL),==,570000000);
+    close(pipes[0]); a->running=FALSE;
+    g_key_file_set_double(a->config,"b210","frequency",frequency);
+    g_key_file_set_double(a->config,"b210","lo_offset",lo);
+    g_key_file_set_double(a->config,"b210","receiver_offset",offset);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
+    refresh_preview(a);
+}
+
 static void exercise_lime(App *a) {
     int source=a->source;
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_LIME);
@@ -1753,12 +1814,14 @@ static gboolean exercise(gpointer data) {
         exercise_afedri(a);
         exercise_rtlsdr(a);
         exercise_lime(a);
+        exercise_direct_frequency(a);
         exercise_model_limits(a);
         exercise_funcube(a);
         exercise_receiver_offset(a);
         exercise_live_gain_locale(a);
         assert_no_tabs(a->window);
-        g_assert_true(gtk_widget_get_parent(a->frequency_display) == gtk_widget_get_parent(a->power_button));
+        g_assert_true(gtk_widget_get_parent(a->frequency_display) == a->frequency_button);
+        g_assert_true(gtk_widget_get_parent(a->frequency_button) == gtk_widget_get_parent(a->power_button));
         g_assert_true(gtk_widget_get_parent(a->gain_display) == gtk_widget_get_parent(a->power_button));
         g_assert_false(gtk_widget_is_ancestor(a->standard_box, a->window));
         g_assert_false(gtk_widget_is_ancestor(a->renderer_box, a->window));

@@ -61,7 +61,7 @@ typedef struct {
     char *config_path, *directory;
     int standard, sr, fec, gi, exit_code, source, constellation;
     GtkWidget *source_box, *rate_box, *sdriq_rate_box, *frequency_box, *format_box;
-    GtkWidget *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
+    GtkWidget *frequency_button, *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
@@ -1191,6 +1191,7 @@ static void tuning_changed(GtkWidget *widget, gpointer data);
 
 static void tuning_refresh(App *a) {
     if (!a->frequency_display) return;
+    gtk_widget_set_sensitive(a->frequency_button, hardware_source(a) && !a->stopping);
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
         char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
@@ -1274,30 +1275,32 @@ static void tuning_changed(GtkWidget *widget, gpointer data) {
 static void source_changed(GtkWidget *widget, gpointer data);
 static void file_controls_refresh(App *a);
 
-static void tune_step(App *a, int direction) {
-    if (!hardware_source(a) || a->stopping) return;
+/* Shared by arrow tuning and direct frequency entry. Only publish the new
+ * setting after the existing live control pipe accepted the command. */
+static gboolean tune_frequency(App *a, double next) {
+    if (!hardware_source(a) || a->stopping) return FALSE;
     const char *section = sources[a->source];
-    double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
-    double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
-    double next = frequency + direction*step;
+    next=round(next);
     if (a->standard==4) {
-        gboolean free_frequency=dab_free_tuning(a);
-        int index=dab_channel(a);
-        if (free_frequency) next=dab_frequency(a)+direction*step;
-        else {
-            index+=direction;
-            if (index<0 || index>=(int)DAB_CHANNEL_COUNT) return;
-            next=dab_channels[index].hz;
-        }
+        int index=-1;
+        for (unsigned i=0;i<DAB_CHANNEL_COUNT;++i)
+            if (next==dab_channels[i].hz) { index=(int)i; break; }
+        gboolean free_frequency=dab_free_tuning(a) || index<0;
         double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
         if (!rx_tuning_valid(section,next,0) ||
             (a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL) &&
              next-intermediate-2500000<46000000)) {
-            status(a,"DAB tuning limit reached for the selected SDR / mixer");return;
+            status(a,"DAB tuning limit reached for the selected SDR / mixer");return FALSE;
         }
         if (a->running && !dab_view_retune(&a->dab,a->tune_fd,
                 free_frequency ? "free" : dab_channels[index].name,(guint64)next)) {
-            status(a,"DAB tuning command not sent; try again");return;
+            status(a,"DAB tuning command not sent; try again");return FALSE;
+        }
+        g_key_file_set_boolean(a->config,"dab","free_tuning",free_frequency);
+        if (a->dab_free_box) {
+            g_signal_handlers_block_matched(a->dab_free_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dab_free_box),free_frequency);
+            g_signal_handlers_unblock_matched(a->dab_free_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
         }
         if (free_frequency) g_key_file_set_double(a->config,"dab","frequency_hz",next);
         else g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
@@ -1311,10 +1314,10 @@ static void tune_step(App *a, int direction) {
         }
         tuning_refresh(a);power_refresh(a);
         if (!a->running) refresh_preview(a);
-        return;
+        return TRUE;
     }
     if (!rx_tuning_valid(section,next,receiver_offset(a))) {
-        status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return;
+        status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return FALSE;
     }
     if (a->running) {
         char command[64];
@@ -1322,7 +1325,7 @@ static void tune_step(App *a, int direction) {
         ssize_t sent;
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
-        if (sent != length) { status(a, "Tuning command not sent; try again"); return; }
+        if (sent != length) { status(a, "Tuning command not sent; try again"); return FALSE; }
     }
     if (a->scatter_backend) ts_info_backend_reset(a->scatter_backend->information);
     ts_info_view_reset(&a->information);
@@ -1334,6 +1337,72 @@ static void tune_step(App *a, int direction) {
     tuning_refresh(a);
     /* Never rebuild Stage objects while their child processes are alive. */
     if (!a->running) refresh_preview(a);
+    return TRUE;
+}
+
+static void tune_step(App *a, int direction) {
+    if (!hardware_source(a) || a->stopping) return;
+    const char *section=sources[a->source];
+    double step=g_key_file_get_double(a->config,section,"tune_step",NULL);
+    double next=g_key_file_get_double(a->config,section,"frequency",NULL)+direction*step;
+    if (a->standard==4) {
+        if (dab_free_tuning(a)) next=dab_frequency(a)+direction*step;
+        else {
+            int index=dab_channel(a)+direction;
+            if (index<0 || index>=(int)DAB_CHANNEL_COUNT) return;
+            next=dab_channels[index].hz;
+        }
+    }
+    tune_frequency(a,next);
+}
+
+/* Accept either decimal separator, independent of the desktop locale. */
+static gboolean tune_frequency_text(App *a, const char *text) {
+    char *value=g_strdup(text), *end;
+    for (char *c=value;*c;++c) if (*c==',') *c='.';
+    double mhz=g_ascii_strtod(value,&end);
+    gboolean valid=end!=value;
+    while (g_ascii_isspace(*end)) ++end;
+    valid=valid && !*end && isfinite(mhz);
+    g_free(value);
+    if (!valid) { status(a,"Enter a frequency in MHz, for example 570.000"); return FALSE; }
+    double offset=a->standard==4 ? 0 :
+        g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)+receiver_offset(a);
+    return tune_frequency(a,mhz*1e6-offset);
+}
+
+static void frequency_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    App *a=data;
+    if (!hardware_source(a) || a->stopping) return;
+    GtkWidget *dialog=gtk_dialog_new_with_buttons("Tune frequency",GTK_WINDOW(a->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "_Cancel",GTK_RESPONSE_CANCEL,"_Tune",GTK_RESPONSE_ACCEPT,NULL);
+    GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(content),12);
+    GtkWidget *label=gtk_label_new("Receive frequency (MHz)");
+    GtkWidget *entry=gtk_entry_new();
+    double frequency=a->standard==4 ? dab_frequency(a) :
+        g_key_file_get_double(a->config,sources[a->source],"frequency",NULL)+
+        g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)+receiver_offset(a);
+    char value[G_ASCII_DTOSTR_BUF_SIZE];
+    g_ascii_formatd(value,sizeof(value),"%.6f",frequency/1e6);
+    gtk_entry_set_text(GTK_ENTRY(entry),value);
+    gtk_entry_set_activates_default(GTK_ENTRY(entry),TRUE);
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog),GTK_RESPONSE_ACCEPT);
+    gtk_box_pack_start(GTK_BOX(content),label,FALSE,FALSE,4);
+    gtk_box_pack_start(GTK_BOX(content),entry,FALSE,FALSE,4);
+    GtkWidget *message=gtk_label_new("Reception continues while this window is open.");
+    gtk_label_set_line_wrap(GTK_LABEL(message),TRUE);
+    gtk_box_pack_start(GTK_BOX(content),message,FALSE,FALSE,4);
+    gtk_widget_show_all(dialog);
+    gtk_widget_grab_focus(entry);
+    gtk_editable_select_region(GTK_EDITABLE(entry),0,-1);
+    while (gtk_dialog_run(GTK_DIALOG(dialog))==GTK_RESPONSE_ACCEPT) {
+        if (tune_frequency_text(a,gtk_entry_get_text(GTK_ENTRY(entry)))) break;
+        gtk_label_set_text(GTK_LABEL(message),a->status_message ? a->status_message : "Cannot tune this frequency.");
+    }
+    gtk_widget_destroy(dialog);
 }
 
 static void gain_step(App *a, int direction) {
@@ -3820,8 +3889,13 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(top_bar),a->mode_summary,TRUE,TRUE,6);
     a->frequency_display = gtk_label_new("");
     gtk_widget_set_name(a->frequency_display, "frequency-display");
-    gtk_widget_set_tooltip_text(a->frequency_display, "Receive frequency · ← / → to tune; when using Linrad, tune in Linrad.");
-    gtk_box_pack_start(GTK_BOX(top_bar), a->frequency_display, FALSE, FALSE, 8);
+    a->frequency_button=gtk_button_new();
+    gtk_widget_set_name(a->frequency_button,"frequency-tune");
+    gtk_button_set_relief(GTK_BUTTON(a->frequency_button),GTK_RELIEF_NONE);
+    gtk_container_add(GTK_CONTAINER(a->frequency_button),a->frequency_display);
+    gtk_widget_set_tooltip_text(a->frequency_button,"Click to enter receive frequency in MHz, also during reception · ← / → to tune by step");
+    gtk_box_pack_start(GTK_BOX(top_bar),a->frequency_button,FALSE,FALSE,8);
+    g_signal_connect(a->frequency_button,"clicked",G_CALLBACK(frequency_clicked),a);
     a->dab_previous=gtk_button_new_with_label("◀");a->dab_next=gtk_button_new_with_label("▶");
     gtk_widget_set_tooltip_text(a->dab_previous,"Tune DAB down: previous channel or free-frequency step (←)");
     gtk_widget_set_tooltip_text(a->dab_next,"Tune DAB up: next channel or free-frequency step (→)");

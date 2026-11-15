@@ -200,6 +200,7 @@ only where applicable; hover over a control for its tooltip.
 | Button or control | Function |
 | --- | --- |
 | **Input** | Select the SDR, Linrad UDP or an IQ file; configure sample rate, device arguments, gain-related options, tuning step and frequency offsets. Stop reception to change hardware settings. |
+| **Receive frequency (MHz)** | Click the displayed frequency to enter a receive frequency in MHz while reception continues; press Enter or Tune. Accepts a decimal point or comma and includes configured frequency offsets. Direct SDR input only. DAB switches to Free frequency for values outside the channel list. |
 | **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 DX/LDPC options, DVB-T2 PLP, or DAB channel/profile. |
 | **Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
 | **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
