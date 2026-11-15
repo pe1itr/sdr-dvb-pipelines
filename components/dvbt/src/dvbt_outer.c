@@ -2525,6 +2525,14 @@ static int block4_consume_fifo3_packet(const rbdvbt_ts_packet_t *item,
         *lock_state = RX_LOCK_LOCKING;
     }
 
+    if (status != NULL && status->raw_ts_output) {
+        /* Bonding carries private PES rather than a video PID. Keep RS/TEI
+         * validation above, but leave the entire outer TS intact for discovery
+         * and the merger. Ordinary video-gated output remains unchanged. */
+        if (ts_output_gate_write_packet(gate,sink,ts_path,item->bytes) != 0) return -1;
+        (*written)++;gate->stdout_enabled=1;*lock_state=RX_LOCK_LOCKED;
+        return 0;
+    }
     if (ts_output_gate_try_write(gate,
                                  validator,
                                  sink,

@@ -72,6 +72,7 @@ typedef struct {
     const char *viterbi_out;
     const char *ts_out;
     const char *ts_out_copy;
+    int raw_ts_output; /* All valid post-RS packets, including private bonding PES. */
     int wait_video_start;
     const char *status_json;
     uint32_t status_period_packets;

@@ -1569,6 +1569,7 @@ static void init_status_context_from_config(const rbdvbt_config_t *cfg,
     status->iq_clip_percent = NAN;
     status->lock_quality = 0u;
     status->ssi = 0u;
+    status->raw_ts_output = cfg->raw_ts_output;
     status->wait_video_start = cfg->wait_video_start;
     status->live_mode = cfg->live_mode;
     status->afc_enabled = cfg->afc_enabled;
@@ -8586,6 +8587,7 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             status.lock_quality = 100u;
         }
         status.ssi = (uint32_t)(ssi_float + 0.5);
+        status.raw_ts_output = cfg->raw_ts_output;
         status.wait_video_start = cfg->wait_video_start;
         status.live_mode = cfg->live_mode;
         status.afc_enabled = cfg->afc_enabled;

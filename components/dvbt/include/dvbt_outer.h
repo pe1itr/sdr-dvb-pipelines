@@ -28,6 +28,7 @@ typedef struct {
     double iq_clip_percent;
     uint32_t lock_quality;
     uint32_t ssi;
+    int raw_ts_output; /* All valid post-RS packets, including private bonding PES. */
     int wait_video_start;
     int live_mode;
     int afc_enabled;

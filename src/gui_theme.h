@@ -73,6 +73,12 @@ static void apply_receiver_theme(void) {
         "#spectrum-bw:checked:hover, #spectrum-scatter:checked:hover { background-color: #d02b2b; }"
         "#spectrum-usb, #spectrum-fm, #spectrum-fm-data { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; border-color: #666666; outline-style: none; }"
         "#spectrum-usb label, #spectrum-fm label, #spectrum-fm-data label { background-color: transparent; }"
+        "#spectrum-bonding { min-width: 76px; min-height: 18px; padding: 0 4px; border-radius: 2px; font-size: 9px; font-weight: bold; }"
+        "#spectrum-bonding label { background-color: transparent; }"
+        "#spectrum-bonding.bonding-lit, #spectrum-bonding.bonding-lit:disabled {"
+        " background-color: #145c2e; background-image: none; border-color: #53ed85; opacity: 1; }"
+        "#spectrum-bonding.bonding-lit label, #spectrum-bonding.bonding-lit:disabled label {"
+        " color: #70ff9c; background-color: transparent; opacity: 1; }"
         "#spectrum-usb:checked, #spectrum-fm:checked, #spectrum-fm-data:checked { background-color: #7a4a08; border-color: #ffcc66; color: #ffffff; }"
         "#spectrum-usb:checked:hover, #spectrum-fm:checked:hover, #spectrum-fm-data:checked:hover { background-color: #966014; }"
         /* Keep window decorations light, including inactive windows. Override

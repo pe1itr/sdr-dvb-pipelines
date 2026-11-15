@@ -96,6 +96,10 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
+BOND_SOURCES := $(wildcard components/bonding/src/*.c)
+GUI_SOURCES += src/dvbt_bonding.c $(BOND_SOURCES)
+GUI_HEADERS += src/dvbt_bonding.h $(wildcard components/bonding/include/*.h components/bonding/src/*.h)
+GTK_CFLAGS += -Icomponents/bonding/include
 GUI_SOURCES += src/status_http.c src/program_view.c src/srt_output.c src/dab_view.c
 GUI_HEADERS += src/sdr_rx_status.h src/status_http.h src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
 GUI_HEADERS += src/decoder_margin.h src/hackrf_gain.h
@@ -437,3 +441,24 @@ test-dvbt-multirx: $(BUILD_DIR)/test_dvbt_multichannel $(BUILD_DIR)/linrad_dvb
 	python3 tests/test_dvbt_multirx.py
 
 test: test-dvbt-multirx
+
+BOND_HEADERS := $(wildcard components/bonding/include/*.h components/bonding/src/*.h)
+BOND_TESTS := $(addprefix $(BUILD_DIR)/bonding/,test_bonding test_discovery test_ts_components test_native_av test_abi_v1)
+
+$(BUILD_DIR)/bonding/test_%: components/bonding/tests/test_%.c $(BOND_SOURCES) $(BOND_HEADERS) components/bonding/tests/fixtures/dvb_bond_v1_client.h
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Icomponents/bonding/include $< $(BOND_SOURCES) -o $@
+
+.PHONY: test-bonding-component
+test-bonding-component: $(BOND_TESTS)
+	@set -e; for t in $(BOND_TESTS); do ./$$t; done
+
+$(BUILD_DIR)/bonding_fixture: tests/bonding_fixture.c $(BOND_SOURCES) $(BOND_HEADERS) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Icomponents/bonding/include $< $(BOND_SOURCES) -o $@
+
+.PHONY: test-dvbt-bonding
+test-dvbt-bonding: test-bonding-component $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/bonding_fixture $(BUILD_DIR)/test_dvbt_psi
+	./$(BUILD_DIR)/test_dvbt_psi
+	python3 tests/test_dvbt_bonding.py
+
+test: test-dvbt-bonding

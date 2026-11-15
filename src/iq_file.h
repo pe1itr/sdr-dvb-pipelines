@@ -7,7 +7,7 @@ typedef struct {
     char format[8], standard[16], constellation[16], fec[16], gi[16];
     int sample_rate, header_bytes, symbol_rate;
     double frequency;
-    gboolean has_frequency;
+    gboolean has_frequency, bonding;
 } IQFileInfo;
 
 /* Read the selected file's format/rate and DVB metadata. Missing fields stay

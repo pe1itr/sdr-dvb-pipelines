@@ -332,6 +332,8 @@ int rbdvbt_parse_args(int argc, char **argv, rbdvbt_config_t *cfg)
             static char udp_copy[128];
             snprintf(udp_copy, sizeof(udp_copy), "udp://%s", argv[++i]);
             cfg->ts_out_copy = udp_copy;
+        } else if (strcmp(arg, "--raw-ts-output") == 0) {
+            cfg->raw_ts_output = 1;
         } else if (strcmp(arg, "--wait-video-start") == 0) {
             cfg->wait_video_start = 1;
         } else if (strcmp(arg, "--status-json") == 0 && i + 1 < argc) {
@@ -482,6 +484,7 @@ void rbdvbt_print_info(const char *argv0)
     printf("  --udp-ts IPv4:PORT               Equivalent to --ts-out udp://IPv4:PORT\n");
     printf("  --udp-out IPv4:PORT              Equivalent to --ts-out udp://IPv4:PORT\n");
     printf("  --udp-copy IPv4:PORT             Send a second MPEG-TS UDP copy\n");
+    printf("  --raw-ts-output                  Output all valid post-RS TS, including private data\n");
     printf("  --wait-video-start               Start TS output at a clean video start point\n");
     printf("  --status-json FILE.json          Write receiver status JSON\n");
     printf("  --status-period-packets N        Status update interval\n\n");

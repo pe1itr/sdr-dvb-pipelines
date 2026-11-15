@@ -672,3 +672,5 @@ Thanks to the authors and contributors of LeanSDR / LeanDVB, xdsopl LDPC,
 OnAir, Linrad and the SDR, media and GUI libraries used here. Full attribution,
 component licenses and source provenance are in
 [licenses and acknowledgements](docs/credits.md).
+
+Experimentele [DVB-T channel bonding](docs/dvbt-bonding.md): twee 40-kHz-kanalen uit één IQ-invoer, automatische partnerdetectie en MPEG-TS-merging.

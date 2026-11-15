@@ -118,6 +118,10 @@ static gboolean dvb_metadata(json_object *obj, IQFileInfo *info, GError **error)
         !text_field(obj,"modulation",info->constellation,sizeof(info->constellation),error) ||
         !text_field(obj,"fec",info->fec,sizeof(info->fec),error) ||
         !text_field(obj,"gi",info->gi,sizeof(info->gi),error)) return FALSE;
+    if (!strcmp(info->standard,"DVB-T bonding")) {
+        info->bonding=TRUE;
+        g_strlcpy(info->standard,"DVB-T",sizeof(info->standard));
+    }
     /* datv-transmitter's config uses its own numeric FEC enum. */
     if (member(config,"fec")) {
         int fec=0;

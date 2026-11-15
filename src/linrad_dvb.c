@@ -31,6 +31,8 @@
 #include "decoder_view.h"
 #include "video_view.h"
 #include "dvbt_backend.h"
+#include "dvbt_bonding.h"
+#include <glib/gstdio.h>
 #include "dvbt2_backend.h"
 #include "leansdr_backend.h"
 #include "scatter_view.h"
@@ -67,6 +69,10 @@ typedef struct {
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_plp_box, *t2_gpu_box;
+    GtkWidget *bonding_box, *bonding_button;
+    char *bond_control, *bond_json;
+    gboolean bond_detected, bond_active, bond_pair;
+    double bond_peer_offset;
     DabView dab;
     GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
     GtkWidget *video_frame, *dab_previous, *dab_next;
@@ -216,6 +222,41 @@ static double receiver_offset(App *a) {
     return offset;
 }
 static double channel_bandwidth(App *a) { return a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
+static gboolean bonding_enabled(App *a) {
+    return a->standard==2 && !g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL);
+}
+static void bonding_refresh(App *a) {
+    if (!a->bonding_button) return;
+    gtk_button_set_label(GTK_BUTTON(a->bonding_button),a->bond_pair ? "Bonding\n● Paired" :
+        a->bond_active ? "Bonding\n● Merging" : a->bond_detected ? "Bonding\n● Detected" : "Bonding\n○ Off");
+    GtkWidget *label=gtk_bin_get_child(GTK_BIN(a->bonding_button));
+    /* Reserve the same width for every status; the two lines never resize
+     * neighbouring DVB information buttons when discovery advances. */
+    gtk_label_set_width_chars(GTK_LABEL(label),12);
+    gtk_label_set_max_width_chars(GTK_LABEL(label),12);
+    gtk_label_set_ellipsize(GTK_LABEL(label),PANGO_ELLIPSIZE_END);
+    gtk_label_set_justify(GTK_LABEL(label),GTK_JUSTIFY_CENTER);
+    /* Keep both lines inside the compact spectrum control row. The heading
+     * uses the small button font; the status is smaller and less heavy. */
+    PangoAttrList *attributes=pango_attr_list_new();
+    PangoAttribute *size=pango_attr_size_new_absolute(8*PANGO_SCALE);
+    size->start_index=strlen("Bonding\n");pango_attr_list_insert(attributes,size);
+    PangoAttribute *weight=pango_attr_weight_new(PANGO_WEIGHT_NORMAL);
+    weight->start_index=strlen("Bonding\n");pango_attr_list_insert(attributes,weight);
+    gtk_label_set_attributes(GTK_LABEL(label),attributes);pango_attr_list_unref(attributes);
+    GtkStyleContext *style=gtk_widget_get_style_context(a->bonding_button);
+    /* The active button is intentionally not clickable, but its status lamp
+     * must remain lit. Use explicit styling for the disabled state too. */
+    if (a->running && !a->stopping && a->bond_detected) gtk_style_context_add_class(style,"bonding-lit");
+    else gtk_style_context_remove_class(style,"bonding-lit");
+    gtk_widget_set_sensitive(a->bonding_button,a->running && !a->stopping && a->bond_detected && !a->bond_active);
+    char *tip=a->bond_detected ? g_strdup_printf("Partner at %+.0f Hz in this IQ input. %s Recovery buffer: 8 seconds.",a->bond_peer_offset,
+        a->bond_pair ? "Bonding is active; both channel announcements verified." :
+        a->bond_active ? "Merger enabled; waiting for the partner announcement." :
+        "Click to enable the second DVB-T receiver and TS merger.") :
+        g_strdup("DVB-T bonding detection (40 kHz). The first channel stays centered; a valid announcement automatically starts the partner above or below it, unless automatic bonding is disabled in Mode.");
+    gtk_widget_set_tooltip_text(a->bonding_button,tip);g_free(tip);
+}
 static const char *receiver_offset_problem(App *a) {
     if (a->standard == 4) {
         char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
@@ -489,8 +530,14 @@ static void build_pipeline(App *a) {
         s->args = g_ptr_array_new_with_free_func(g_free);
         char *self = g_file_read_link("/proc/self/exe", NULL);
         if (!self) fatal("Cannot locate the built-in DVB-T decoder");
+        if (a->sr==40000) {
+            add(s,self);add(s,"--decoder-worker=bonding");
+            if (!bonding_enabled(a)) add(s,"--no-auto");
+            add_number(s,"--anchor-offset",0);
+            add(s,"--");
+        }
         add(s, self); g_free(self); add(s, "--decoder-worker=dvbt");
-        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp");
+        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp --frequency-offset --channel-filter");
         /* These are essential for the integrated live decode path, even when
          * an older/empty config does not supply them. */
         add(s, "--live"); add(s, "--resample-to-dvbt-rate");
@@ -692,12 +739,34 @@ static void record_toggled(GtkToggleButton *button, gpointer data) {
     g_free(command); record_refresh(a);
 }
 
+static void filter_apply(App *a, int width, gboolean enabled);
+
 /* stderr shares a pipe with decoder logs; retain partial lines across reads. */
 static void record_log(App *a, const char *text, size_t length) {
     for (size_t i = 0; i < length; ++i) {
         if (text[i] == '\n') {
             a->record_log_line[a->record_log_used] = 0;
             const char *line = a->record_log_line;
+            if (a->running && !a->stopping && a->standard==2) {
+                double offset;
+                if (sscanf(line,"[bond] detected offset=%lf",&offset)==1) {
+                    a->bond_detected=TRUE;a->bond_peer_offset=offset;bonding_refresh(a);
+                } else if (!strcmp(line,"[bond] active")) {
+                    a->bond_active=TRUE;bonding_refresh(a);
+                    /* A normal centered-channel IQ filter may exclude the
+                     * discovered partner. Widen it through the existing live
+                     * source control once the second decoder is activated. */
+                    const char *section=sources[a->source];
+                    int width=(int)(2*(fabs(a->bond_peer_offset)+20000));
+                    if (a->tune_fd>=0 && g_key_file_get_boolean(a->config,section,"filter_enabled",NULL) &&
+                        g_key_file_get_integer(a->config,section,"filter_bandwidth",NULL)<width)
+                        filter_apply(a,width,TRUE);
+                }
+                else if (!strcmp(line,"[bond] pair confirmed")) {a->bond_pair=TRUE;bonding_refresh(a);}
+                else if (g_str_has_prefix(line,"[bond-status] ")) {
+                    g_free(a->bond_json);a->bond_json=g_strdup(line+strlen("[bond-status] "));
+                }
+            }
             if (a->running && !a->stopping && sdr_rx_status_parse(line,&a->sdr_status))
                 a->sdr_status_time=g_get_monotonic_time();
             if (g_str_has_prefix(line, "[iq-record] ")) {
@@ -809,6 +878,8 @@ static void finish_if_stopped(App *a) {
     if (a->video_view.area) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
+    a->bond_detected=a->bond_active=a->bond_pair=FALSE;bonding_refresh(a);
+    if (a->bond_control) {g_unlink(a->bond_control);g_clear_pointer(&a->bond_control,g_free);}
     a->recording = a->record_pending = FALSE;
     if (!a->exit_code) status(a, a->replay_eof ? "IQ file playback complete" : "Stopped");
     if (a->controls) {
@@ -838,7 +909,7 @@ static gboolean force_stop(gpointer data) {
 
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
-    a->stopping = TRUE;
+    a->stopping = TRUE;bonding_refresh(a);
     if (a->standard==4) dab_view_tick(&a->dab,FALSE);
     usb_receiver_source(a->usb_receiver,a->iq_view.center,a->iq_view.rate,FALSE);
     ts_info_view_reset(&a->information);
@@ -883,7 +954,7 @@ static void child_exit(GPid pid, gint result, gpointer data) {
             if (a->tune_fd>=0 && !a->stages[0].pid) { close(a->tune_fd); a->tune_fd=-1; }
             if (a->replay_eof) {
                 if (a->drain_timer) g_source_remove(a->drain_timer);
-                a->drain_timer=g_timeout_add(a->stages[1].pid ? 10000 : 1500,replay_drained,a);
+                a->drain_timer=g_timeout_add(a->stages[1].pid ? (a->standard==2 && a->sr==40000 ? 30000 : 10000) : 1500,replay_drained,a);
                 gboolean alive=FALSE;
                 for (int j=0; j<a->stage_count; ++j) if (a->stages[j].pid) alive=TRUE;
                 if (!alive && !internal_player(a)) stop_pipeline(a);
@@ -925,6 +996,14 @@ static void start_pipeline(App *a) {
     if (problem) { a->exit_code=1; status(a,problem); return; }
     a->record_log_used = 0;
     a->afedri_receiving = FALSE;
+    a->bond_detected=a->bond_active=a->bond_pair=FALSE;
+    g_clear_pointer(&a->bond_json,g_free);bonding_refresh(a);
+    if (a->bond_control) {g_unlink(a->bond_control);g_clear_pointer(&a->bond_control,g_free);}
+    if (a->standard==2 && a->sr==40000) {
+        int fd=g_file_open_tmp("linrad-bond-XXXXXX",&a->bond_control,NULL);
+        if (fd<0) {status(a,"Cannot create bonding control path");a->exit_code=1;return;}
+        close(fd);g_unlink(a->bond_control);
+    }
     build_pipeline(a); a->exit_code = 0;
     if (a->standard==4) {dab_view_reset(&a->dab);dab_view_mute(&a->dab,a->video_view.muted);}
     if (internal_player(a) && !a->video_view.area) {
@@ -1029,6 +1108,8 @@ static void start_pipeline(App *a) {
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
         env = g_environ_unsetenv(env, "LINRAD_DECODER_MONITOR_PORT");
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
+        env = g_environ_unsetenv(env, "LINRAD_BOND_CONTROL");
+        if (i==1 && a->bond_control) env=g_environ_setenv(env,"LINRAD_BOND_CONTROL",a->bond_control,TRUE);
         if (i == 0 && a->usb_receiver)
             env = g_environ_setenv(env,"LINRAD_USB_TAP",usb_receiver_tap_path(a->usb_receiver),TRUE);
         if (i == 1 && a->decoder_view.port) {
@@ -1300,6 +1381,9 @@ static void filter_refresh(App *a) {
 static void filter_apply(App *a, int width, gboolean enabled) {
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
+    if (enabled && a->bond_active && width<140000) {
+        status(a,"Bonding IQ filter must include both channels; widen it or leave it off.");filter_refresh(a);return;
+    }
     if (enabled && a->standard==4 && width<1536000) {
         status(a,"DAB IQ filter must pass at least 1.536 MHz.");filter_refresh(a);return;
     }
@@ -2111,6 +2195,7 @@ static void populate_fecs(App *a) {
     g_signal_handlers_unblock_by_func(a->constellation_box, constellation_changed, a);
     if (a->t2_plp_box) gtk_widget_set_sensitive(a->t2_plp_box, a->standard == 3);
     if (a->t2_gpu_box) gtk_widget_set_sensitive(a->t2_gpu_box, a->standard == 3);
+    if (a->bonding_box) gtk_widget_set_sensitive(a->bonding_box,a->standard==2);
     gtk_widget_set_sensitive(a->constellation_box, a->standard == 1);
     if (a->ldpc_mode_box) {
         gboolean soft=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box))==0;
@@ -2446,6 +2531,7 @@ static void source_defaults(App *a) {
         g_key_file_set_string(a->config, "renderer", "output_file", "capture.ts");
 }
 
+static void bonding_changed(GtkToggleButton *button,gpointer data);
 static int find_choice(const char *value, const char **choices, unsigned count) {
     for (unsigned i=0; i<count; ++i) if (!strcmp(value,choices[i])) return (int)i;
     return -1;
@@ -2488,6 +2574,11 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
         g_strdup("No JSON metadata. Check the sample rate, format and DVB settings before playback.");
     g_key_file_set_string(a->config,"file","metadata",message); g_free(message);
     a->source=SOURCE_FILE; a->standard=standard; a->constellation=constellation; a->fec=fec; a->gi=gi; a->sr=sr;
+    if (a->bonding_box) {
+        g_signal_handlers_block_by_func(a->bonding_box,bonding_changed,a);
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->bonding_box),g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL));
+        g_signal_handlers_unblock_by_func(a->bonding_box,bonding_changed,a);
+    }
     g_free(fallback); iq_file_info_clear(&info); return TRUE;
 }
 
@@ -3441,6 +3532,27 @@ static void dab_step_clicked(GtkButton *button,gpointer data) {
     App *a=data;tune_step(a,GTK_WIDGET(button)==a->dab_previous ? -1 : 1);
 }
 
+static void bonding_changed(GtkToggleButton *button,gpointer data) {
+    App *a=data;if (a->running) return;
+    g_key_file_set_boolean(a->config,"dvbt","disable_bonding",gtk_toggle_button_get_active(button));
+    refresh_preview(a);power_refresh(a);
+}
+static void bonding_clicked(GtkButton *button,gpointer data) {
+    (void)button;App *a=data;
+    if (!a->running || a->stopping || !a->bond_detected || a->bond_active || !a->bond_control) return;
+    GError *error=NULL;
+    if (!g_file_set_contents(a->bond_control,"enable\n",-1,&error)) {
+        status(a,error->message);g_clear_error(&error);
+    }
+}
+static GtkWidget *bonding_create_button(App *a) {
+    a->bonding_button=gtk_button_new_with_label("Bonding\n○ Off");
+    gtk_widget_set_name(a->bonding_button,"spectrum-bonding");
+    atk_object_set_name(gtk_widget_get_accessible(a->bonding_button),"DVB-T bonding detected / enable merger");
+    g_signal_connect(a->bonding_button,"clicked",G_CALLBACK(bonding_clicked),a);
+    bonding_refresh(a);
+    return a->bonding_button;
+}
 static void create_mode_renderer(App *a) {
     a->mode_dialog = settings_dialog(a, "Mode · Receiver settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, G_N_ELEMENTS(standards), a->standard);
@@ -3477,6 +3589,11 @@ static void create_mode_renderer(App *a) {
     GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
     gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
     gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,12,2,1);
+    a->bonding_box=gtk_check_button_new_with_label("Disable automatic DVB-T bonding");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->bonding_box),g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL));
+    gtk_widget_set_tooltip_text(a->bonding_box,"Off (default): a valid bonding announcement automatically starts the partner and merger. On: detect only; click the Bonding indicator to join manually. First channel stays centered for both live IQ and files; partner is normally +50 or −50 kHz. Applies at next start. 8 s recovery buffer.");
+    gtk_grid_attach(GTK_GRID(a->controls),a->bonding_box,0,14,2,1);
+    g_signal_connect(a->bonding_box,"toggled",G_CALLBACK(bonding_changed),a);
     a->dab_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->dab_controls),8);
     gtk_grid_set_column_spacing(GTK_GRID(a->dab_controls),12);
@@ -3712,6 +3829,7 @@ static void gui(App *a) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
     ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls);
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),bonding_create_button(a),FALSE,FALSE,0);
     a->usb_toggle=gtk_toggle_button_new_with_label("USB");
     gtk_widget_set_name(a->usb_toggle,"spectrum-usb");
     atk_object_set_name(gtk_widget_get_accessible(a->usb_toggle),"USB receiver on/off");
@@ -3963,6 +4081,14 @@ static char *network_status(gpointer data) {
         }
         json_object_object_add(root,"decoder",d);
     }
+    json_object *bond=json_object_new_object();
+    BOOL(bond,"detected",a->bond_detected && a->running);BOOL(bond,"active",a->bond_active && a->running);
+    BOOL(bond,"pair_verified",a->bond_pair && a->running);NUM(bond,"partner_offset_hz",a->bond_peer_offset);
+    if (a->bond_json) {
+        json_object *detail=json_tokener_parse(a->bond_json);
+        if (detail) json_object_object_add(bond,"merger",detail);
+    }
+    json_object_object_add(root,"bonding",bond);
     json_object *stages=json_object_new_array();
     for (int i=0;i<a->stage_count;++i) {
         json_object *stage=json_object_new_object();NUM(stage,"index",i);BOOL(stage,"running",a->stages[i].pid!=0);
@@ -3985,6 +4111,8 @@ int main(int argc, char **argv) {
         return srt_output_main(argc-1, argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr"))
         return leansdr_backend_main(argc-1,argv+1);
+    if (argc > 1 && !strcmp(argv[1], "--decoder-worker=bonding"))
+        return dvbt_bonding_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt2"))

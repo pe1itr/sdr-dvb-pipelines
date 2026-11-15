@@ -39,15 +39,16 @@ def main():
     if not (sdk / "lib/libboost_system.dll.a").exists():
         libs = [word for word in libs if word != "-lboost_system"]
     common = ["-mcrtdll=ucrt", "-O2", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter", "-Wno-sign-compare",
-              "-Isrc/win32/include", "-Isrc/win32", "-Isrc", "-Icomponents/dvbt/include", "-Icomponents/dvbt2/include",
+              "-Icomponents/bonding/include", "-Isrc/win32/include", "-Isrc/win32", "-Isrc", "-Icomponents/dvbt/include", "-Icomponents/dvbt2/include",
               "-iquote", "components/tsscatterfix/src", "-Ithird_party/leansdr/src", "-include", "src/win32/platform.h",
               "-DLEANSDR_EXTENSIONS", '-DVERSION="linrad-leansdr-84c59e1"', "-DLINRAD_EMBEDDED_DVBT",
               '-DRBDVBT_VERSION="0.1.5"', *cflags]
     gui = ["linrad_dvb", "iq_file", "decoder_view", "video_view", "scatter_backend", "scatter_view", "ts_info", "ts_info_view",
-           "usb_receiver", "usb_demod", "usb_tci", "program_view", "srt_output", "status_http", "dab_view", "dvbt_backend", "dvbt2_backend", "leansdr_backend", "ldpc_pool"]
+           "usb_receiver", "usb_demod", "usb_tci", "program_view", "srt_output", "status_http", "dab_view", "dvbt_bonding", "dvbt_backend", "dvbt2_backend", "leansdr_backend", "ldpc_pool"]
     cpp = {"dvbt2_backend", "leansdr_backend", "ldpc_pool"}
     gui_sources = [f"src/{name}.{'cc' if name in cpp else 'c'}" for name in gui]
     gui_sources += ["third_party/leansdr/src/apps/leandvb.cc"]
+    gui_sources += [str(p) for p in Path("components/bonding/src").glob("*.c")]
     gui_sources += [str(p) for p in Path("components/dvbt/src").glob("*.c") if p.name != "main.c"]
     gui_sources += [str(p) for p in Path("components/dvbt2/src").rglob("*.cpp") if p.name != "t2gen.cpp"]
     gui_sources += [f"components/tsscatterfix/src/{name}.c" for name in ["recovery", "media", "rank_model", "psi", "ts_packet"]]

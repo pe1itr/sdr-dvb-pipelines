@@ -1133,7 +1133,9 @@ static void exercise_usb(App *a) {
     GList *buttons=gtk_container_get_children(GTK_CONTAINER(a->iq_view.filter_controls));
     GList *usb=g_list_find(buttons,a->usb_toggle);
     g_assert_nonnull(usb); g_assert_nonnull(usb->prev);
-    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(usb->prev->data)),==,"Teletext");
+    g_assert_true(usb->prev->data==a->bonding_button);
+    g_assert_nonnull(usb->prev->prev);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(usb->prev->prev->data)),==,"Teletext");
     g_list_free(buttons);
     GPid source=a->stages[0].pid, decoder=a->stages[1].pid;
     double frequency=g_key_file_get_double(a->config,"linrad","frequency",NULL);
@@ -1688,6 +1690,10 @@ static gboolean exercise(gpointer data) {
         exercise_scatter_view(a);
         exercise_decoder_view(a);
         exercise_file_selection(a);
+        GList *bar=gtk_container_get_children(GTK_CONTAINER(a->iq_view.filter_controls));
+        g_assert_cmpint(g_list_index(bar,a->bonding_button),==,g_list_index(bar,a->information.buttons[1])+1);
+        g_assert_cmpint(g_list_index(bar,a->usb_toggle),==,g_list_index(bar,a->bonding_button)+1);
+        g_list_free(bar);
         exercise_record_controls(a);
         exercise_afedri(a);
         exercise_rtlsdr(a);
@@ -2139,7 +2145,98 @@ static gboolean exercise(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static void exercise_bonding(void) {
+    App a={.source=SOURCE_FILE,.standard=3,.sr=8000000,.tune_fd=-1};
+    a.config=g_key_file_new();a.directory=g_get_current_dir();
+    GError *load_error=NULL;
+    g_key_file_load_from_file(a.config,"linrad-dvb.example.ini",G_KEY_FILE_KEEP_COMMENTS,&load_error);
+    g_assert_no_error(load_error);source_defaults(&a);
+    apply_receiver_theme();
+    bonding_create_button(&a);a.bonding_box=gtk_check_button_new();
+    gtk_widget_show_all(a.bonding_button);
+    GtkRequisition off_size,on_size;gtk_widget_get_preferred_size(a.bonding_button,NULL,&off_size);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n○ Off");
+    g_object_ref_sink(a.bonding_button);g_object_ref_sink(a.bonding_box);
+    g_signal_connect(a.bonding_box,"toggled",G_CALLBACK(bonding_changed),&a);
+    GError *error=NULL;char *dir=g_dir_make_tmp("bond-gui-XXXXXX",&error);g_assert_no_error(error);
+    char *iq=g_build_filename(dir,"bond.cf32",NULL),*meta=g_strconcat(iq,".json",NULL);
+    char data[8000]={0};g_assert_true(g_file_set_contents(iq,data,sizeof(data),NULL));
+    g_assert_true(g_file_set_contents(meta,
+        "{\"format\":\"fc32\",\"sample_rate\":250000,\"standard\":\"DVB-T bonding\",\"modulation\":\"QPSK\","
+        "\"config\":{\"bandwidth\":40000,\"guard\":32,\"fec\":3,\"frequency\":144550000}}",-1,NULL));
+    g_assert_true(select_iq_file(&a,iq,&error));g_assert_no_error(error);
+    g_assert_cmpint(a.standard,==,2);g_assert_cmpint(a.sr,==,40000);g_assert_true(bonding_enabled(&a));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a.bonding_box)));
+    g_assert_null(receiver_offset_problem(&a));
+    build_pipeline(&a);gboolean wrapper=FALSE,offset=FALSE;
+    for (unsigned i=0;i<a.stages[1].args->len-1;++i) {
+        char *value=g_ptr_array_index(a.stages[1].args,i);
+        if (!strcmp(value,"--decoder-worker=bonding")) wrapper=TRUE;
+        if (!strcmp(value,"--anchor-offset")) {
+            g_assert_cmpstr(g_ptr_array_index(a.stages[1].args,i+1),==,"0");offset=TRUE;
+        }
+        g_assert_cmpstr(value,!=,"--no-auto");
+    }
+    g_assert_true(wrapper);g_assert_true(offset);
+    /* The old opt-in false no longer suppresses default automatic discovery. */
+    g_key_file_set_boolean(a.config,"dvbt","bonding",FALSE);g_assert_true(bonding_enabled(&a));
+    g_key_file_set_boolean(a.config,"dvbt","disable_bonding",TRUE);
+    g_assert_false(bonding_enabled(&a));
+    g_assert_true(select_iq_file(&a,iq,&error));g_assert_no_error(error);
+    g_assert_false(bonding_enabled(&a)); /* Metadata must preserve explicit opt-out. */
+    build_pipeline(&a);gboolean opt_out=FALSE;
+    for (unsigned i=0;i<a.stages[1].args->len-1;++i)
+        if (!strcmp(g_ptr_array_index(a.stages[1].args,i),"--no-auto")) opt_out=TRUE;
+    g_assert_true(opt_out);
+    g_key_file_set_boolean(a.config,"dvbt","disable_bonding",FALSE);
+
+    a.bond_control=g_build_filename(dir,"enable",NULL);a.running=TRUE;
+    bonding_refresh(&a);g_assert_false(gtk_widget_get_sensitive(a.bonding_button));
+    const char *line="[bond] detected offset=+50000 partner_hz=144575000\n";
+    record_log(&a,line,strlen(line));g_assert_true(a.bond_detected);
+    g_assert_true(gtk_widget_get_sensitive(a.bonding_button));g_assert_cmpfloat(a.bond_peer_offset,==,50000);
+    gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
+    g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Detected");
+    bonding_clicked(GTK_BUTTON(a.bonding_button),&a);g_assert_true(g_file_test(a.bond_control,G_FILE_TEST_EXISTS));
+    int filter_control[2];g_assert_cmpint(pipe(filter_control),==,0);a.tune_fd=filter_control[1];
+    g_key_file_set_boolean(a.config,"file","filter_enabled",TRUE);
+    g_key_file_set_integer(a.config,"file","filter_bandwidth",40000);
+    line="[bond] active\n";record_log(&a,line,strlen(line));
+    char filter_command[64]={0};g_assert_cmpint(read(filter_control[0],filter_command,sizeof(filter_command)-1),>,0);
+    g_assert_cmpstr(filter_command,==,"bandwidth 140000\n");
+    g_assert_cmpint(g_key_file_get_integer(a.config,"file","filter_bandwidth",NULL),==,140000);
+    close(filter_control[0]);close(filter_control[1]);a.tune_fd=-1;
+    gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
+    g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Merging");
+    line="[bond] pair confirmed\n";record_log(&a,line,strlen(line));
+    gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
+    g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
+    g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Paired");
+    g_assert_true(a.bond_active);g_assert_true(a.bond_pair);g_assert_false(gtk_widget_get_sensitive(a.bonding_button));
+    GtkStyleContext *lamp=gtk_widget_get_style_context(a.bonding_button);
+    g_assert_true(gtk_style_context_has_class(lamp,"bonding-lit"));
+    GtkWidget *label=gtk_bin_get_child(GTK_BIN(a.bonding_button));GdkRGBA color;
+    gtk_style_context_get_color(gtk_widget_get_style_context(label),gtk_widget_get_state_flags(label),&color);
+    g_assert_cmpfloat_with_epsilon(color.red,112.0/255,.01);
+    g_assert_cmpfloat_with_epsilon(color.green,1,.01);
+    g_assert_cmpfloat_with_epsilon(color.blue,156.0/255,.01);
+    char *tip=gtk_widget_get_tooltip_text(a.bonding_button);
+    g_assert_nonnull(strstr(tip,"both channel announcements verified"));
+    g_assert_nonnull(strstr(tip,"8 seconds"));g_free(tip);
+    a.running=FALSE;a.bond_detected=a.bond_active=a.bond_pair=FALSE;bonding_refresh(&a);
+    g_assert_false(gtk_widget_get_sensitive(a.bonding_button));
+    g_assert_false(gtk_style_context_has_class(lamp,"bonding-lit"));
+    g_unlink(a.bond_control);g_free(a.bond_control);g_unlink(meta);g_unlink(iq);g_rmdir(dir);
+    g_free(meta);g_free(iq);g_free(dir);clear_stages(&a);g_free(a.directory);g_key_file_unref(a.config);
+    g_object_unref(a.bonding_button);g_object_unref(a.bonding_box);
+    puts("Bonding metadata, relative tuning, detection lamp and activation passed");
+}
+
 int main(int argc, char **argv) {
+    if (argc>1 && !strcmp(argv[1],"--test-bonding")) {gtk_init(&argc,&argv);exercise_bonding();return 0;}
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=bonding")) return dvbt_bonding_main(argc-1,argv+1);
     if (argc>1 && !strcmp(argv[1],"--test-sdr-status")) {exercise_sdr_status();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=dvbt2")) return dvbt2_backend_main(argc-1,argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
