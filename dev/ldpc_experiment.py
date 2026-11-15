@@ -120,7 +120,8 @@ def candidate(source, name):
 
 
 def build(out, variants, baseline_ref):
-    original=subprocess.check_output(['git','show',baseline_ref+':'+str(SOURCE.relative_to(ROOT))],cwd=ROOT,text=True)
+    original=(SOURCE.read_text() if baseline_ref=='current' else
+              subprocess.check_output(['git','show',baseline_ref+':'+str(SOURCE.relative_to(ROOT))],cwd=ROOT,text=True))
     commands=[]
     for name in variants:
         plain=name.endswith('-plain')
@@ -173,7 +174,7 @@ def cpu_read(path):
     return dict(cpu_s=user+system,user_s=user,system_s=system,elapsed_s=wall,rss_kib=int(rss))
 
 
-def run_case(out, case, label, helper, capture_every):
+def run_case(out, case, label, helper, capture_every, unpaced=False):
     prefix=out/(label+'-'+case['name'])
     file=lambda suffix: Path(str(prefix)+suffix)
     env={k:v for k,v in os.environ.items() if not k.startswith('LINRAD_')}
@@ -183,6 +184,9 @@ def run_case(out, case, label, helper, capture_every):
     feeder=[str(ROOT/'build/iq_file_to_stdout'),'--in',case['path'],
             '--sample-rate',str(case['rate']),'--input-format','s16',
             '--header-bytes',str(case.get('header_bytes',0))]
+    if unpaced:
+        # Stream exactly the same raw IQ, with no source clock or rate limiter.
+        feeder=['/usr/bin/tail','--bytes=+'+str(case.get('header_bytes',0)+1),case['path']]
     command=[str(ROOT/'build/linrad_dvb'),'--decoder-worker=leansdr','--s16',
              '-f',str(case['rate']),'--sr',str(case['sr']),'--standard','DVB-S2',
              '--sampler','rrc','--rrc-steps','8','--rrc-rej','10',
@@ -224,14 +228,22 @@ def run_case(out, case, label, helper, capture_every):
                     os.killpg(proc.pid,signal.SIGKILL);proc.wait()
     text=file('.source.log').read_text()
     sent=re.search(r'end of file: (\d+) samples, ([\d.]+) s elapsed',text)
-    if not sent or int(sent[1])!=case['samples']:raise RuntimeError('Incomplete source: '+text)
+    source_cpu=cpu_read(file('.source.cpu'))
+    if unpaced:
+        samples=(Path(case['path']).stat().st_size-case.get('header_bytes',0))//4
+        source_elapsed=source_cpu['elapsed_s']
+    else:
+        if not sent:raise RuntimeError('Incomplete source: '+text)
+        samples=int(sent[1]);source_elapsed=float(sent[2])
+    if samples!=case['samples']:raise RuntimeError('Unexpected source sample count')
     file('.arrivals.json').write_text(json.dumps(arrivals)+'\n')
     result=dict(case=case['name'],label=label,command=command,feeder=feeder,
         helper=helper,capture_every=capture_every,elapsed_s=elapsed,first_ts_s=first,
         last_ts_s=arrivals[-1][1] if arrivals else None,
-        input_samples=int(sent[1]),source_elapsed_s=float(sent[2]),
+        measurement='unpaced receiver capacity' if unpaced else 'original-rate paced replay',
+        input_samples=samples,source_elapsed_s=source_elapsed,
         expected_duration_s=case['duration_s'],decoder_and_helpers=cpu_read(file('.cpu')),
-        source=cpu_read(file('.source.cpu')),ts_bytes=file('.ts').stat().st_size,
+        source=source_cpu,ts_bytes=file('.ts').stat().st_size,
         ts_sha256=digest(file('.ts')),bb_bytes=file('.bb').stat().st_size,bb_sha256=digest(file('.bb')),
         ldpc=profile_summary(file('.log')))
     file('.json').write_text(json.dumps(result,indent=2)+'\n')
@@ -293,13 +305,14 @@ def main():
     p.add_argument('--variants',default='profile');p.add_argument('--label',default='profile')
     p.add_argument('--helper',default='builtin');p.add_argument('--capture-every',type=int,default=0)
     p.add_argument('--baseline-ref',default='eb2e09d')
+    p.add_argument('--unpaced',action='store_true',help='Capacity test with raw IQ streamed without rate limiting; not live reception')
     a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True)
     if a.capture_every<0:p.error('capture-every must be nonnegative')
     if a.action=='build':build(out,a.variants.split(','),a.baseline_ref);return
     if a.action=='merge':merge(out);return
     if a.input is None:p.error('input is required')
     if a.action=='replay':replay(out,a.input,a.variants.split(','));return
-    for case in json.loads(a.input.read_text()):run_case(out,case,a.label,a.helper,a.capture_every)
+    for case in json.loads(a.input.read_text()):run_case(out,case,a.label,a.helper,a.capture_every,a.unpaced)
 
 
 if __name__=='__main__':main()

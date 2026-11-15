@@ -1599,6 +1599,23 @@ static void exercise_s2_automatic(App *a) {
     g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box)),==,0);
     g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->s2_acquisition_box)),==,0);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box)));
+#ifndef _WIN32
+    g_assert_true(gtk_widget_get_sensitive(a->s2_gpu_box));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->ldpc_workers_box),3);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box),TRUE);
+    char *gpu_command=describe(a);
+    g_assert_nonnull(strstr(gpu_command,"'--ldpc-helper' 'builtin-gpu'"));
+    g_assert_nonnull(strstr(gpu_command,"'--nhelpers' '1'"));
+    g_free(gpu_command);
+    g_assert_cmpint(integer_setting(a,"leandvb","helpers",1,8),==,3);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->ldpc_mode_box),1);
+    g_assert_false(gtk_widget_get_sensitive(a->s2_gpu_box));
+    gpu_command=describe(a);g_assert_null(strstr(gpu_command,"builtin-gpu"));g_free(gpu_command);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->ldpc_mode_box),0);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box),FALSE);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->ldpc_workers_box),1);
+#endif
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box),2); // 125k
     char *command=describe(a);
     g_assert_nonnull(strstr(command,"'--fastlock'"));
@@ -1632,6 +1649,7 @@ static void exercise_t2_mode(App *a) {
         for (int opening=0;opening<2;++opening) {
             show_mode(NULL,a);
             g_assert_cmpint(gtk_widget_get_visible(a->bonding_box),==,mode==2);
+            g_assert_cmpint(gtk_widget_get_visible(a->s2_gpu_box),==,mode==1);
             g_assert_cmpint(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->bonding_box)),==,disable_bonding);
             gtk_widget_hide(a->mode_dialog);
         }

@@ -1,0 +1,250 @@
+DVB-S2 GPU LDPC investigation: PI6EHV
+2026-11-09
+
+Status at 2026-11-09: isolated Linux helper built; hardware comparison pending.
+Update 2026-11-16: Linux GPU option implemented and measured; see results below.
+Goal: determine whether optional GPU LDPC improves PI6EHV reception through
+lower CPU load, lower decode latency or greater throughput, without degrading
+recovered data or player stability. CPU remains the default and fallback.
+
+Available reference
+-------------------
+The repository's PI6EHV target is 5 Msym/s, 8PSK 3/4 (MODCOD 14), normal
+64800-bit LDPC frames with 48600 information bits. This describes the existing
+test case, not a fresh verification of the current on-air transmission.
+Existing input:
+  recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq
+  cs16_le, 6 MS/s, 1291 MHz, 48.999083 seconds, no header.
+The recording is present. No new IQ capture is needed.
+
+Prepared experiment entry point
+------------------------------
+dev/dvbs2-gpu-pi6ehv.json is a manifest for the existing experiment runner.
+Run from the repository root, with live receivers stopped. Choose a fresh
+output directory for each comparison; repeated labels overwrite artifacts.
+
+CPU baseline using the current production helper:
+  python3 dev/ldpc_experiment.py run build/s2-gpu-pi6ehv-run1 dev/dvbs2-gpu-pi6ehv.json --label cpu --helper builtin
+
+Build a separate instrumented CURRENT CPU helper and capture actual LLR
+batches from the same recording (keeps production binaries untouched):
+  python3 dev/ldpc_experiment.py build build/s2-gpu-pi6ehv-run1 --baseline-ref current --variants profile
+  python3 dev/ldpc_experiment.py run build/s2-gpu-pi6ehv-run1 dev/dvbs2-gpu-pi6ehv.json --label capture --helper "$PWD/build/s2-gpu-pi6ehv-run1/profile" --capture-every 1
+
+Capturing every batch writes substantial diagnostic data; do not compare
+its timing directly with the uninstrumented baseline. These LLR inputs are
+for developing/testing the experimental GPU helper.
+
+Build only the separate experimental helper (not included in normal builds):
+  make -f Makefile -f dev/dvbs2_gpu_helper.mk build/dvbs2_gpu_helper
+  python3 tests/test_dvbs2_gpu_helper.py
+
+With live receivers stopped, explicitly test the GPU and replay PI6EHV:
+  python3 tests/test_dvbs2_gpu_helper.py --gpu
+  python3 dev/ldpc_experiment.py run build/s2-gpu-pi6ehv-run1 dev/dvbs2-gpu-pi6ehv.json --label gpu --helper "$PWD/build/dvbs2_gpu_helper"
+
+The helper accepts --framed --modcod 14, normal frames only, batches 1..32.
+It reuses the Vulkan FP32 normalized min-sum kernel at alpha 0.78 and 25
+iterations. Decisions return as signed int8 bytes for the existing BCH step;
+failed-parity frames are still returned. --backend cpu-reference selects the
+matching FP32 CPU algorithm for correctness checks, not the production S2
+int8 baseline. Unsupported configurations are rejected. GPU unavailability
+exits 77 and device-call failure exits 1, without silent CPU substitution.
+Production fallback remains a requirement for any later GUI integration;
+this isolated experiment deliberately fails visibly instead.
+
+Protocol, clean/damaged zero-codeword CPU reference, EOF tail, invalid input
+and forced unavailable-GPU checks passed. Actual GPU decoding and end-to-end
+PI6EHV quality/speed are not validated yet. Hash checks confirm the existing
+linrad_dvb, ldpc_tool and ldpc_tool_avx2 binaries were not changed.
+The runner records CPU use, source elapsed time, first TS and TS/BB hashes.
+Its source can slow under backpressure: always inspect elapsed source time
+before claiming realtime performance. It does not emulate SDR hardware loss.
+
+Historical results in benchmarks/ldpc-2026-11-05.json and
+benchmarks/ldpc-integration-2026-11-05.json provide a CPU reference:
+one worker, throughput mode, up to 32 frames, at most 2 ms batch collection.
+In an instrumented reference run, 91% of batches had only one or two frames;
+the LDPC kernel used 32.27 CPU seconds versus 1.56 for packing/unpacking.
+These are historical measurements, not timings from the current session.
+The earlier integrated SIMD optimization already recovered the recording in
+realtime; improvement can therefore mean CPU headroom rather than more TS.
+
+Source findings
+---------------
+src/ldpc_pool.cc supplies persistent CPU helpers with int8 LLR batches and
+receives corrected int8 soft frames. BCH and BBFRAME/TS handling remain in
+third_party/leansdr/src/leansdr/dvbs2.h, which hardens the returned soft bits.
+This boundary is suitable for isolating GPU LDPC from the rest of reception.
+Preserve frame order, EOF drain, bounded outstanding jobs and CPU fallback.
+
+The production S2 helper uses saturating int8 corrected min-sum (MinSumC),
+25 iterations and SIMD across frames. The existing T2 GPU kernel uses FP32
+normalized min-sum and a different update schedule. Simply converting LLRs
+to float and enabling that kernel is an algorithm change as well as a
+hardware change. Do not present such a result as an equivalent GPU port.
+An LDPC parity failure must still reach BCH: BCH can recover some of those
+frames. Keep transport/device failure distinct from unsuccessful convergence.
+
+A lightweight source check found identical base address rows for S2 table B7
+and T2 table 3_4N: 135 information groups and 540 base addresses. The table
+and Vulkan resource infrastructure can be reused for a prototype. This check
+does not establish numerical equivalence or speed. Reproducible source hashes
+and the result are in benchmarks/dvbs2-gpu-feasibility-2026-11-09.json.
+
+Proposed implementation and comparison
+--------------------------------------
+1. Build an isolated helper prototype for normal 3/4 first, using the existing
+   LLR input/output boundary. Reuse GPU initialization and buffers; keep all
+   LDPC iterations and convergence checks on GPU. Return decisions in the
+   helper's expected soft-byte layout; retain CPU BCH and TS processing.
+   Keep the original input until completion so device failure can retry CPU.
+   Avoid creating a GPU context per CPU helper; start with one GPU executor.
+2. Separate two questions. First measure the reusable FP32 GPU kernel against
+   its matching CPU algorithm. Then compare recovered data and timing against
+   the production int8 S2 helper, both limited to 25 iterations. A changed
+   decoding algorithm needs explicit sensitivity validation. A later MinSumC
+   GPU port must preserve saturation, correction and update dependencies;
+   exact equivalence cannot be assumed from shared parity tables.
+3. Use actual LLR batches from the existing IQ recording and synthetic known
+   codewords. Test batches 1, 2, 4, 8, 16 and 32, including difficult frames.
+   Measure warm host-to-host latency, device time, CPU time, iteration counts,
+   bit errors and convergence. Report initialization separately. Retain the
+   current maximum batch wait: filling 32 frames at this symbol rate could
+   introduce substantial extra latency and would distort the comparison.
+4. Replay identical IQ at its original sample rate with CPU and GPU helpers,
+   alternating repeated runs. Check source elapsed time/backpressure, first
+   TS latency, TS and BB output hashes, BCH failures, frame loss, and CPU use
+   including helpers. Record any output difference; more decoded data must
+   be validated rather than treated as corruption solely because hashes differ.
+   Conversely, kernel throughput alone does not establish receiver benefit.
+5. If results justify integration, add an independent DVB-S2 GPU checkbox
+   beside the existing soft-decision settings, off by default and saved
+   separately from dvbt2.gpu_ldpc. Report the actual backend and fallback.
+   Retain CPU soft-decision and bit-flipping choices. Start with Linux and
+   explicitly gate unsupported rates/frame sizes to CPU until validated;
+   Windows/D3D11 requires its own tests before claiming support.
+6. Validate live PI6EHV, then both internal and external GPU playback. Reuse
+   docs/dvbt2-gpu-player-investigation-20261109.txt for the unresolved shared
+   GPU issue. GPU video stuttering or extra FEC losses counts against a gain.
+
+Acceptance and measurement constraints
+--------------------------------------
+Require repeatable CPU relief and/or improved latency/throughput at equal or
+better recovered-data quality, with no added queue loss or playback hitches.
+Do not trade weak-signal reception for a favorable speed figure unnoticed.
+Check both ordinary and high-iteration conditions. CPU fallback must remain
+available and visible; it must not hide an unsuccessful GPU test.
+Run heavy correctness tests and benchmarks only with live receivers stopped,
+as required by AGENTS.md. This investigation performed source/table checks
+only; it did not change the running receiver, active INI or release binaries.
+
+Linux integration and hardware results (2026-11-16)
+-------------------------------------------------
+Implemented and built the experimental DVB-S2 checkbox in Mode, off by
+default, persisted independently as [leandvb] gpu_ldpc=false. Applies at the
+next reception start and only to the embedded soft-decision receiver.
+Linux helper: build/ldpc_tool_gpu, selected through --ldpc-helper builtin-gpu.
+The CPU worker selection is retained; GPU selection uses one executor.
+Windows remains CPU-only with the S2 checkbox disabled. No Windows release
+or active receiver INI was changed, and the running GUI was not restarted.
+
+GPU support is deliberately gated to MODCOD 14 normal frames, matching the
+PI6EHV test. Other MODCODs/frame sizes use the original production CPU helper.
+GPU-unavailable/device-failure fallback retains the original LLRs. A frame
+without valid GPU parity is retried on the production CPU; its result still
+reaches BCH even if CPU LDPC does not converge. BCH/BBFRAME/TS remain on CPU.
+CPU retry receives an already collected batch atomically, without another
+batch-collection delay; normal CPU collection retains its existing 2 ms cap.
+Frame order, bounded outstanding work and EOF tail drain remain intact.
+Actual device and GPU/CPU frame counts are logged periodically.
+
+Host: Linux, Ryzen 7 5800H (8 cores / 16 logical processors), NVIDIA GeForce
+RTX 3050 Laptop GPU, Vulkan. Both live receivers were stopped by the user.
+Verified the existing recording SHA256 against the manifest; no new raw IQ
+recording was made. Full outputs, LLR capture, CPU timing, source timing,
+arrival timestamps, build logs and tests are under:
+  build/s2-gpu-pi6ehv-20261116/
+Tracked report:
+  benchmarks/dvbs2-gpu-2026-11-16.json
+
+Two clean original-rate repetitions per backend, same full 48.999 s input:
+                         CPU              integrated GPU
+Decoder + helper CPU     46.39 / 46.48 s   21.39 / 21.46 s
+First TS                 0.897 / 0.897 s   2.591 / 2.593 s
+Source elapsed           48.999 / 49.784 s 50.567 / 50.764 s
+Whole replay elapsed     49.732 / 50.517 s 51.370 / 51.563 s
+
+Median CPU time falls 53.86%, equivalent to about 0.51 CPU core over the
+same source duration, not half the whole machine's CPU capacity. The paced
+middle portion (10..40 s wall time) produces about 1.393 MB/s TS on both
+routes. GPU startup is about 1.67 s in these integrated runs; first output
+and source completion are delayed by backpressure. This is not proof that a
+live SDR can tolerate startup without sample/queue losses. Of 11,293 frames,
+11,292 satisfy GPU parity and one is retried on CPU.
+
+Two unpaced full-receiver capacity repetitions per backend:
+                         CPU              integrated GPU
+Whole replay elapsed     12.727 / 12.698 s 14.604 / 14.476 s
+Decoder + helper CPU     21.75 / 21.63 s   15.60 / 15.62 s
+
+GPU is 14.38% slower including initialization in this capacity test, despite
+lower CPU use. Both run well faster than realtime. No whole-receiver
+throughput increase has been demonstrated; the useful result here is CPU
+headroom at original-rate reception. Unpaced batching/work distribution
+is different from original-rate replay, so do not mix their CPU costs.
+
+All eight selected full replays produce exactly 68,214,860 TS bytes and
+68,327,892 BBFRAME bytes with identical hashes:
+TS: e01127b97943c1af70968c7b4833da2a34e497d0533b9a4c46e779b4a48956c5
+BB: 189ede0202c86436a7ea0f51e71b1cff62d17e4c2ba0c4bd56eb284aab8559cc
+
+Separate unpaced component tests rebatch the first 128 captured nonzero LLR
+frames into 1, 2, 4, 8, 16 and 32 frames. GPU hard decisions, convergence
+(127/128) and total iterations (156) match the matching FP32 CPU reference
+at every size. The int8 production CPU is a DIFFERENT algorithm and has
+2,865 different pre-BCH hard decisions on this sample; full TS/BB output
+comparison is therefore the relevant recovered-data check. Raw soft-byte
+hash differences also include different posterior magnitudes.
+
+Without device-timestamp instrumentation, GPU host decode totals for the
+128 frames are 152.288, 93.828, 70.883, 61.665, 63.648 and 72.984 ms at
+batch sizes 1/2/4/8/16/32 respectively. These exclude initialization, include
+host conversion, submission and completion, and are short component samples,
+not a receiver-wide speedup. Matching FP32 CPU host totals are in the report;
+production int8 pack/decode/unpack CPU time is also recorded separately.
+A second instrumented pass (batches-timing/report.json) measures Vulkan device
+time separately and subtracts initialization/self-test counters. These
+hypothetical batch sizes do not change the receiver's collection policy.
+There is no justification here for increasing collection latency to fill 32.
+
+Validation passed:
+- strict helper protocol, malformed requests, CPU reference, unavailable GPU,
+  real GPU correction, consecutive requests and EOF tail;
+- old-INI default off, mode isolation and no active-INI writes;
+- full 32-frame batch plus short EOF tail, exact CPU fallback for unsupported
+  normal/short modes and missing GPU;
+- real GPU clean frames plus nonconverged-frame CPU retries;
+- simulated GPU device failure after overwriting all GPU outputs: exact CPU
+  retry from original LLRs, with no further attempts on the failed device;
+- GTK callback/visibility regression including checkbox, preserved worker
+  choice, bit-flipping isolation and repeated dialog opening.
+
+Reproduction (live receivers must remain stopped):
+  make -f Makefile -f dev/dvbs2_gpu_helper.mk build/linrad_dvb build/ldpc_tool_gpu build/dvbs2_gpu_helper build/test_dvbs2_gpu_device_failure
+  python3 tests/test_dvbs2_gpu_helper.py --gpu
+  python3 tests/test_dvbs2_gpu_option.py --gpu --device-failure
+  python3 dev/ldpc_experiment.py run NEW_OUT dev/dvbs2-gpu-pi6ehv.json --label cpu --helper builtin
+  python3 dev/ldpc_experiment.py run NEW_OUT dev/dvbs2-gpu-pi6ehv.json --label gpu --helper builtin-gpu
+Add --unpaced with distinct labels for capacity tests. Use the strict
+build/dvbs2_gpu_helper for experiments that must fail on GPU unavailability,
+without CPU fallback hiding the result. dev/dvbs2_gpu_bench.py documents the
+captured-LLR component experiment and optional --gpu-timing.
+
+Limits and next checks: native Windows is not implemented/validated; local
+Linux results cannot be projected onto the Windows 5500H or its GPU. Equal
+output on this recording does not establish equal weak-signal sensitivity.
+Difficult frames may cost more because they run GPU and CPU decoding. Live
+SDR startup, steady reception and both video-player modes still need a
+controlled check; prior DVB-T2 GPU/player contention remains relevant. The
+checkbox is experimental, not a claim that those remaining checks passed.

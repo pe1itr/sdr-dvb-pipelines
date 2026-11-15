@@ -33,7 +33,7 @@ symbolrate in **Mode**. DVB-S behoudt zijn bestaande `--fastlock --hq`-instellin
 Dit is een keuze op basis van de uitgevoerde metingen, geen automatische
 meting van signaalsterkte of een optimalisatie voor ieder mogelijk kanaal.
 
-In **Mode** staan vier DVB-S2-instellingen:
+In **Mode** staan de volgende DVB-S2-instellingen:
 
 - **Error correction**: soft-decision LDPC (standaard) of de bestaande bit-flipping.
 - **LDPC workers**: 1–8 workers in totaal. Begin met één; meer workers kosten extra
@@ -44,6 +44,28 @@ In **Mode** staan vier DVB-S2-instellingen:
   batchvorming. Dit is niet de totale ontvangstvertraging.
 - **DVB-S2 acquisition**: standaard *Automatic (symbol rate)*; *Continuous search*
   en *Normal search* blijven als handmatige keuzes beschikbaar.
+
+Op Linux staat bij DVB-S2 ook **Use GPU for DVB-S2 LDPC (experimental)**.
+Dit staat standaard uit en werkt met de ingebouwde soft-decision decoder.
+De eerste ondersteunde combinatie is PI6EHV: 8PSK 3/4, normale frames,
+MODCOD 14. Andere combinaties en een ontbrekende of defecte GPU gebruiken de
+productie-CPU-decoder. Frames zonder geldige GPU-LDPC-oplossing worden met hun
+oorspronkelijke zachte bitwaarden opnieuw op de CPU geprobeerd; BCH blijft op
+de CPU. De log toont het GPU-apparaat en GPU/CPU-frametellers.
+
+Het vinkje gebruikt één GPU-executor en bewaart de bestaande CPU-workerkeuze
+voor wanneer GPU weer uit staat. Batchvorming blijft hoogstens 2 ms wachten;
+er wordt niet extra gewacht om 32 GPU-frames te vullen. De keuze wordt apart
+van DVB-T2 opgeslagen als `[leandvb] gpu_ldpc=true` en geldt bij de volgende
+ontvangststart. Windows gebruikt voorlopig CPU; het S2-GPU-vinkje is daar
+uitgeschakeld. Video-rendering is een afzonderlijke instelling.
+
+De GPU gebruikt FP32 normalized min-sum, tegenover int8 corrected min-sum op
+de productie-CPU. Dit is dus ook een algoritmeverschil. De PI6EHV-opname geeft
+byte-identieke TS en BBFRAME-uitvoer en minder CPU-werk; dit bewijst nog geen
+live ontvangstverbetering of gelijke gevoeligheid onder alle signaalcondities.
+Zie [het GPU-onderzoek](dvbs2-gpu-pi6ehv-investigation-20261109.txt) voor metingen
+en grenzen, waaronder GPU-opstartvertraging en gedeeld gebruik met videoweergave.
 
 De instellingen worden met de bestaande configuratie-opslag bewaard:
 
@@ -76,6 +98,11 @@ builds behouden hun bestaande decoderkeuze; de limiet blijft 25 iteraties.
 Voor **5 MSym/s, 8PSK 3/4** kiest Automatic dus **Throughput**, met standaard **1 worker**.
 Meer workers zijn niet automatisch sneller: zij kunnen de beschikbare frames
 over kleinere SIMD-batches verdelen. Meet met de eigen opname en machine.
+De optionele Linux-GPU-route voor PI6EHV is hierboven beschreven. Het
+[onderzoek](dvbs2-gpu-pi6ehv-investigation-20261109.txt) legt de vergelijking
+met dezelfde opname, kleine realtime batches en controle van foutcorrectie
+vast. De CPU blijft de standaard; gelijktijdige GPU-videoweergave vraagt nog
+een afzonderlijke controle.
 De BCH-controle gebruikt nu tabellen om acht bits tegelijk te verwerken;
 de syndromen en foutcorrectie blijven gelijk. `make test-bch` controleert
 315 schone, herstelbare en onherstelbare gevallen over alle 21 S2-FEC-tabellen.

@@ -1,0 +1,38 @@
+{
+  "date": "2026-11-09",
+  "status": "source feasibility checked; no DVB-S2 GPU implementation or performance measurement yet",
+  "target": {
+    "case": "PI6EHV / existing 1291-fast reference",
+    "symbol_rate": 5000000,
+    "modulation": "8PSK",
+    "code_rate": "3/4",
+    "modcod": 14,
+    "normal_frame_bits": 64800,
+    "ldpc_information_bits": 48600
+  },
+  "table_check": {
+    "s2_table": "DVB_S2_TABLE_B7",
+    "t2_table": "kLdpc_3_4N",
+    "information_groups": 135,
+    "base_addresses": 540,
+    "rows_identical": true,
+    "scope": "base addresses and row order only; does not prove decoder arithmetic or GPU performance equivalence"
+  },
+  "source_sha256": {
+    "third_party/ldpc/dvb_s2_tables.hh": "8bc8e6cc2d79bf0e7cb40b412dc1e67264dc21730e04aed500b03e96e35c3748",
+    "components/dvbt2/src/t2/t2fec_tables.cpp": "d91d807f71c9ca4dc3aa054051960b972cd98660104e4613c07a035fc4ae0ff7"
+  },
+  "existing_iq": {
+    "path": "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+    "available": true,
+    "bytes": 1175977984,
+    "format": "cs16_le",
+    "sample_rate": 6000000,
+    "duration_s": 48.999082666666666,
+    "new_capture_required": false
+  },
+  "historical_reference": "benchmarks/ldpc-2026-11-05.json",
+  "production_cpu": "8-bit saturating corrected min-sum, 25 iterations; SIMD16 for 1..16 frames, SIMD32 for 17..32 on AVX2",
+  "current_t2_gpu": "FP32 normalized min-sum; reuse requires separate algorithm/quality validation",
+  "next_steps": "docs/dvbs2-gpu-pi6ehv-investigation-20261109.txt"
+}

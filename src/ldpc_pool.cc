@@ -19,6 +19,7 @@ extern char **environ;
 struct LdpcPool {
     std::string command;
     unsigned batch;
+    unsigned batch_wait_ms;
     bool stopping = false;
     std::mutex mutex;
     std::condition_variable wake;
@@ -76,8 +77,8 @@ static void worker(LdpcPool *pool) {
             pool->wake.wait(lock, [&] { return pool->stopping || !pool->queue.empty(); });
             if (pool->queue.empty()) break;
             // At most 2 ms batching delay, even for low symbol rates and EOF.
-            if (pool->batch > 1 && pool->queue.size() < pool->batch && !pool->stopping)
-                pool->wake.wait_for(lock, std::chrono::milliseconds(2), [&] {
+            if (pool->batch_wait_ms && pool->batch > 1 && pool->queue.size() < pool->batch && !pool->stopping)
+                pool->wake.wait_for(lock, std::chrono::milliseconds(pool->batch_wait_ms), [&] {
                     return pool->stopping || pool->queue.size() >= pool->batch;
                 });
             if (pool->queue.empty()) continue; // Another worker may have taken it while we waited.
@@ -141,14 +142,18 @@ static void worker(LdpcPool *pool) {
     close_child();
 }
 
-LdpcPool *ldpc_pool_create(const char *command, unsigned workers, unsigned batch) {
+LdpcPool *ldpc_pool_create(const char *command, unsigned workers, unsigned batch, unsigned batch_wait_ms) {
     auto p = new LdpcPool;
-    p->command = command; p->batch = batch;
+    p->command = command; p->batch = batch; p->batch_wait_ms = batch_wait_ms;
     for (unsigned i = 0; i < workers; ++i) p->threads.emplace_back(worker, p);
     return p;
 }
 void ldpc_pool_submit(LdpcPool *p, LdpcFrame *frame) {
     { std::lock_guard<std::mutex> lock(p->mutex); p->queue.push_back(frame); }
+    p->wake.notify_one();
+}
+void ldpc_pool_submit_batch(LdpcPool *p, const std::vector<LdpcFrame *>& frames) {
+    { std::lock_guard<std::mutex> lock(p->mutex); p->queue.insert(p->queue.end(), frames.begin(), frames.end()); }
     p->wake.notify_one();
 }
 void ldpc_pool_destroy(LdpcPool *p) {

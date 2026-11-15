@@ -68,7 +68,7 @@ typedef struct {
     GtkWidget *hackrf_amp_box;
     GtkWidget *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
-    GtkWidget *t2_plp_box, *t2_gpu_box;
+    GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
     GtkWidget *bonding_box, *bonding_button;
     char *bond_control, *bond_json;
     gboolean bond_detected, bond_active, bond_pair;
@@ -77,7 +77,7 @@ typedef struct {
     GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
     GtkWidget *video_frame, *dab_previous, *dab_next;
     GtkWidget *dab_controls, *dab_free_box, *dab_frequency_box;
-    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box;
+    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box, *s2_gpu_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
@@ -567,8 +567,12 @@ static void build_pipeline(App *a) {
         if (embedded && a->standard==1) {
             char *mode=setting(a,"leandvb","ldpc_mode");
             if (!strcmp(mode,"soft")) {
-                add(s,"--ldpc-helper"); add(s,"builtin");
-                add_number(s,"--nhelpers",integer_setting(a,"leandvb","helpers",1,8));
+                gboolean gpu=g_key_file_get_boolean(a->config,"leandvb","gpu_ldpc",NULL);
+#ifdef _WIN32
+                gpu=FALSE;
+#endif
+                add(s,"--ldpc-helper"); add(s,gpu ? "builtin-gpu" : "builtin");
+                add_number(s,"--nhelpers",gpu ? 1 : integer_setting(a,"leandvb","helpers",1,8));
                 int latency=s2_choice(a,"latency",s2_latency_modes,G_N_ELEMENTS(s2_latency_modes));
                 add_number(s,"--ldpc-batch",latency==1 || (latency==0 && s2_narrowband(a)) ? 1 : 32);
             } else if (strcmp(mode,"bitflip")) fatal("Invalid LDPC mode: %s",mode);
@@ -812,6 +816,8 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 }
 
 static void scatter_refresh(App *a) {
+    if (a->t2_controls) gtk_widget_set_visible(a->t2_controls,a->standard==3);
+    if (a->s2_gpu_box) gtk_widget_set_visible(a->s2_gpu_box,a->standard==1);
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2);
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
@@ -2203,6 +2209,9 @@ static void populate_fecs(App *a) {
         gtk_widget_set_sensitive(a->ldpc_mode_box,a->standard==1);
         gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && soft);
         gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && soft);
+#ifndef _WIN32
+        gtk_widget_set_sensitive(a->s2_gpu_box,a->standard==1 && soft);
+#endif
         gtk_widget_set_sensitive(a->s2_acquisition_box,a->standard==1);
     }
     g_signal_handlers_unblock_by_func(a->fec_box, selection_changed, a);
@@ -2440,6 +2449,8 @@ static void source_defaults(App *a) {
         g_key_file_set_integer(a->config,"dvbt2","plp",-1);
     if (!g_key_file_has_key(a->config,"dvbt2","gpu_ldpc",NULL))
         g_key_file_set_boolean(a->config,"dvbt2","gpu_ldpc",FALSE);
+    if (!g_key_file_has_key(a->config,"leandvb","gpu_ldpc",NULL))
+        g_key_file_set_boolean(a->config,"leandvb","gpu_ldpc",FALSE);
     const char *srt_keys[] = {"url", "loss_timeout_ms", "retry_interval_ms", "fps", "video_bitrate_kbps", "x264_preset", "video_threads", "filter_threads"};
     const char *srt_values[] = {"", "2000", "2000", "25", "4000", "veryfast", "0", "0"};
     for (unsigned i = 0; i < G_N_ELEMENTS(srt_keys); ++i)
@@ -3507,8 +3518,12 @@ static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
     g_key_file_set_integer(a->config,"leandvb","helpers",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->ldpc_workers_box)));
     g_key_file_set_string(a->config,"leandvb","latency",s2_latency_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box))]);
     g_key_file_set_string(a->config,"leandvb","acquisition",s2_acquisition_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->s2_acquisition_box))]);
+    g_key_file_set_boolean(a->config,"leandvb","gpu_ldpc",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box)));
     gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && !mode);
     gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && !mode);
+#ifndef _WIN32
+    gtk_widget_set_sensitive(a->s2_gpu_box,a->standard==1 && !mode);
+#endif
     if (!a->running) refresh_preview(a);
 }
 
@@ -3581,18 +3596,36 @@ static void create_mode_renderer(App *a) {
         "Above 333 ksym/s, normal search + throughput.");
     gtk_label_set_xalign(GTK_LABEL(auto_hint),0);
     gtk_grid_attach(GTK_GRID(a->controls),auto_hint,0,9,2,1);
+    a->s2_gpu_box=gtk_check_button_new_with_label("Use GPU for DVB-S2 LDPC (experimental)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box),g_key_file_get_boolean(a->config,"leandvb","gpu_ldpc",NULL));
+    gtk_widget_set_tooltip_text(a->s2_gpu_box,"Linux: try GPU for 8PSK 3/4 normal frames (PI6EHV). Other frames, unavailable GPU and decode failures use CPU. One GPU executor; CPU worker setting is retained. Applies at next reception start; video rendering is separate.");
+#ifdef _WIN32
+    gtk_widget_set_sensitive(a->s2_gpu_box,FALSE);
+    gtk_widget_set_tooltip_text(a->s2_gpu_box,"DVB-S2 GPU LDPC is currently validated on Linux only. Windows uses CPU LDPC.");
+#endif
+    gtk_grid_attach(GTK_GRID(a->controls),a->s2_gpu_box,0,10,2,1);
+    gtk_widget_set_no_show_all(a->s2_gpu_box,TRUE);
+    gtk_widget_set_visible(a->s2_gpu_box,a->standard==1);
     g_free(ldpc_mode);
-    a->t2_plp_box=spin(a->controls,"DVB-T2 PLP (-1 = auto)",10,-1,255,1);
+    a->t2_controls=gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(a->t2_controls),8);
+    gtk_grid_set_column_spacing(GTK_GRID(a->t2_controls),12);
+    gtk_grid_attach(GTK_GRID(a->controls),a->t2_controls,0,11,2,1);
+    a->t2_plp_box=spin(a->t2_controls,"DVB-T2 PLP (-1 = auto)",0,-1,255,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->t2_plp_box),integer_setting(a,"dvbt2","plp",-1,255));
     g_signal_connect(a->t2_plp_box,"value-changed",G_CALLBACK(t2_plp_changed),a);
     a->t2_gpu_box=gtk_check_button_new_with_label("Use GPU for DVB-T2 LDPC (experimental)");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->t2_gpu_box),g_key_file_get_boolean(a->config,"dvbt2","gpu_ldpc",NULL));
     gtk_widget_set_tooltip_text(a->t2_gpu_box,"Off: CPU LDPC. On: try GPU LDPC with CPU fallback. Applies at the next reception start; video rendering is a separate setting.");
-    gtk_grid_attach(GTK_GRID(a->controls),a->t2_gpu_box,0,11,2,1);
+    gtk_grid_attach(GTK_GRID(a->t2_controls),a->t2_gpu_box,0,1,2,1);
     g_signal_connect(a->t2_gpu_box,"toggled",G_CALLBACK(t2_gpu_changed),a);
     GtkWidget *t2_hint=gtk_label_new("DVB-T2 broadcast: 8 MHz. Modulation, FEC and GI are automatic.\nEindhoven NPO: 570 MHz (channel 33); start with 10 Msps.");
     gtk_label_set_xalign(GTK_LABEL(t2_hint),0);
-    gtk_grid_attach(GTK_GRID(a->controls),t2_hint,0,12,2,1);
+    gtk_grid_attach(GTK_GRID(a->t2_controls),t2_hint,0,2,2,1);
+    gtk_widget_show_all(a->t2_controls);
+    /* Opening a dialog with show_all must not reveal another mode's fields. */
+    gtk_widget_set_no_show_all(a->t2_controls,TRUE);
+    gtk_widget_set_visible(a->t2_controls,a->standard==3);
     a->bonding_box=gtk_check_button_new_with_label("Disable automatic DVB-T bonding");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->bonding_box),g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL));
     gtk_widget_set_tooltip_text(a->bonding_box,"Off (default): a valid bonding announcement automatically starts the partner and merger. On: detect only; click the Bonding indicator to join manually. First channel stays centered for both live IQ and files; partner is normally +50 or −50 kHz. Applies at next start. 8 s recovery buffer.");
@@ -3650,6 +3683,7 @@ static void create_mode_renderer(App *a) {
     g_signal_connect(a->ldpc_workers_box,"value-changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->ldpc_latency_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
     g_signal_connect(a->s2_acquisition_box,"changed",G_CALLBACK(ldpc_settings_changed),a);
+    g_signal_connect(a->s2_gpu_box,"toggled",G_CALLBACK(ldpc_settings_changed),a);
     a->renderer_dialog = settings_dialog(a, "Renderer · MPEG-TS output", &a->renderer_panel);
     a->renderer_box = combo(a->renderer_panel, "Output", 0,
         (const char *[]) {"VLC (cvlc)", "VLC with controls", "FFplay", "Custom program", "MPEG-TS file", "Embedded player (right panel)", "UDP stream (external player)", "SRT Full HD (configure [srt] in INI)"},

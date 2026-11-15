@@ -79,6 +79,15 @@ DVBT_OBJECTS := $(patsubst $(DVBT_DIR)/src/%.c,$(BUILD_DIR)/components/dvbt/%.o,
 DVBT_CFLAGS := -I$(DVBT_DIR)/include -Isrc $(FILTER_CFLAGS) -DLINRAD_EMBEDDED_DVBT -DRBDVBT_VERSION=\"0.1.5\"
 include components/dvbt2/component.mk
 
+# Optional S2 GPU executor; one persistent GPU context with production CPU retry.
+ifneq ($(OS),Windows_NT)
+all: $(BUILD_DIR)/ldpc_tool_gpu
+$(BUILD_DIR)/ldpc_tool_gpu: src/dvbs2_gpu_helper.cpp src/ldpc_pool.h $(DVBT2_OBJECTS) $(DVBT2_RUST) $(BUILD_DIR)/leansdr/ldpc_pool.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $< $(DVBT2_OBJECTS) $(DVBT2_RUST) $(BUILD_DIR)/leansdr/ldpc_pool.o -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
+$(BUILD_DIR)/test_dvbs2_gpu_device_failure: src/dvbs2_gpu_helper.cpp tests/dvbs2_gpu_device_failure.cpp $(filter-out $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_stub.o $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_d3d11.o $(BUILD_DIR)/components/dvbt2/dsp/gpu_ldpc_vulkan.o,$(DVBT2_OBJECTS)) $(DVBT2_RUST) $(BUILD_DIR)/leansdr/ldpc_pool.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(DVBT2_FLAGS) $^ -o $@ $(LDFLAGS) -ldl -lm $(LDLIBS)
+endif
+
 # Project-owned TSscatterFix recovery library; RGB callbacks are displayed by GTK.
 SCATTER_DIR := components/tsscatterfix
 SCATTER_SOURCES := $(addprefix $(SCATTER_DIR)/src/,recovery.c media.c rank_model.c psi.c ts_packet.c)

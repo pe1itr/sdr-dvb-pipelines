@@ -1,0 +1,16 @@
+[
+  {
+    "name": "pi6ehv-5m-8psk-3_4",
+    "path": "recordings/linrad-dvb-20261101T103906.819269Z-1291000000-6000000.iq",
+    "rate": 6000000,
+    "header_bytes": 0,
+    "sr": 5000000,
+    "modcods": 16384,
+    "batch": 32,
+    "workers": 1,
+    "fastlock": false,
+    "samples": 293994496,
+    "duration_s": 48.999082666666666,
+    "sha256": "9a1064fbca55beb5b747724b4560a9466817d4bd5e28ac637a393347cf168fe2"
+  }
+]
