@@ -12,6 +12,14 @@ updating it requires review and regression testing. Its namespace remains
 `dect2`. The GPL-3.0 license is preserved in `LICENSE`; this component retains
 its upstream license and attribution within the GPLv3 application.
 
+The imported P1 table source is also acknowledged: `src/t2/t2_tables.cpp`
+identifies [gr-dvbt2](https://github.com/drmpeg/gr-dvbt2), by Ron Economos / W6RZ
+(Copyright 2014 Ron Economos, GPL-3.0-or-later). The inherited source and its
+unrecorded original revision are documented in `UPSTREAM.json`; the pinned
+OnAir import and original hashes are retained. The Linux DVB-S2 GPU helper
+also reuses this component's LDPC tables/decoder and Vulkan backend; its
+S2 protocol and CPU fallback are local application integration.
+
 ## Boundaries
 
 * Component: resampling, P1/P2 acquisition, L1 signalling, OFDM/equalization,

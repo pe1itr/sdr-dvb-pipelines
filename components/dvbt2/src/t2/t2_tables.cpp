@@ -1,5 +1,7 @@
 // Standard tables for the DVB-T2 P1 preamble (ETSI EN 302 755, clause 7.2.5 / 9.8).
 // Values taken from the open-source gr-dvbt2 transmitter (GPL-3.0); not yet checked against the spec text.
+// P1 tables: Copyright 2014 Ron Economos (gr-dvbt2), GPL-3.0-or-later.
+// Source: https://github.com/drmpeg/gr-dvbt2/blob/master/lib/p1insertion_cc_impl.cc
 #include "dect2/t2/t2.h"
 #include <cstdint>
 

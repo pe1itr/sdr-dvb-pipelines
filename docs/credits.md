@@ -28,7 +28,10 @@ Rob Hardenberg develops and maintains Linrad DVB, including its application
 architecture, GTK interface, direct SDR control, receiver settings, signal
 displays, recording, network output and player integration. The DVB-T receiver,
 TSscatterFix and the DAB/DAB+ receiver developed from his dab-monitor project
-are his own receiver and recovery components.
+are his own receiver and recovery components. The experimental DVB-T bonding
+library and receiver merger come from his separate dvb-channel-bonding project;
+[its license status is recorded below](#bonding-license-status). The native
+Pluto RX adapter was adapted from his atv-receiver-analog project.
 
 His work on the imported LeanSDR and OnAir components includes application
 integration, recovery and error-correction fixes, CPU optimizations, optional
@@ -54,6 +57,8 @@ Bundled components retain their own licenses and credits:
 | DVB-S2 LDPC helper | Ahmet Inan / xdsopl; pabr | [0BSD](../third_party/ldpc/LICENSE) · [Origin](../third_party/ldpc/ORIGIN) |
 | DVB-T / rbdvbt | Rob Hardenberg / PE1ITR | [GPL-3.0-only](../components/dvbt/LICENSE) · [History](../components/dvbt/README.md) |
 | DVB-T2 / OnAir | Kristijonas Adomaitis / adswill and contributors | [GPL-3.0](../components/dvbt2/LICENSE) · [Origin](../components/dvbt2/UPSTREAM.json) |
+| DVB-T2 P1 table source, inherited through OnAir | Ron Economos / W6RZ, gr-dvbt2 | GPL-3.0-or-later · [Original source](https://github.com/drmpeg/gr-dvbt2/blob/master/lib/p1insertion_cc_impl.cc) · [Local record](../components/dvbt2/UPSTREAM.json) |
+| DVB-T bonding library and receiver merger | Rob Hardenberg / PE1ITR | [GPL-3.0-only](../components/bonding/LICENSE) · [Origin](../components/bonding/ORIGIN) · [Status](#bonding-license-status) |
 | DAB / DAB+ | Rob Hardenberg / PE1ITR | GPL-3.0-only · [Origin](../components/dab/ORIGIN) |
 | DAB shared DSP | OnAir contributors | [GPL-3.0](../components/dvbt2/LICENSE) · [Origin](../components/dvbt2/UPSTREAM.json) |
 | TSscatterFix | Rob Hardenberg / PE1ITR | [MIT](../components/tsscatterfix/LICENSE) · [History](../components/tsscatterfix/README.md) |
@@ -66,10 +71,60 @@ and the generic resampler and DSP support reused by DAB. Integration, fixes
 and local optimizations are maintained in this repository. The DAB component
 was developed from Rob Hardenberg's own dab-monitor project.
 
-The combined executable is distributed under GPLv3; the component license
-notices remain attached to their respective sources. `make package` copies
-the project license, NOTICE, credits, historical MIT notice and all bundled
-component license texts into `build/`.
+The Linux DVB-S2 GPU helper also reuses OnAir's LDPC code, parity tables and
+Vulkan backend, including the kernel optimized locally for DVB-T2. The S2
+helper protocol, conversion of soft input, production-CPU retry/fallback,
+GUI option and performance tests were added here. This reuses an upstream
+LDPC implementation; it is not an independent new decoder or an arithmetic
+equivalent of the xdsopl/pabr CPU helper.
+
+The imported OnAir `src/t2/t2_tables.cpp` identifies gr-dvbt2 as its P1 table
+source. The [gr-dvbt2 source](https://github.com/drmpeg/gr-dvbt2/blob/master/lib/p1insertion_cc_impl.cc)
+credits **Copyright 2014 Ron Economos** and GPL version 3 or later. This is
+inherited table provenance, not a separately integrated GNU Radio receiver.
+The precise gr-dvbt2 revision used by OnAir is not recorded in the snapshot;
+the exact imported OnAir revision and file hashes remain recorded.
+
+### References and design influences
+
+The earlier DVB-T project's acknowledgement of
+[gr-dvbt](https://github.com/BogdanDIA/gr-dvbt) and LeanSDR as implementation
+and testing references is retained here. This acknowledgement does not
+reclassify the locally developed rbdvbt receiver as a copied decoder.
+The [FUNcube Pro+ protocol header in SoapyFCDPP](https://github.com/pothosware/SoapyFCDPP/blob/master/SoapyFCDPP/fcdcmd.h)
+is a named protocol reference for the local HID implementations; it does not
+mean the SoapyFCDPP plugin is bundled or required by those native backends.
+Linrad's AFEDRI control and signal-meter influence are described above.
+
+The GPU optimization's research references, cuLDPC and Liu and Zhao (2024),
+are recorded in the [DVB-T2 component](../components/dvbt2/README.md#optional-gpu-ldpc-experimental-windows-and-linux).
+These are design references; no cuLDPC or 5G decoder implementation was added
+in the DVB-S2 GPU change. DAB's pinned ETSI and research references are in
+[its source record](../components/dab/ORIGIN).
+
+### Bonding license status
+
+The imported **dvb-channel-bonding 1.6.0** is Rob Hardenberg's own project,
+licensed **GPL-3.0-only**, Copyright (C) 2026 Rob Hardenberg, PE1ITR.
+The source owner added the full GPLv3 text and file notices in commit
+`89100bee201e5d00022673f38d6af468ea6bf44e`; the receiver imports that clean,
+committed snapshot. See [LICENSE](../components/bonding/LICENSE) and
+[ORIGIN](../components/bonding/ORIGIN).
+
+The earlier `719963f` snapshot had no explicit distribution license. That
+open item was resolved by the owner during the
+[2026-11-16 source review](source-attribution-audit-20261116.md). The 16 copied
+source/header/test files differ only by copyright/license comments; executable
+code, declarations and tests remain unchanged. The source project's register
+identifies transport, discovery, TS adapter and merger as local implementations,
+with specification references separate from external test programs. No external
+FEC library is included in the bonding component.
+
+The combined executable is distributed under GPLv3. Component notices remain
+attached to their sources. `make package` copies the project license, NOTICE,
+credits, historical MIT notice and bundled component license texts, including
+`bonding-LICENSE.txt`, into `build/`. The Windows packager also includes the
+bonding license and its corresponding sources.
 
 External / upstream software used by this project, including LeanDVB / LeanSDR, VLC, Linrad, SoapySDR, rtl-sdr, and HackRF libraries, remains subject to its own license terms.
 
@@ -80,11 +135,18 @@ Our libdxdabsdr implements the DAB demodulation and transport; its versioned
 ETSI references and implementation provenance are recorded in
 [components/dab/ORIGIN](../components/dab/ORIGIN) and next to the algorithms. Its sample-rate conversion uses the OnAir resampler above and
 libsamplerate. These external libraries retain their own notices and licenses.
+The native Pluto RX backend uses Analog Devices libiio; the Windows builder
+records libiio 0.26, its source archive and license text. Windows FUNcube IQ
+capture uses hidapi and PortAudio/WASAPI. These are external dependencies,
+not locally developed SDR drivers. Windows package creation collects the SDK
+dependency license directory and the separate libiio/LimeSuite notices.
+
 The optional NVIDIA video player uses FFplay from FFmpeg with CUDA decoding
 and Vulkan/libplacebo rendering; embedded video playback uses libVLC.
 
 Many thanks to these authors and maintainers, and to the contributors to GTK / GLib,
-FFmpeg, FFTW, libzvbi, FAAD2, ALSA, libsamplerate, json-c, UHD, LimeSuite and the SoapySDR
+FFmpeg, FFTW, libzvbi, FAAD2, ALSA, libsamplerate, json-c, UHD, LimeSuite,
+Analog Devices libiio, hidapi, PortAudio and the SoapySDR
 drivers and device libraries, including SDRplay and Airspy support.
 
 ## Licensing policy

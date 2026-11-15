@@ -1,27 +1,33 @@
 Source: local project /home/rhardenb/repos/dvb-channel-bonding
-Revision: 719963f307fc688841011854b240921034c33ca7 (version 1.6.0)
-Files: include/*.h, src/*.[ch], selected C tests and frozen v1 client fixture.
+Revision: 89100bee201e5d00022673f38d6af468ea6bf44e (version 1.6.0)
+Previous receiver snapshot: 719963f307fc688841011854b240921034c33ca7.
+Files: include/*.h, src/*.[ch], selected C tests, frozen v1 client fixture, LICENSE.
 Copied unchanged from clean local upstream checkout.
 Integration: dvb_bond.h API/ABI v1, experimental TS transport.
 Modes: shared XOR protection (0), native separate lanes without XOR (2).
 Retired coded video/audio mode (1) and DBNC are rejected/removed upstream.
-No distribution licence has yet been assigned by the source project.
+Copyright (C) 2026 Rob Hardenberg, PE1ITR.
+License: GPL-3.0-only; see LICENSE and the notices in each source/header/test.
+The source owner assigned this license in commit 89100be on 2026-11-16.
+The 16 previously imported files changed only by GPL copyright/license headers;
+receiver code, declarations and test logic are byte-identical after those headers.
 Included at the user's explicit request to integrate their bonding component.
 
 SHA256:
-a9670842400c46337a552c071b708235ace5f080d7c883c6cae0fea8632a0731  include/bond_discovery.h
-01624564f72c92d281e6eb61c0b874961a580029a2d9e107b78e58c188646394  include/bonding.h
-3ee8bc7cba14d2ab2ca72a6225a3383b7c37aa14c62c6ba8d7cae47d6d03936d  include/dvb_bond.h
-ec4f03b25e396ef8b8914aa2208abc660e539f978eeb5b211183c0d5fd0073b8  src/bond_discovery.c
-1ed00041d7234f38d1638c3712cd56ffb90a6911c36c28527604b81e3c214099  src/bond_media.c
-65b657ba77d68515f8b4e234649a62a81a7c84b6964312eb8460e8d7cb50bb3c  src/bond_media.h
-eab0d21d89f0b9b0ef0fb26c8ff1c5fc21ba71655389f1ef5b6a800126b12fce  src/bond_native.c
-227bde557a61463c742e09160e90616e8fdb93369c06aa0c0670fcc522c5e3df  src/bond_native.h
-33e5b3e05642005003270b56271f6f3fd078ff02143bc47c8fd3ee5b358bf054  src/bonding.c
-9d5ea7fdbd393322984e0a32d3725dfaea71c27b3efc1c000749df553cf49dc4  src/dvb_bond.c
-6a70e75a981432549d364744fa5b4b36f3b0e948572bc2d60f29cb3b01d9c5ec  tests/test_bonding.c
-bcd62a65ded94b5f5cca8d8f7df0c237831bce8272f97a6bc0032d39658529ba  tests/test_discovery.c
-76b384d3731e7df9b79a6660ca0d9d7bd453453a8980c6dd7075a36ab38ad425  tests/test_ts_components.c
-ec288ab8283be42a7116ce77a935ce73c9bc0b57222251fde2cb1bd6cf462daf  tests/test_native_av.c
-1b867b44fa8ece85a8de1609e5dca8f6549c6fdb79f1b6ab81ca87997a0a940a  tests/test_abi_v1.c
-5fd879bba817d3793b3330d7bea04bffe57041132e9b78c66f14f7f500875692  tests/fixtures/dvb_bond_v1_client.h
+ab0d8311d02e3ab2d8a8e5162b2b467dd8effd3f9539033bdbe5053fd83217e8  include/bond_discovery.h
+db6b825272059b9230698ce14c3a95cd281ab49bfdfcb3f0127429134c488f59  include/bonding.h
+df71aa4ddd4606f75210fd1f0001237758dad77dc191a7bb82e744dc5a24d8c5  include/dvb_bond.h
+bc1a13d733b345e64dd842c728fd5b961fdb7cc2efae0f3f4bd17f8136c287cd  src/bond_discovery.c
+f3f5305075f41a5b06b06b163e441b46e7fcd1be313553ba2d37fc5d3b2b89b2  src/bond_media.c
+7b067e3e979a53ee6691af9900d866b35036667fed6fc34628440df86cbfb4e3  src/bond_media.h
+e16beccc71a2835dd022613fc2fe0509bc35ad2cb122b3dd43abb1ead2747a5a  src/bond_native.c
+67595eb7f2d67aa055d9564d14efd4465e0b21a7faa0bf60d1ea50bf30467440  src/bond_native.h
+e7802a8f5fad717441ec542ceca766c6d721588b2a3f97df41e4e20f0341e61d  src/bonding.c
+80d7e84be2d7b90a05c973af1206d7d0df37d37b1d4856a9ebf144df99d48f5b  src/dvb_bond.c
+4173e986550620e8ed63e2eb4a2face366c4d3282ebdc00ad7f9eadae72dd5f3  tests/test_bonding.c
+f9f6934fd5b0be9cf2b3cec86573bc1fd1a1878a4e316b8e86aa4e1f65a391c9  tests/test_discovery.c
+ad93a4ce3988cbedc670b7431835658877e55f7b483dc64223cffe894ef6b2a9  tests/test_ts_components.c
+3fbaa6e31c54519bc68429409bb5a4595ee6b286f170adf5c6e3f01b1df2f9d2  tests/test_native_av.c
+32ddab28ed30c1e7ff434ee2e99bf656f623e93f6d9a995de547ef43a9dc8364  tests/test_abi_v1.c
+b0c9e00581ea4c1e273af21d46774cc256de42457656fa9eb3a297bb69314f12  tests/fixtures/dvb_bond_v1_client.h
+3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986  LICENSE

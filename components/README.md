@@ -10,6 +10,7 @@ update sources. Do not replace these directories with upstream snapshots.
 | [DVB-T / rbdvbt](dvbt/README.md) | IQ to MPEG-TS: acquisition, OFDM, demapping, FEC and TS output | `src/dvbt_backend.c`, `src/decoder_monitor.h` | `make test-dvbt` |
 | [DVB-T2 broadcast](dvbt2/README.md) | 8 MHz IQ to MPEG-TS, automatic L1 parameters and PLP selection | `src/dvbt2_backend.cc`, `src/decoder_monitor.h` | `make test-dvbt2` |
 | [DAB / DAB+](dab/README.md) | Mode-I FIC/TII, weak/DX recovery, DAB+ audio and MOT slides | `src/dab_worker.cpp`, `src/dab_view.c` | `make test-dab` |
+| [DVB-T bonding](../docs/dvbt-bonding.md) | Discover related channels and merge their MPEG-TS, component 1.6.0 from PE1ITR's dvb-channel-bonding project | `src/dvbt_bonding.c` | `make test-dvbt-bonding` |
 | [TSscatterFix](tsscatterfix/README.md) | Reconstruct images from incomplete MPEG-TS; publish recovery status | `src/scatter_backend.c`, `src/scatter_view.c` | `make test-scatter` |
 
 Keep signal processing and recovery algorithms in the component that owns them.
@@ -49,3 +50,7 @@ not part of this source tree; `linrad_dvb` uses the compiled helpers in `src/`.
 
 External LeanSDR and LDPC sources remain under `third_party/` with their own
 licenses and provenance.
+
+The bonding import has its own [source record](bonding/ORIGIN) and
+[GPL-3.0-only license](bonding/LICENSE), assigned by Rob Hardenberg / PE1ITR
+in source commit `89100be`.

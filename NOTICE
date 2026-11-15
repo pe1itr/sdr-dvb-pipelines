@@ -23,8 +23,13 @@ The combined linrad_dvb application is distributed under GNU GPL version 3.
 Bundled code retains its own copyright notices and license terms:
 - third_party/leansdr: GPL-3.0-or-later; see LICENSE.txt and ORIGIN there.
 - third_party/ldpc: 0BSD; see LICENSE and ORIGIN there.
-- components/dvbt2: GPL version 3; see LICENSE and UPSTREAM.json there.
+- components/dvbt2: OnAir, GPL version 3; see LICENSE and UPSTREAM.json there.
+  Its P1 table source is gr-dvbt2, Copyright 2014 Ron Economos, GPL-3.0-or-later.
+  The optional Linux DVB-S2 GPU helper also reuses this OnAir-derived LDPC code.
 - components/tsscatterfix: MIT; see LICENSE there.
+- components/bonding: Rob Hardenberg / PE1ITR's dvb-channel-bonding 1.6.0,
+  GPL-3.0-only; see LICENSE and ORIGIN there. Source owner licensed it in
+  commit 89100bee201e5d00022673f38d6af468ea6bf44e.
 
 The earlier MIT notice for project-owned code is retained in
 docs/licenses/MIT-legacy.txt. This change does not revoke permissions already

@@ -139,7 +139,8 @@ def main():
     for path in (ROOT / "docs/licenses").glob("*"):
         copy(path, Path("docs/licenses") / path.name)
     for folder, name in [("third_party/leansdr", "LICENSE.txt"), ("third_party/ldpc", "LICENSE"),
-                         ("components/dvbt", "LICENSE"), ("components/dvbt2", "LICENSE"), ("components/tsscatterfix", "LICENSE")]:
+                         ("components/dvbt", "LICENSE"), ("components/dvbt2", "LICENSE"), ("components/tsscatterfix", "LICENSE"),
+                         ("components/bonding", "LICENSE")]:
         copy(ROOT / folder / name, Path("licenses") / (Path(folder).name + "-LICENSE.txt"))
     diagnostic = '@echo off\nset LINRAD_DIAGNOSTIC_LOG=1\ncd /d "%~dp0"\necho Log: windows-diagnose.log\n"%~dp0linrad_dvb.exe" > "%~dp0windows-diagnose.log" 2>&1\npause\n'
     (stage / "start-met-log.cmd").write_bytes(diagnostic.replace("\n", "\r\n").encode("ascii"))

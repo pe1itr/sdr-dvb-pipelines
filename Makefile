@@ -171,6 +171,7 @@ package: all
 	cp $(DVBT_DIR)/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
 	cp $(DVBT2_DIR)/LICENSE $(BUILD_DIR)/dvbt2-LICENSE.txt
 	cp $(SCATTER_DIR)/LICENSE $(BUILD_DIR)/tsscatterfix-LICENSE.txt
+	cp components/bonding/LICENSE $(BUILD_DIR)/bonding-LICENSE.txt
 	@echo "Start: ./build/linrad_dvb (config: linrad-dvb.ini)"
 
 $(BUILD_DIR)/gui_smoke: tests/gui_smoke.c tests/sdr_status_endpoint_test.h src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)

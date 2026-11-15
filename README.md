@@ -6,7 +6,8 @@ and television playback, for amateur DATV, weak-signal DX and broadcast receptio
 
 Linrad DVB is developed by **Rob Hardenberg / PE1ITR**. His work includes
 the application and user interface, direct SDR control, the DVB-T receiver,
-the DAB/DAB+ receiver developed from his dab-monitor project, and TSscatterFix.
+the DAB/DAB+ receiver developed from his dab-monitor project, TSscatterFix,
+and the experimental DVB-T bonding library and receiver merger.
 He also integrates and extends the upstream DVB-S/S2 and DVB-T2 decoders,
 with receiver recovery fixes, CPU and GPU optimizations, telemetry and
 Windows support. The origins of those decoder cores remain credited below.
@@ -29,7 +30,9 @@ implementation; the signal meter also takes inspiration from Linrad.
 | DVB-T2 | [OnAir](https://github.com/adswill/OnAir) · adswill and contributors | Integration, recovery fixes and CPU optimizations |
 | DVB-T2 GPU LDPC | OnAir · Direct3D 11 and Vulkan | GPU integration and an optimized Vulkan kernel |
 | DVB-S/S2 | [LeanSDR / LeanDVB](https://github.com/pabr/leansdr) · pabr | Integration, telemetry and FEC improvements |
-| DVB-S2 LDPC | [xdsopl / pabr](https://github.com/pabr/xdsopl-LDPC-pabr) | SIMD selection and worker management |
+| DVB-S2 CPU LDPC | Ahmet Inan / xdsopl, adapted by [pabr](https://github.com/pabr/xdsopl-LDPC-pabr) | SIMD selection, batching and worker management |
+| DVB-S2 GPU LDPC | OnAir LDPC code, tables and Vulkan backend; locally optimized kernel | Optional S2 helper, soft-bit conversion, original-input CPU fallback/retry, tests and measurements |
+| DVB-T bonding | [dvb-channel-bonding](components/bonding/ORIGIN) · PE1ITR, component 1.6.0 | Bonding library, receiver merger, partner control and integration |
 | DAB/DAB+ | [dab-monitor](components/dab/ORIGIN) · PE1ITR | Receiver, audio, data services and DX recovery |
 | TSscatterFix | [TSscatterFix](components/tsscatterfix/README.md) · PE1ITR | Image recovery and application integration |
 
@@ -38,7 +41,12 @@ complete DVB-T2 IQ-to-TS receiver core and the original GPU LDPC implementations
 This project integrates and extends that work. DVB-S/S2 reception uses
 pabr's LeanSDR, including acquisition corrections by Ondřej OK1CDJ; the
 separate LDPC helper originates with Ahmet Inan (xdsopl), adapted by pabr.
-DAB also uses OnAir's generic resampler, libsamplerate and FAAD2 for AAC audio.
+The P1 tables imported through OnAir also credit gr-dvbt2 by Ron Economos / W6RZ.
+DAB uses OnAir's generic resampler, libsamplerate and FAAD2 for AAC audio.
+The optional S2 GPU path reuses the OnAir-derived LDPC implementation; the S2
+helper and CPU fallback are local additions. It is not a new independently
+written LDPC decoder. Reference implementations and research influences are
+listed separately in the [credits](docs/credits.md).
 
 Bundled code retains its original author and license notices. See
 [licenses and acknowledgements](docs/credits.md) for component licenses and
@@ -107,7 +115,10 @@ SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network ou
 - DAB Band III or free-frequency tuning, clickable DAB+ stations, dynamic text,
   MOT slideshow, ensemble/country information and confirmed TII logging.
 - Normal, weak-signal/DX and aircraft-scatter DAB profiles; optional B210 fixed-IF mixer support.
-- Built-in DVB decoders, with parallel LDPC decoding for DVB-S2 and DVB-T2.
+- Built-in DVB decoders, with parallel CPU LDPC for DVB-S2 and DVB-T2,
+  optional experimental GPU LDPC for DVB-T2, and Linux GPU LDPC for PI6EHV DVB-S2.
+- Experimental DVB-T bonding: detect two related 40 kHz channels in one IQ input
+  and merge their MPEG-TS streams; shared and separate video/audio modes.
 - Embedded VLC playback, service selection, EIT programme information and teletext.
 - Switch live DVB video to external FFplay with NVIDIA CUDA decoding and Vulkan rendering.
 - TSscatterFix image recovery from incomplete transport streams.
@@ -144,10 +155,50 @@ See [decoder measurements](docs/decoders.md) for the weak-recording comparisons,
 including the 125 ksym/s DL4FBN reception tests. They are evidence for those
 signals, not a universal sensitivity gain in dB.
 
+On Linux, **Mode → Use GPU for DVB-S2 LDPC (experimental)** optionally moves
+LDPC for **8PSK 3/4 normal frames (MODCOD 14, PI6EHV)** to the GPU. It is off by
+default, requires soft-decision LDPC and takes effect at the next reception
+start. GPU selection uses one executor; the saved CPU worker selection is
+retained for CPU mode. Other frame types, an unavailable/failed GPU and frames
+without valid GPU parity use the production CPU decoder. BCH stays on CPU.
+The log identifies the GPU and reports GPU/CPU frame counts. Windows S2 GPU
+support is not enabled. GPU video playback is a separate choice.
+
+In two original-rate replays of the same 49-second PI6EHV recording on Linux
+Ryzen 7 5800H / RTX 3050, decoder-plus-helper CPU time fell from a median
+**46.44 s to 21.43 s (54% less)** with byte-identical TS and BBFRAME output.
+This frees about half a CPU core over that source duration; it does not mean
+54% less load across the whole machine. The full unpaced chain was slower
+with GPU initialization included: **14.54 s versus 12.71 s on CPU**. The GPU
+uses FP32 normalized min-sum rather than the production CPU's int8 corrected
+min-sum; matching data on this recording does not establish equal sensitivity
+under all conditions. Live reception and simultaneous video playback require
+separate validation. See the [measurements](benchmarks/dvbs2-gpu-2026-11-16.json)
+and [investigation](docs/dvbs2-gpu-pi6ehv-investigation-20261109.txt).
+
 **D margin**, in Service info for DVB-S/S2, estimates reception reserve from
 MER and a modulation/FEC reference threshold. Red is below 0 dB, orange is
 0–2 dB and green is at least 2 dB. It is an aid to tuning, not a calibrated
 guarantee of picture or audio; unsupported or unavailable values show `—`.
+
+### Experimental DVB-T bonding
+
+The integrated receiver merger uses PE1ITR's **dvb-channel-bonding 1.6.0**
+component. It discovers the partner channel from received announcements and
+runs two DVB-T decoders on the same IQ input. The transmitter selects shared
+transport with XOR protection or separate video/audio lanes; the receiver
+recognizes the mode and merges the received streams before normal playback,
+recording and network output. Separate lanes do not provide XOR repair.
+
+**Mode → Disable automatic DVB-T bonding** keeps standalone reception active
+while still detecting announcements; the Bonding indicator can then join
+manually. The default recovery buffer is eight seconds. This is a local
+experimental transport, not a claim of standardized DVB channel bonding or
+guaranteed recovery. See [receiver operation and limitations](docs/dvbt-bonding.md)
+and the [three recorded trials](docs/dvbt-bonding-drie-proeven-20261115.md).
+The component is **GPL-3.0-only**, Copyright 2026 Rob Hardenberg / PE1ITR;
+its [source record](components/bonding/ORIGIN) pins the licensing commit and
+[LICENSE](components/bonding/LICENSE) contains the full terms.
 
 ### TSscatterFix: recovering pictures from incomplete reception
 
@@ -201,7 +252,7 @@ only where applicable; hover over a control for its tooltip.
 | --- | --- |
 | **Input** | Select the SDR, Linrad UDP or an IQ file; configure sample rate, device arguments, gain-related options, tuning step and frequency offsets. Stop reception to change hardware settings. |
 | **Receive frequency (MHz)** | Click the displayed frequency to enter a receive frequency in MHz while reception continues; press Enter or Tune. Accepts a decimal point or comma and includes configured frequency offsets. Direct SDR input only. DAB switches to Free frequency for values outside the channel list. |
-| **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 DX/LDPC options, DVB-T2 PLP, or DAB channel/profile. |
+| **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 acquisition/CPU/GPU LDPC, DVB-T bonding, DVB-T2 PLP/GPU LDPC, or DAB channel/profile. |
 | **Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
 | **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
 | **Record IQ** | Start/stop raw sample recording during live reception, with metadata for replay. This is different from saving decoded MPEG-TS through Renderer. |
@@ -294,9 +345,12 @@ throughput on a physical N2 is **not yet validated**. See the
 **8 MHz DVB-T2 is demanding, and smooth, loss-free reception is not yet
 established on the tested Ryzen 5 5500H Windows system.** A constellation or
 high SNR can coexist with damaged or missing data and interrupted video.
-The receiver performs demodulation and LDPC/BCH error correction on the CPU.
-Selecting **Extern op GPU** only moves video playback to the GPU-capable player;
-there is no shipped GPU LDPC decoder.
+CPU remains the default for demodulation and LDPC/BCH error correction.
+**Mode → Use GPU for DVB-T2 LDPC (experimental)** separately enables optional
+Direct3D 11 LDPC with CPU fallback; signalling, demodulation and BCH remain on
+CPU. This implementation does not establish loss-free native Windows
+reception. **Extern op GPU** controls video playback independently. The Linux
+DVB-S2 GPU option described above is not enabled on Windows.
 
 The GPU renderer made the picture substantially more watchable in the user's
 Windows tests. One measured interval reached about 18,800 TS packets/s with
@@ -660,18 +714,20 @@ the retired workflow and Git history.
 Linrad DVB and its DVB-T receiver are licensed under **GNU GPL version 3 only
 (`GPL-3.0-only`)**. Copyright (c) 2026 Rob Hardenberg / PE1ITR.
 See [LICENSE](LICENSE) for the full terms and [NOTICE](NOTICE) for the scope.
-You may use, modify and redistribute the software, including commercially,
-under those terms. When distributing the combined application, preserve the
-notices and provide the corresponding source as required by GPLv3.
+These terms permit use, modification and redistribution, including
+commercially, with the applicable notices and corresponding source. The
+DVB-T bonding component developed by PE1ITR is also explicitly GPL-3.0-only.
 
 Bundled components retain their own licenses and author notices. The earlier
 MIT notice for project-owned code is preserved in
 [MIT-legacy.txt](docs/licenses/MIT-legacy.txt); permissions already granted for
 earlier releases remain in effect.
 
+The bonding source owner added GPL-3.0-only notices and the full license in
+commit `89100be`; the receiver imports that exact version. See its
+[source record](components/bonding/ORIGIN) and [license](components/bonding/LICENSE).
+
 Thanks to the authors and contributors of LeanSDR / LeanDVB, xdsopl LDPC,
-OnAir, Linrad and the SDR, media and GUI libraries used here. Full attribution,
+OnAir, gr-dvbt2, Linrad and the SDR, media and GUI libraries used here. Full attribution,
 component licenses and source provenance are in
 [licenses and acknowledgements](docs/credits.md).
-
-Experimentele [DVB-T channel bonding](docs/dvbt-bonding.md): twee 40-kHz-kanalen uit één IQ-invoer, automatische partnerdetectie en MPEG-TS-merging.

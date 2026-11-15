@@ -11,7 +11,11 @@ aan de merger. De gereconstrueerde of geremuxte TS gaat bij ingeschakelde bondin
 naar de bestaande TSscatterFix-, programma-, opname- en spelerverwerking.
 Het protocol is experimenteel en geen algemene DVB-bondingstandaard.
 
-De component is bijgewerkt naar **1.6.0**, bronrevisie `719963f`. De zender
+De component is bijgewerkt naar **1.6.0**, bronrevisie `89100be`.
+De code is van Rob Hardenberg / PE1ITR en valt onder
+[GPL-3.0-only](../components/bonding/LICENSE). De licentiecommit verandert de
+mergerwerking niet; de [herkomst en bestandshashes](../components/bonding/ORIGIN)
+blijven vastgelegd. De zender
 kiest uit twee mechanismen die de ontvanger automatisch uit de PMT herkent:
 
 - **Gedeeld (distribution 0)**: de bestaande private TS-overdracht met XOR8,
