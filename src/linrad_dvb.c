@@ -237,11 +237,11 @@ static void bonding_refresh(App *a) {
     gtk_label_set_ellipsize(GTK_LABEL(label),PANGO_ELLIPSIZE_END);
     gtk_label_set_justify(GTK_LABEL(label),GTK_JUSTIFY_CENTER);
     /* Keep both lines inside the compact spectrum control row. The heading
-     * uses the small button font; the status is smaller and less heavy. */
+     * uses the small button font; the status is smaller. */
     PangoAttrList *attributes=pango_attr_list_new();
     PangoAttribute *size=pango_attr_size_new_absolute(8*PANGO_SCALE);
     size->start_index=strlen("Bonding\n");pango_attr_list_insert(attributes,size);
-    PangoAttribute *weight=pango_attr_weight_new(PANGO_WEIGHT_NORMAL);
+    PangoAttribute *weight=pango_attr_weight_new(PANGO_WEIGHT_BOLD);
     weight->start_index=strlen("Bonding\n");pango_attr_list_insert(attributes,weight);
     gtk_label_set_attributes(GTK_LABEL(label),attributes);pango_attr_list_unref(attributes);
     GtkStyleContext *style=gtk_widget_get_style_context(a->bonding_button);
@@ -3861,6 +3861,7 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->fm_data_toggle,FALSE,FALSE,0);
     g_signal_connect(a->fm_data_toggle,"toggled",G_CALLBACK(usb_toggled),a);
     a->reception_button=gtk_button_new_with_label("Log");
+    gtk_widget_set_name(a->reception_button,"spectrum-log");
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->reception_button,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->reception_button,"Add the current digital service and provider to the reception log");
     g_signal_connect(a->reception_button,"clicked",G_CALLBACK(show_reception_log),a);

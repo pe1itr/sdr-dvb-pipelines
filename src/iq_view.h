@@ -236,6 +236,7 @@ static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     gtk_widget_set_name(v->filter_toggle,"spectrum-bw");
     atk_object_set_name(gtk_widget_get_accessible(v->filter_toggle),"IQ bandpass filter on/off");
     v->filter_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,4);
+    gtk_widget_set_name(v->filter_controls,"spectrum-controls");
     gtk_box_pack_start(GTK_BOX(v->filter_controls),v->filter_toggle,FALSE,FALSE,0);
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay),v->filter_controls);
     for (int i=0; i<4; ++i) {

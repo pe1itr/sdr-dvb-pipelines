@@ -67,6 +67,8 @@ static void apply_receiver_theme(void) {
         "button.information-button label { background-color: transparent; }"
         "button.information-button.information-ready { background-color: #145c2e; border-color: #53ed85; }"
         "button.information-button.information-ready:hover { background-color: #1c743c; }"
+        /* Use the same outline for action buttons, toggles and status lamps. */
+        "#spectrum-controls > button { border-width: 2px; border-style: solid; border-radius: 2px; }"
         "#spectrum-bw, #spectrum-scatter { min-width: 24px; min-height: 18px; padding: 1px 4px; border-radius: 2px; font-weight: bold; }"
         "#spectrum-bw label, #spectrum-scatter label { background-color: transparent; }"
         "#spectrum-bw:checked, #spectrum-scatter:checked { background-color: #b52323; border-color: #ff7070; color: #ffffff; }"
@@ -78,7 +80,12 @@ static void apply_receiver_theme(void) {
         "#spectrum-bonding.bonding-lit, #spectrum-bonding.bonding-lit:disabled {"
         " background-color: #145c2e; background-image: none; border-color: #53ed85; opacity: 1; }"
         "#spectrum-bonding.bonding-lit label, #spectrum-bonding.bonding-lit:disabled label {"
-        " color: #70ff9c; background-color: transparent; opacity: 1; }"
+        " background-color: transparent; opacity: 1; }"
+        /* These actions can be unavailable while their captions stay legible. */
+        "#spectrum-bonding, #spectrum-log { opacity: 1; font-weight: bold; }"
+        "#spectrum-bonding label, #spectrum-bonding:disabled label,"
+        "#spectrum-log label, #spectrum-log:disabled label {"
+        " color: #ffffff; font-weight: bold; background-color: transparent; opacity: 1; }"
         "#spectrum-usb:checked, #spectrum-fm:checked, #spectrum-fm-data:checked { background-color: #7a4a08; border-color: #ffcc66; color: #ffffff; }"
         "#spectrum-usb:checked:hover, #spectrum-fm:checked:hover, #spectrum-fm-data:checked:hover { background-color: #966014; }"
         /* Keep window decorations light, including inactive windows. Override
