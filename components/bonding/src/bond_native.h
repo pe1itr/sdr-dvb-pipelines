@@ -16,5 +16,4 @@ int bond_native_rx_pop(bond_native *n, uint64_t now, uint8_t p[188]);
 uint64_t bond_native_due(const bond_native *n, unsigned lane);
 void bond_native_status(const bond_native *n, dvb_bond_status_v1 *s);
 int bond_native_event(bond_native *n, dvb_bond_event_v1 *e);
-int bond_native_contract(const dvb_bond_config_v1 *c, char *b, size_t capacity);
 #endif

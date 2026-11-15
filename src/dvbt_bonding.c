@@ -153,7 +153,10 @@ int dvbt_bonding_main(int argc,char **argv) {
                     /* A malformed/lost outer packet is receiver damage;
                      * library counters and deadlines handle recovery. */
                 }
-                if (!active && !discovered && fwrite(p->bytes,1,188,stdout)!=188) fail(&h,"TS output closed");
+                /* Detection alone must not mute standalone reception when
+                 * automatic bonding is disabled. Switch output only once
+                 * the partner and merger are actually enabled. */
+                if (!active && fwrite(p->bytes,1,188,stdout)!=188) fail(&h,"TS output closed");
             }
             g_free(p);
         }

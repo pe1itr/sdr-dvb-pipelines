@@ -1,5 +1,5 @@
 Source: local project /home/rhardenb/repos/dvb-channel-bonding
-Revision: a82d3731a072fb9ea8e20f38c29c433601080166 (version 1.5.1)
+Revision: 719963f307fc688841011854b240921034c33ca7 (version 1.6.0)
 Files: include/*.h, src/*.[ch], selected C tests and frozen v1 client fixture.
 Copied unchanged from clean local upstream checkout.
 Integration: dvb_bond.h API/ABI v1, experimental TS transport.
@@ -11,17 +11,17 @@ Included at the user's explicit request to integrate their bonding component.
 SHA256:
 a9670842400c46337a552c071b708235ace5f080d7c883c6cae0fea8632a0731  include/bond_discovery.h
 01624564f72c92d281e6eb61c0b874961a580029a2d9e107b78e58c188646394  include/bonding.h
-9d3fb49c2a447a8f37f1322885da3992e5cc51101b38bd913a36e1ad13ab2af8  include/dvb_bond.h
+3ee8bc7cba14d2ab2ca72a6225a3383b7c37aa14c62c6ba8d7cae47d6d03936d  include/dvb_bond.h
 ec4f03b25e396ef8b8914aa2208abc660e539f978eeb5b211183c0d5fd0073b8  src/bond_discovery.c
 1ed00041d7234f38d1638c3712cd56ffb90a6911c36c28527604b81e3c214099  src/bond_media.c
 65b657ba77d68515f8b4e234649a62a81a7c84b6964312eb8460e8d7cb50bb3c  src/bond_media.h
-84f631b6ca720def2d851b2bb66a4231538defd0c0cf00ef7b29418df4148819  src/bond_native.c
-21e1a59cdb854d32cc9be0ee80aa599ea9db51effcc0eb48e4dfd6e1612e5a1d  src/bond_native.h
+eab0d21d89f0b9b0ef0fb26c8ff1c5fc21ba71655389f1ef5b6a800126b12fce  src/bond_native.c
+227bde557a61463c742e09160e90616e8fdb93369c06aa0c0670fcc522c5e3df  src/bond_native.h
 33e5b3e05642005003270b56271f6f3fd078ff02143bc47c8fd3ee5b358bf054  src/bonding.c
-580e3c17c3c3670853ee94940efa733530b77e7db922c87ec953bc4641819dce  src/dvb_bond.c
+9d5ea7fdbd393322984e0a32d3725dfaea71c27b3efc1c000749df553cf49dc4  src/dvb_bond.c
 6a70e75a981432549d364744fa5b4b36f3b0e948572bc2d60f29cb3b01d9c5ec  tests/test_bonding.c
 bcd62a65ded94b5f5cca8d8f7df0c237831bce8272f97a6bc0032d39658529ba  tests/test_discovery.c
 76b384d3731e7df9b79a6660ca0d9d7bd453453a8980c6dd7075a36ab38ad425  tests/test_ts_components.c
-60455bfc2754170a38b8d9bcf94bdaf583ad96d99e46e8f7aaa4a2ab4c306800  tests/test_native_av.c
+ec288ab8283be42a7116ce77a935ce73c9bc0b57222251fde2cb1bd6cf462daf  tests/test_native_av.c
 1b867b44fa8ece85a8de1609e5dca8f6549c6fdb79f1b6ab81ca87997a0a940a  tests/test_abi_v1.c
 5fd879bba817d3793b3330d7bea04bffe57041132e9b78c66f14f7f500875692  tests/fixtures/dvb_bond_v1_client.h

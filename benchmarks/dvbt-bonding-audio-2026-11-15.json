@@ -1,0 +1,76 @@
+{
+  "lane-50000": {
+    "audio_codec": "aac_latm",
+    "sample_rate": 24000,
+    "pid": 258,
+    "audio_packets": 551,
+    "audio_payload_bytes": 90645,
+    "audio_payload_sha256": "ebbd3ffc29837d962194fc1a60118a766f0a046f21256fa883ab8f1e466bd6c3",
+    "pcm_bytes": 2672640,
+    "pcm_sha256": "3536e25fd5576a39fe0e5242ca004c3d024cf693b08a6eecdfb48d0dc9e60fb9",
+    "decoded_audio_seconds": 55.68,
+    "segments": [
+      {
+        "start": 151.016,
+        "end": 206.69599966666667,
+        "samples": 1336320
+      }
+    ],
+    "segment_count": 1,
+    "longest_segment_seconds": 55.68
+  },
+  "on": {
+    "audio_codec": "aac_latm",
+    "sample_rate": 24000,
+    "pid": 258,
+    "audio_packets": 548,
+    "audio_payload_bytes": 90152,
+    "audio_payload_sha256": "ba9619af0e3c543c3201bc207a839585208fcf974c5aeefa1796e6ae22c75826",
+    "pcm_bytes": 2648064,
+    "pcm_sha256": "d5688422a7e9f7c2665a1b9fff883f745e493cb4051155d312b174f2e0fa60a7",
+    "decoded_audio_seconds": 55.168,
+    "segments": [
+      {
+        "start": 151.528,
+        "end": 206.69599966666667,
+        "samples": 1324032
+      }
+    ],
+    "segment_count": 1,
+    "longest_segment_seconds": 55.168
+  },
+  "comparison_after_acquisition": {
+    "raw_audio_prefix_seconds": 0.512,
+    "common_pcm_bytes": 2648064,
+    "common_pcm_identical": false,
+    "common_pcm_sha256": "d5688422a7e9f7c2665a1b9fff883f745e493cb4051155d312b174f2e0fa60a7",
+    "encoded_payload_common_suffix_identical": true,
+    "encoded_payload_prefix_bytes": 493,
+    "pcm_differing_samples": 1019,
+    "pcm_last_difference_seconds": 0.042666666666666665
+  },
+  "input": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-bonding-qpsk-bw40000-gi1-32-fec1-2-fs250000-60s-KMvKDN.cf32",
+  "recording_seconds": 60,
+  "interpretation": "Clean source has continuous decoded audio. Raw B provides 55.680s; merged output provides 55.168s. Initial acquisition discards a 493-byte encoded prefix (0.512s of decoded audio); all remaining encoded audio payload bytes match exactly. Decoded PCM differs only in the first AAC frame (1024 samples); all following aligned PCM samples match. No recurring merge loss observed in this clean-source trial.",
+  "decoder_health": {
+    "nonzero_rs_uncorrectable_health_lines": 0,
+    "adapter_iq_drops": [
+      0,
+      0
+    ]
+  },
+  "comparison_with_received_recording": {
+    "file": "KMvKDN_rx.iq",
+    "decoded_audio_seconds": 14.762666666666666,
+    "segments": 20,
+    "longest_segment_seconds": 6.656,
+    "note": "Sequential replay of existing recording, not a new RF measurement. Clean input comparison shows continuous source and preserved merged payload after acquisition; does not independently audit every damaged-packet path in the noisy replay."
+  },
+  "full_capture_payload_identical": false,
+  "full_capture_decoded_pcm_identical": false,
+  "date": "2026-11-15",
+  "artifact_directories": [
+    "build/bonding-clean-source-check/",
+    "build/bonding-live-audio-check/"
+  ]
+}

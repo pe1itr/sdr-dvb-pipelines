@@ -91,13 +91,12 @@ uint32_t dvb_bond_api_version(void);
  * publish the structured input contract for per-lane packetization costs.
  * Returns 0 for invalid or retired modes. */
 uint32_t dvb_bond_source_limit_v1(const dvb_bond_config_v1 *config);
-/* Publish the selected splitter input requirements BEFORE starting a generator.
- * Host owns HTTP/UI/file transport; recompute after mode/profile/rate changes.
- * JSON publishes input cadence, mode-specific costs and encoder_preset_supported=false.
- * Protection is selectable only for SHARED; separate lanes always report NONE.
- * A non-null supported input_timing_profile may authorize automatic TS timing
- * without authorizing codec configuration or claiming full ETSI conformance.
- * Returns bytes excluding NUL, or -1 for invalid args/config or small buffer. */
+/* Generator-facing delivery requirements, JSON schema v1. The only transport
+ * label is "DVB-T bonding shared" or "DVB-T bonding lanes". All other fields
+ * describe the source MPEG-TS, timing and bitrate accounting, with no internal
+ * protection settings, discovery metadata, certifications or permission flags.
+ * Publish before starting a generator; refresh after sender configuration changes.
+ * Returns bytes excluding NUL, or -1 for invalid/unavailable rates, args or buffer. */
 int dvb_bond_tx_input_contract_json_v1(const dvb_bond_config_v1 *config,
                                        char *buffer, size_t capacity);
 

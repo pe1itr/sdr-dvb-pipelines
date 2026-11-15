@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-15",
+  "purpose": "Saved three-trial comparison and assessment for a future website article; not published.",
+  "summary_document": "docs/dvbt-bonding-drie-proeven-20261115.md",
+  "common_settings": {
+    "iq_sample_rate": 250000,
+    "recording_duration_approx_seconds": 60,
+    "dvb_t_channel_bandwidth_hz": 40000,
+    "channel_spacing_hz": 50000,
+    "modulation": "QPSK",
+    "fft": 2048,
+    "fec": "1/2",
+    "guard": "1/32",
+    "source_ts_bitrate": 50100,
+    "per_lane_ts_bitrate": 30160,
+    "audio_codec": "AAC-LATM",
+    "audio_rate_hz": 24000,
+    "audio_channels": 1
+  },
+  "trials": [
+    {
+      "mode": "separate_lanes",
+      "power_w": 250,
+      "distribution": 2,
+      "protection": "none",
+      "decoded_audio_seconds": 24.704,
+      "audio_segments": 20,
+      "longest_audio_seconds": 7.68,
+      "audio_segments_at_least_one_second": 8,
+      "decoded_video_frames": 141,
+      "adapter_iq_drops": [
+        0,
+        0
+      ],
+      "input_sha256": "1dc8dd23b0ea540a001100e255540487cb52f03ae7bbf3fb56676af28d8fad9b",
+      "report": "benchmarks/dvbt-bonding-plus3db-2026-11-15.json"
+    },
+    {
+      "mode": "shared",
+      "power_w": 125,
+      "distribution": 0,
+      "protection": "xor16",
+      "interleave_groups": 1,
+      "decoded_audio_seconds": 11.477333333333334,
+      "audio_segments": 12,
+      "longest_audio_seconds": 7.466666666666667,
+      "audio_segments_at_least_one_second": 1,
+      "decoded_video_frames": 40,
+      "merger_counters": {
+        "missing_packets": 970,
+        "recovered_symbols": 0
+      },
+      "adapter_iq_drops": [
+        0,
+        0
+      ],
+      "input_sha256": "4bc5a57f3e65bfca5dcd13c41c7a841be851b6c1d5c630b1bc5f749b74836a8f",
+      "report": "benchmarks/dvbt-bonding-shared-125w-2026-11-15.json"
+    },
+    {
+      "mode": "shared",
+      "power_w": 250,
+      "distribution": 0,
+      "protection": "xor16",
+      "interleave_groups": 1,
+      "decoded_audio_seconds": 20.010666666666665,
+      "audio_segments": 23,
+      "longest_audio_seconds": 7.978666666666666,
+      "audio_segments_at_least_one_second": 5,
+      "decoded_video_frames": 77,
+      "merger_counters": {
+        "missing_packets": 957,
+        "recovered_symbols": 0
+      },
+      "adapter_iq_drops": [
+        0,
+        0
+      ],
+      "input_sha256": "a253667ca235b0199bf730f71e4eed598306f39e78b69301392540a81d7fde2e",
+      "report": "benchmarks/dvbt-bonding-shared-250w-2026-11-15.json"
+    }
+  ],
+  "method": {
+    "audio_seconds": "sum of decoded audio samples divided by sample rate",
+    "audio_segments": "decoded frame source timestamps; gap >0.001s starts new segment",
+    "video_frames": "decoded frames including damaged/concealed frames, not a clean-picture score",
+    "measurement": "live status observation plus independent realtime replay of the existing IQ file to TS and FFmpeg analysis"
+  },
+  "assessment": "Separate lanes at250W recovered the most total decoded audio and video frames in this set. Shared250W improved on shared125W and had slightly longer longest audio segment than separate250W. No XOR symbol recoveries were recorded; this does not mean repair was unnecessary or defective. All recordings retain interruptions.",
+  "limitations": [
+    "One generated recording per compared setting, with additional replays of that recording.",
+    "User confirms generated noise was not identical; noise_seed was unset.",
+    "Not a strictly controlled power-only or mode-only A/B.",
+    "Same content user-reported; source streams not byte-verified across modes and PTS differ.",
+    "Acquisition affects total recovered media.",
+    "No full ETSI conformance or universal mode ranking."
+  ],
+  "next_trial_proposal": {
+    "mode": "shared hybrid16 with time interleaving",
+    "status": "proposed, not measured or configured",
+    "why": "Extra targeted symbol copy plus spreading groups may help burst losses; not a guarantee for long dual-lane fades.",
+    "source_ceiling_bps_at_current_defaults": 47541,
+    "upstream_transport_test_source_bps": 46000,
+    "current_50100_bps_source_fits": false,
+    "checks_needed": [
+      "actual sender input contract and source media budget",
+      "required playout buffer and additional delay",
+      "same power and fixed noise seed, repeated runs",
+      "record source bitrate/content changes"
+    ]
+  }
+}

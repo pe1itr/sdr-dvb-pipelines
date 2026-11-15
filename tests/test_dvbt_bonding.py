@@ -26,6 +26,9 @@ class Bonding(unittest.TestCase):
     def test_opt_out_detects_without_starting_partner(self):
         self.merge_trial(automatic=False, upper=False, activate=False)
 
+    def test_native_opt_out_keeps_standalone_video_after_detection(self):
+        self.merge_trial(automatic=False, upper=False, activate=False, native=True)
+
     def test_native_distribution_from_video_lane(self):
         self.merge_trial(automatic=True, upper=False, native=True)
 
@@ -120,6 +123,8 @@ while sys.stdin.buffer.read(8192): pass
                 self.assertNotIn('[bond] active', text)
                 self.assertNotIn('receiver=1', text)
                 self.assertFalse(partner.exists())
+                lane=(b if upper else a).read_bytes()
+                self.assertEqual(actual, lane if native else lane+lane)
 
     def test_regular_ts_passes_unchanged_without_discovery(self):
         with tempfile.TemporaryDirectory() as folder:

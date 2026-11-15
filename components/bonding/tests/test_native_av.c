@@ -59,7 +59,8 @@ static void run(unsigned drop_b, unsigned swap)
     c.distribution = DVB_BOND_DISTRIBUTION_SEPARATE_LANES; c.profile = DVB_BOND_PROFILE_NONE;
     c.playout_delay_ns = UINT64_C(500000000);
     char contract[4096]; CHECK(dvb_bond_tx_input_contract_json_v1(&c, contract, sizeof(contract)) > 0);
-    CHECK(strstr(contract, "\"repair_bps\":0")); CHECK(strstr(contract, "\"private_media_framing_bps\":0"));
+    CHECK(strstr(contract, "DVB-T bonding lanes"));
+    CHECK(!strstr(contract, "protection") && !strstr(contract, "automatic_") && !strstr(contract, "etsi"));
     dvb_bond_tx *t = dvb_bond_tx_create_v1(&c); CHECK(t);
     dvb_bond_config_v1 rc; dvb_bond_config_init_v1(&rc); rc.session = 0; rc.playout_delay_ns = c.playout_delay_ns;
     dvb_bond_rx *r = dvb_bond_rx_create_v1(&rc); CHECK(r); /* No receiver mode setting. */

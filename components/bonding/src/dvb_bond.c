@@ -120,39 +120,27 @@ uint32_t dvb_bond_source_limit_v1(const dvb_bond_config_v1 *c)
 }
 int dvb_bond_tx_input_contract_json_v1(const dvb_bond_config_v1 *c, char *buffer, size_t capacity)
 {
-    if (!buffer || !capacity || !shape(c) || !c->source_bitrate) return -1;
-    if (c->distribution == DVB_BOND_DISTRIBUTION_SEPARATE_LANES) return bond_native_contract(c, buffer, capacity);
-    static const char *const profiles[] = {"xor8", "xor16", "hybrid16"};
-    uint32_t ceiling = dvb_bond_source_limit_v1(c);
-    /* This authorizes source mux timing only, independently of codec choice
-     * and of conformance of the experimental outer channel streams. */
-    int supported = c->source_bitrate == 50100 && c->source_bitrate <= ceiling &&
-        c->profile == DVB_BOND_PROFILE_XOR16 && c->interleave_groups == 1;
-    const char *timing_profile = supported ?
-        "{\"id\":\"shared_cbr50100_pcr100_psi500_v1\",\"supported\":true,"
-        "\"scope\":\"source_ts_timing_monitoring_subset\",\"total_ts_bitrate_bps\":50100,"
-        "\"single_program_required\":true,\"pcr_pid_requirement\":\"video\","
-        "\"pcr_max_gap_ms\":100,\"pcr_max_gap_packets\":3,"
-        "\"pat_pmt_max_gap_ms\":500,\"pat_pmt_period_packets\":15,\"pat_pmt_max_section_packets\":1,"
-        "\"sdt_actual_max_gap_ms\":2000,\"nit_actual_max_gap_ms\":10000,"
-        "\"eit_pf_actual_each_section_max_gap_ms\":2000,\"tdt_max_gap_ms\":30000,"
-        "\"includes_codec_configuration\":false,\"full_etsi_conformance_validated\":false}" : "null";
-    const char *reason = supported ? "source_ts_timing_profile_available_codec_and_delivery_unvalidated" :
-        c->source_bitrate > ceiling ? "source_cadence_exceeds_transport_limit" : "selected_configuration_has_no_source_timing_profile";
+    if (!buffer || !capacity || !shape(c) || c->source_bitrate < 15040 ||
+        c->source_bitrate > dvb_bond_source_limit_v1(c)) return -1;
+    int separate = c->distribution == DVB_BOND_DISTRIBUTION_SEPARATE_LANES;
+    /* Public delivery requirements, not a description of the transport.
+     * Limits count ordinary TS/PES data; the generator need not implement or
+     * identify channels, protection, discovery, or reconstruction. */
+    const char *limits = separate ?
+        "{\"video_and_system_ts_max_bps\":24128,\"audio_and_si_ts_max_bps\":24128,"
+        "\"include_si_in_each_budget\":true,\"audio_budget_payload_bytes_per_ts_packet\":176,"
+        "\"audio_budget_rounding\":\"per_pes\",\"pat_max_section_bytes\":183,\"pmt_max_section_bytes\":121}" : "null";
     int n = snprintf(buffer, capacity,
-        "{\"schema_version\":1,\"contract_owner\":\"dvb_bond_splitter\","
-        "\"transport_version\":3,\"revision\":%u,\"session\":\"%llu\","
-        "\"mode\":{\"distribution\":0,\"name\":\"shared\",\"protection\":%u,\"protection_name\":\"%s\",\"interleave_groups\":%u},"
-        "\"delivery\":{\"profile\":\"experimental_private_ts\",\"etsi_service_supported\":false},"
+        "{\"schema_version\":1,\"mode\":\"%s\","
         "\"input\":{\"format\":\"mpegts\",\"packet_size_bytes\":188,\"pacing\":\"cbr\",\"total_ts_bitrate_bps\":%u,"
-        "\"single_program_required\":false,\"pat_pmt_before_media_required\":false,\"preserve_pcr_pts\":true,\"source_null_payload\":\"preserved\"},"
-        "\"transport_limits\":{\"scope\":\"byte_capacity_not_encoder_preset\",\"source_cadence_ceiling_bps\":%u,"
-        "\"source_cadence_within_limit\":%s,\"av_lane_limits\":null},\"av_timing_reference\":null,\"input_timing_profile\":%s,"
-        "\"generator\":{\"source_timing_profile_supported\":%s,\"automatic_ts_timing_configuration_allowed\":%s,"
-        "\"encoder_preset_supported\":false,\"automatic_codec_configuration_allowed\":false,\"reason\":\"%s\"}}",
-        c->revision, (unsigned long long)c->session, c->profile, profiles[c->profile - 1], c->interleave_groups,
-        c->source_bitrate, ceiling, c->source_bitrate <= ceiling ? "true" : "false",
-        timing_profile, supported ? "true" : "false", supported ? "true" : "false", reason);
+        "\"single_program_required\":%s,\"clear_ts_required\":%s,\"audio_stream_count\":%s,"
+        "\"pat_pmt_before_media_required\":%s,\"pcr_pid_requirement\":\"%s\","
+        "\"pcr_before_audio_required\":%s,\"common_clock_required\":true},"
+        "\"timing\":{\"pcr_max_gap_ms\":100,\"pat_max_gap_ms\":500,\"pmt_max_gap_ms\":500},"
+        "\"bitrate_limits\":%s}",
+        separate ? "DVB-T bonding lanes" : "DVB-T bonding shared", c->source_bitrate,
+        separate ? "true" : "false", separate ? "true" : "false", separate ? "1" : "null",
+        separate ? "true" : "false", separate ? "video" : "program_clock", separate ? "true" : "false", limits);
     return n < 0 || (size_t)n >= capacity ? -1 : n;
 }
 static uint64_t transport_session(const bond_announcement *a, const dvb_bond_config_v1 *c, unsigned version)

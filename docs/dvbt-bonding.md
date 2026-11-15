@@ -1,5 +1,8 @@
 # Experimentele DVB-T channel bonding
 
+Het samengevoegde [verslag van de drie ontvangstproeven op 15 november 2026](dvbt-bonding-drie-proeven-20261115.md)
+bevat de resultaten, het oordeel en een tekstbasis voor een later websiteartikel.
+
 De ontvanger gebruikt de v1-merger uit `dvb-channel-bonding`, vastgelegd in
 `components/bonding/ORIGIN`. Twee zelfstandige DVB-T-decoders gebruiken dezelfde
 IQ-invoer en dezelfde digitale afstemming/het kanaalfilter als de headless
@@ -8,7 +11,7 @@ aan de merger. De gereconstrueerde of geremuxte TS gaat bij ingeschakelde bondin
 naar de bestaande TSscatterFix-, programma-, opname- en spelerverwerking.
 Het protocol is experimenteel en geen algemene DVB-bondingstandaard.
 
-De component is bijgewerkt naar **1.5.1**, bronrevisie `a82d373`. De zender
+De component is bijgewerkt naar **1.6.0**, bronrevisie `719963f`. De zender
 kiest uit twee mechanismen die de ontvanger automatisch uit de PMT herkent:
 
 - **Gedeeld (distribution 0)**: de bestaande private TS-overdracht met XOR8,
@@ -31,14 +34,15 @@ Voor gecombineerde mergeruitvoer blijft het programma van A nodig: er is geen
 gecombineerde audio-only fallback als A ontbreekt. Beide kanalen moeten voor
 normale combinatie dezelfde programmatijdlijn gebruiken.
 
-Versie 1.5.1 publiceert voor gedeelde XOR16-bonding met één interleavegroep
-en 50.100 bit/s een bron-TS-timingprofiel via het zendercontract. Dit beschrijft
-onder meer PCR op de video-PID met maximaal 100 ms tussenruimte en PAT/PMT
-met maximaal 500 ms tussenruimte. Het profiel staat automatische inrichting
-van bron-TS-timing toe; codecinstellingen en volledige ETSI-conformiteit worden
-daarmee niet vrijgegeven. Andere configuraties krijgen dit profiel niet
-als hun transportcapaciteit of profielinstellingen niet passen. De ontvanger
-heeft hiervoor geen nieuwe instelling of aangepaste afspeelvertraging nodig.
+Versie 1.6.0 vereenvoudigt het generatorgerichte JSON-contract (schema v1).
+Het beschrijft de bron-MPEG-TS met de modusnaam `DVB-T bonding shared` of
+`DVB-T bonding lanes`, CBR-bitrate, klok- en timingvereisten en eventuele
+media-TS-budgetten. Interne beschermingsinstellingen, discoverygegevens en
+vrijgavevlaggen maken geen deel meer uit van dit externe contract.
+De bronvereisten omvatten maximaal 100 ms tussen PCR's en maximaal 500 ms
+tussen PAT- respectievelijk PMT-secties. Deze contractwijziging verandert de
+ontvangerinstellingen of afspeelvertraging niet. Het interne mergerstatusobject
+blijft de bestaande numerieke `distribution` en `profile` gebruiken.
 
 De genoemde bitrates zijn TS-budgetten, geen encoderadvies. De oude
 22k/16k-preset en het compacte PCR-bronprofiel zijn geen actuele presets.
@@ -58,7 +62,9 @@ mergerbuffers herstart; recent verlaten aankondigingen worden afgewezen.
 - Een gewone enkelkanaals-TS loopt direct door zolang geen bonding is gevonden.
 - **Mode → Disable automatic DVB-T bonding** houdt automatisch bijschakelen
   tegen. Detectie blijft werken; de indicator kan nog worden aangeklikt om
-  handmatig te bonden. De keuze geldt bij de volgende ontvangststart.
+  handmatig te bonden. Tot die activering blijft de volledige kanaal-TS
+  doorlopen, ook nadat bonding is gedetecteerd. De keuze geldt bij de volgende
+  ontvangststart.
 - De bestaande `DVB-T bonding`-JSON-metadata van datv-transmitter wordt herkend
   voor bandbreedte, samplefrequentie, FEC en GI. Metadata verandert de expliciete
   uitschakelkeuze niet en kiest geen verschoven eerste kanaal.
@@ -152,3 +158,130 @@ Oude IQ-opnamen met beide signalen op −25/+25 kHz passen niet bij de nieuwe
 standaardafstemming. Maak voor de nieuwe proef een opname met het gekozen
 hoofdkanaal op 0 Hz en het tweede kanaal erboven of eronder. Een eerder gemeten
 uitkomst met de oude opname valideert deze nieuwe afstemming niet.
+
+## Audiovergelijking KMvKDN — 15 november 2026
+
+De complete opname
+`dvbt-bonding-qpsk-bw40000-gi1-32-fec1-2-fs250000-60s-KMvKDN.cf32`
+is 60 seconden lang bij 250 kS/s. Dit is native gescheiden video/audio
+(distribution 2, geen XOR), met het hoofdkanaal op 0 Hz en audio op +50 kHz.
+De bijbehorende `KMvKDN_rx.iq` is de ontvangen versie uit het propagatiemodel.
+Dit zijn bestaande bestanden; er is geen nieuwe RF-meting gedaan.
+
+| Controle | Schone `.cf32` | Ontvangen `_rx.iq` |
+| --- | ---: | ---: |
+| Decodeerbare audio na samenvoegen | 55,168 s | 14,763 s |
+| Aaneengesloten stukken volgens audiotimestamps | 1 | 20 |
+| Langste stuk | 55,168 s | 6,656 s |
+
+Audio is AAC-LATM, mono op 24 kHz. Het losse audiokanaal vóór de merger
+levert 55,680 seconden aaneengesloten audio. Bij het instappen in de merger
+ontbreekt een beginstuk van 493 payloadbytes, overeenkomend met 0,512 seconde
+gedecodeerde audio. De overige 90.152 gecodeerde audiopayloadbytes zijn exact
+gelijk aan het overeenkomstige einde van het losse audiokanaal. De volledige
+captures zijn dus niet byte-identiek. Bij uitgelijnde PCM verschillen alleen
+samples binnen het eerste AAC-frame van 1.024 samples; daarna is de PCM gelijk.
+In de schone proef melden de healthregels geen onherstelbare RS-blokken en
+beide adapter-IQ-queues nul drops.
+
+In de ontvangen opname is wel hoorbaar signaal aanwezig. De 14,763 seconden
+audio liggen verspreid over 27,435 seconden aan audiotimestamps; slechts drie
+stukken duren minstens één seconde. Er zijn veel onherstelbare RS-blokken op
+beide kanalen. De video levert 71 decodeerbare frames over 40,25 seconden,
+met decodeerfouten. Tijdens de geobserveerde afspeelbeurt koppelt het tweede
+kanaal circa 19 seconden na de start. De eerdere constatering van volledig
+stille audio betrof een andere opname, `FvMRrF`, en geldt niet voor `KMvKDN`.
+
+Conclusie: de schone bron bevat lange, doorlopende audio en na acquisitie is
+geen terugkerend audiopayloadverlies door de merger gevonden. Het verschil
+met de ontvangen versie ondersteunt ontvangstverlies als verklaring voor de
+korte audiostukken. Dit controleert niet iedere foutafhandeling bij beschadigde
+invoer en is geen bewijs van verliesvrije acquisitie.
+
+Het bewaarde meetrapport met hashes staat in
+`benchmarks/dvbt-bonding-audio-2026-11-15.json`. Volledige logs, TS, PCM en
+analysescripts staan in `build/bonding-clean-source-check/` en
+`build/bonding-live-audio-check/`. Deze vergelijking veranderde geen actieve
+INI, bronopname of afspeelinstelling.
+
+### Vervolg met 3 dB meer zendvermogen
+
+De gebruiker herhaalde de proef met opgegeven +3 dB zendvermogen; de nieuwe
+metadata vermeldt 250 W. `KMvKDN_rx.iq` is onder dezelfde naam vervangen.
+De vorige TS en analyses zijn behouden; de nieuwe metadata en IQ-hash staan
+apart in `build/bonding-plus3db-check/`.
+
+| Resultaat | Vorige proef | +3 dB-proef |
+| --- | ---: | ---: |
+| Decodeerbare audio | 14,763 s | 24,704 s |
+| Audiostukken van minstens 1 s | 3 | 8 |
+| Langste audiostuk | 6,656 s | 7,680 s |
+| Decodeerbare videoframes, inclusief beschadigde frames | 71 | 141 |
+| Start partnerdecoder na replaystart | circa 19 s | circa 5 s |
+
+Een deel van de extra audio komt door eerder koppelen. Binnen hetzelfde
+bron-timestampinterval als de vorige audiovergelijking groeit de decodeerbare
+audio van 14,763 naar 17,835 seconden. Ook nu blijven 20 audiostukken over;
+de opname is niet foutloos. Na een instapprefix van 284 gecodeerde bytes is
+de resterende audiopayload vóór en na de merger exact gelijk: tijdens deze
+proef verdwijnt daarna geen ontvangen audiopayload door het samenvoegen.
+Beide adapter-IQ-queues melden nul drops.
+
+Het is een opeenvolgende vergelijking; `noise_seed` is niet vastgezet in de
+nieuwe metadata. Dit is dus geen gecontroleerde power-only vergelijking met
+identieke ruis. Meetrapport: `benchmarks/dvbt-bonding-plus3db-2026-11-15.json`.
+
+Deze +3 dB-proef is de vastgelegde **gescheiden-kanalenreferentie** voor de
+volgende proef met volgens de gebruiker dezelfde inhoud in **shared mode**.
+Het gemeten IQ-bestand is op hash gecontroleerd en apart bewaard als
+`build/bonding-plus3db-check/reference-input-rx.iq`. De volgende meting krijgt
+een eigen rapport; modus, bescherming, bitrates en zendvermogen worden opnieuw
+uit metadata/status gecontroleerd. De vergelijking gebruikt dezelfde audio-,
+video-, acquisitie- en verliesmaten en vermeldt bij shared ook herstelcounters.
+
+### Eerste shared-proef: 125 W
+
+De gebruiker bevestigt dat `n5QlHY_rx.iq` bewust op 125 W is gegenereerd.
+Metadata en endpoint bevestigen distribution 0, XOR16, één interleavegroep,
+50.100 bit/s bron en 30.160 bit/s per lane. De replay levert 11,477 seconden
+decodeerbare AAC-LATM-audio in 12 stukken; het langste duurt 7,467 seconden
+en alleen dat stuk duurt minstens één seconde. Er zijn 40 decodeerbare
+videoframes, inclusief beschadigde/geconcealde frames. De merger eindigt op
+970 ontbrekende/vervangende bronpakketten en nul herstelde symbolen; dit zijn
+andere tellers dan RS-fouten. Beide adapter-IQ-queues melden nul drops.
+
+Rapport: `benchmarks/dvbt-bonding-shared-125w-2026-11-15.json`. Volledige
+artefacten en het op hash gecontroleerde IQ-bestand staan apart in
+`build/bonding-shared-comparison/`. De gebruiker bereidt hierna een shared-proef
+op 250 W voor. Deze 125 W-proef wordt niet overschreven of als 250 W behandeld.
+De gegenereerde ruis is niet vastgezet en bron-PTS verschillen tussen modi;
+de vergelijking is geen gecontroleerde modus-only A/B.
+
+### Shared op 250 W, opnieuw gegenereerd en gecontroleerd
+
+Na twee herhalingen van het oude 125 W-bestand is `n5QlHY_rx.iq` opnieuw
+gegenereerd. Metadata bevestigt 250 W en de hash verschilt van de opgeslagen
+125 W-versie. De afspeelbeurt van 21:00:40 is apart gemeten; beide bronbestanden
+zijn op hash bewaard. Modus en bescherming blijven shared/XOR16 met één
+interleavegroep en 50.100/30.160 bit/s bron/lane.
+
+| Resultaat | Shared 125 W | Shared 250 W | Gescheiden 250 W |
+| --- | ---: | ---: | ---: |
+| Decodeerbare audio | 11,477 s | 20,011 s | 24,704 s |
+| Aantal audiostukken | 12 | 23 | 20 |
+| Stukken van minstens 1 s | 1 | 5 | 8 |
+| Langste audiostuk | 7,467 s | 7,979 s | 7,680 s |
+| Decodeerbare videoframes, inclusief beschadigde/geconcealde | 40 | 77 | 141 |
+
+De shared-250 W-replay eindigt met 957 ontbrekende/vervangende bronpakketten,
+nul herstelde symbolen en nul adapter-IQ-queuedrops op beide kanalen. Shared
+verbetert hier met meer vermogen; de eerdere gescheiden-250 W-proef levert
+meer totale audio en videoframes, terwijl shared een iets langer maximaal
+audiostuk heeft. Nul herstelde symbolen bewijst geen defecte XOR-decoder.
+
+Tussen de opgeslagen shared-propagatieparameters verandert alleen
+`tx_power_w` van 125 naar 250. De ruisrealisatie is echter niet vastgezet
+(`noise_seed=null`); over modi heen zijn ook de bron-PTS verschillend.
+Dit blijft een vergelijking van opeenvolgende opnamen. Meetrapport:
+`benchmarks/dvbt-bonding-shared-250w-2026-11-15.json`; volledige artefacten:
+`build/bonding-shared-250w-new-check/`. Ontvangerinstellingen zijn niet gewijzigd.

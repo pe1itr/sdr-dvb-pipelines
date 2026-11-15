@@ -1,0 +1,83 @@
+{
+  "date": "2026-11-15",
+  "input": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-bonding-qpsk-bw40000-gi1-32-fec1-2-fs250000-60s-KMvKDN_rx.iq",
+  "input_sha256": "1dc8dd23b0ea540a001100e255540487cb52f03ae7bbf3fb56676af28d8fad9b",
+  "input_unchanged_during_replay": true,
+  "tx_power_w_metadata": 250.0,
+  "tx_power_change_db_user_reported": 3,
+  "source_session": "1794760782805900484",
+  "configuration": {
+    "rx_sample_rate": 250000,
+    "channel_bandwidth": 40000,
+    "distribution": 2,
+    "protection": 0,
+    "partner_offset_hz": 50000
+  },
+  "comparison": {
+    "baseline": {
+      "audio_seconds": 14.762666666666666,
+      "audio_segment_count": 20,
+      "longest_audio_seconds": 6.656,
+      "segments_at_least_one_second": 3,
+      "decoded_video_frames": 71,
+      "video_pts_span_seconds": 40.25,
+      "partner_start_after_replay_seconds": 19
+    },
+    "plus3db": {
+      "audio_seconds": 24.704,
+      "audio_segment_count": 20,
+      "longest_audio_seconds": 7.68,
+      "segments_at_least_one_second": 8,
+      "decoded_video_frames": 141,
+      "video_pts_span_seconds": 49,
+      "partner_start_after_replay_seconds": 5
+    }
+  },
+  "equal_source_timestamp_comparison": {
+    "source_timestamps_from": 165.864,
+    "source_timestamps_to": 193.29866666666666,
+    "baseline_decoded_seconds": 14.762666666666666,
+    "plus3db_decoded_seconds_in_same_interval": 17.834666666664702
+  },
+  "merger": {
+    "missing_encoded_prefix_bytes": 284,
+    "remaining_encoded_audio_matches": true
+  },
+  "observed_live_health": {
+    "unique_windows": 18,
+    "aggregate_counters": {
+      "packets": 1342,
+      "rs_uncorr": 767,
+      "cc": 84,
+      "fifo_drops": 0
+    },
+    "adapter_iq_drops": [
+      0,
+      0
+    ],
+    "limits": "Window totals overlap across two decoders and do not match prior coverage; endpoint block fields and stale telemetry are not cumulative deltas."
+  },
+  "interpretation": "More recovered audio and video and earlier coupling observed. Audio after initial acquisition matches raw B encoded payload; no later loss in merger in this replay. Missing audio already absent upstream of merger. Errors and 20 audio segments remain. Part of total gain comes from earlier coupling; equal source timestamp interval improves from 14.763s to 17.835s audio.",
+  "limits": "Sequential recordings; current metadata noise_seed is null. Not an identical-noise, power-only controlled A/B. Does not identify original RF/model/decoder cause of RS damage or guarantee error-free video.",
+  "artifacts": "build/bonding-plus3db-check/",
+  "changes": "No source code, active INI, transmitter or player settings changed by agent for measurement.",
+  "archived_input": "build/bonding-plus3db-check/reference-input-rx.iq",
+  "next_comparison": {
+    "user_intent": "Exactly the same content, next in bonded shared mode.",
+    "current_reference": "Separate native lanes, distribution 2, protection NONE, 250 W.",
+    "next_mode": "Shared, distribution 0; read actual protection/interleave/bitrates from fresh metadata/status.",
+    "metrics": [
+      "decoded_audio_seconds",
+      "audio_segment_count",
+      "longest_audio_segment",
+      "segments_at_least_one_second",
+      "decoded_video_frames",
+      "coupling_delay",
+      "RS_errors",
+      "IQ_queue_drops",
+      "shared_recovered_symbols",
+      "shared_missing_packets"
+    ],
+    "constraints": "Keep earlier reports separate. Verify actual next settings, content and available timing; do not assume identical noise or XOR profile."
+  }
+}

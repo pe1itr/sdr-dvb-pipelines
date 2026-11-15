@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-15",
+  "input": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-bonding-qpsk-bw40000-gi1-32-fec1-2-fs250000-60s-n5QlHY_rx.iq",
+  "input_sha256": "a253667ca235b0199bf730f71e4eed598306f39e78b69301392540a81d7fde2e",
+  "input_changed_from_shared_125w": true,
+  "archived_input": "build/bonding-shared-250w-new-check/reference-input-rx.iq",
+  "power_w_metadata": 250.0,
+  "model_parameter_changes_from_shared_125w": {
+    "tx_power_w": {
+      "shared_125w": 125.0,
+      "shared_250w": 250.0
+    }
+  },
+  "configuration": {
+    "distribution": 0,
+    "profile": 2,
+    "protection": "XOR16",
+    "interleave_groups": 1,
+    "source_bitrate": 50100,
+    "lane_bitrate": 30160,
+    "rx_sample_rate": 250000,
+    "channel_bandwidth": 40000
+  },
+  "audio": {
+    "codec": "aac_latm",
+    "sample_rate": 24000,
+    "decoded_seconds": 20.010666666666665,
+    "segment_count": 23,
+    "longest_segment_seconds": 7.978666666666666,
+    "segments_at_least_one_second": 5,
+    "timestamp_span_seconds": 34.30399966666667
+  },
+  "video": {
+    "decoded_frames": 77,
+    "timestamp_span_seconds": 30.25,
+    "includes_damaged_concealed_frames": true
+  },
+  "final_merger_counters": {
+    "missing_packets": 957,
+    "recovered_symbols": 0
+  },
+  "adapter_iq_drops": [
+    0,
+    0
+  ],
+  "live_health_summary": "build/bonding-shared-250w-new-check/live-health-summary.json",
+  "comparison": {
+    "shared_125w": {
+      "audio_seconds": 11.477333333333334,
+      "longest_segment_seconds": 7.466666666666667,
+      "segments_at_least_one_second": 1,
+      "video_frames": 40
+    },
+    "separate_250w": {
+      "audio_seconds": 24.704,
+      "longest_segment_seconds": 7.68,
+      "segments_at_least_one_second": 8,
+      "video_frames": 141
+    }
+  },
+  "interpretation": "Shared 250W recovers more audio/video than shared 125W. Separate 250W delivered more total decoded audio and video frames in these recordings; shared 250W has slightly longer longest audio stretch. No XOR symbol recoveries recorded. IQ adapter drops zero.",
+  "limits": "Sequential simulations; noise_seed null. Only tx_power_w differs in saved model parameters for shared 125W vs250W, but noise realization is not held constant. Content sameness across separate/shared is user-reported, source timestamps differ; not a strict mode-only A/B. No zero-recovery decoder bug conclusion. Replacement packet counters and RS errors are distinct.",
+  "artifacts": "build/bonding-shared-250w-new-check",
+  "changes": "No code, active INI, receiver or transmitter settings changed by agent for measurement."
+}

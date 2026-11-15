@@ -1,0 +1,53 @@
+{
+  "date": "2026-11-15",
+  "input": "/home/rhardenb/repos/datv-transmitter/iq-output/dvbt-bonding-qpsk-bw40000-gi1-32-fec1-2-fs250000-60s-n5QlHY_rx.iq",
+  "input_sha256": "4bc5a57f3e65bfca5dcd13c41c7a841be851b6c1d5c630b1bc5f749b74836a8f",
+  "archived_input": "build/bonding-shared-comparison/reference-input-rx.iq",
+  "tx_power_w_metadata": 125.0,
+  "power_confirmed_by_user": true,
+  "configuration": {
+    "distribution": 0,
+    "profile": 2,
+    "protection": "XOR16",
+    "interleave_groups": 1,
+    "source_bitrate": 50100,
+    "lane_bitrate": 30160,
+    "rx_sample_rate": 250000,
+    "channel_bandwidth": 40000
+  },
+  "decoded_audio": {
+    "codec": "aac_latm",
+    "sample_rate": 24000,
+    "seconds": 11.477333333333334,
+    "segment_count": 12,
+    "longest_segment_seconds": 7.466666666666667,
+    "segments_at_least_one_second": 1,
+    "timestamp_span_seconds": 21.418666666666667
+  },
+  "decoded_video_frames": 40,
+  "final_merger_counters": {
+    "missing_packets": 970,
+    "recovered_symbols": 0
+  },
+  "adapter_iq_drops": [
+    0,
+    0
+  ],
+  "artifacts": "build/bonding-shared-comparison",
+  "comparison_reference": {
+    "separate_before_power_increase": {
+      "audio_seconds": 14.762666666666666,
+      "longest_segment_seconds": 6.656,
+      "segments_at_least_one_second": 3,
+      "video_frames": 71
+    },
+    "separate_250w": {
+      "audio_seconds": 24.704,
+      "longest_segment_seconds": 7.68,
+      "segments_at_least_one_second": 8,
+      "video_frames": 141
+    }
+  },
+  "limits": "Sequential generated recordings with unseeded noise, content sameness user-reported, not byte-verified source equivalence. Source PTS differ across modes; do not reuse equal-PTS alignment from native-only comparison. Decoded video counts include damaged/concealed frames. Missing packets are merger replacement counts, not RS failures; zero recovered symbols alone does not establish a repair bug.",
+  "next_trial": "User is generating shared 250 W and will say nu. Read fresh endpoint/current selected file, pin input metadata/hash, save to a NEW directory; preserve this 125 W measurement."
+}

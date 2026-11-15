@@ -2,7 +2,6 @@
 #include "bond_native.h"
 #include "bond_media.h"
 #include <stdlib.h>
-#include <stdio.h>
 #include <string.h>
 #define ANN_TAG 0x82
 #define ANN_SIZE 60u
@@ -401,24 +400,4 @@ int bond_native_event(bond_native *n, dvb_bond_event_v1 *e)
 {
     if (!n->event_count) return 0;
     *e = n->events[n->event_head]; n->event_head = (n->event_head + 1) % 8; --n->event_count; return 1;
-}
-int bond_native_contract(const dvb_bond_config_v1 *c, char *b, size_t capacity)
-{
-    int n = snprintf(b, capacity,
-        "{\"schema_version\":1,\"contract_owner\":\"dvb_bond_splitter\",\"transport_version\":4,\"revision\":%u,\"session\":\"%llu\",\"mode\":{\"distribution\":2,\"name\":\"separate_lanes\",\"protection\":0,\"protection_name\":\"none\",\"interleave_groups\":1},"
-        "\"delivery\":{\"profile\":\"native_independent_av\",\"etsi_service_supported\":false},"
-        "\"input\":{\"format\":\"mpegts\",\"packet_size_bytes\":188,\"pacing\":\"cbr\",\"single_program_required\":true,\"pat_pmt_before_media_required\":true,\"preserve_pcr_pts\":true,\"source_null_payload\":\"discarded_remuxed\",\"total_ts_bitrate_bps\":%u,\"minimum_total_ts_bitrate_bps\":15040,\"common_pcr_pts_timeline\":true,\"null_padding_discarded\":true},"
-        "\"lanes\":[{\"lane\":0,\"role\":\"video\",\"total_ts_bitrate_bps\":%u},{\"lane\":1,\"role\":\"audio\",\"total_ts_bitrate_bps\":%u}],"
-        "\"overhead\":{\"repair_bps\":0,\"private_media_framing_bps\":0,\"discovery\":\"62_byte_pmt_descriptor_per_lane\","
-        "\"pat_pmt_period_ms\":500,\"psi_ts_bps_min_per_lane\":6032,\"shared_si_copied_to_both_lanes\":true,\"audio_pcr_piggybacked\":true},"
-        "\"budget\":{\"per_lane_media_plus_pcr_plus_si_bps_max\":24128,\"audio_payload_bytes_per_ts_packet\":176,\"scope\":\"one_packet_PAT_and_PMT_at_30160bps\",\"larger_pmt_reduces_budget\":true},"
-        "\"transport_limits\":{\"scope\":\"byte_capacity_not_encoder_preset\",\"source_cadence_ceiling_bps\":60320,\"source_cadence_within_limit\":%s,\"av_lane_limits\":null},"
-        "\"av_timing_reference\":null,\"input_timing_profile\":null,"
-        "\"generator\":{\"encoder_preset_supported\":false,\"automatic_codec_configuration_allowed\":false,\"automatic_ts_timing_configuration_allowed\":false,\"reason\":\"native_remux_requires_independent_output_timing_audit\"},"
-        "\"requirements\":[\"current PAT/PMT before media\",\"single programme, one audio PID, clear TS\",\"PCR on video before audio, input timestamps continuous within a session\",\"provide native DVB-SI and PCR/PTS timing\","
-        "\"each lane including shared SI and ordinary PCR must fit independently\",\"pace input at declared total TS bitrate\"],"
-        "\"merge\":{\"packet_exact\":false,\"video_survives_audio_loss\":true,\"audio_survives_video_loss\":false}}",
-        c->revision, (unsigned long long)c->session, c->source_bitrate, c->lane_bitrate, c->lane_bitrate,
-        c->source_bitrate >= 15040 && c->source_bitrate <= 60320 ? "true" : "false");
-    return n < 0 || (size_t)n >= capacity ? -1 : n;
 }
