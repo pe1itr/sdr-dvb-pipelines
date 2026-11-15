@@ -1626,6 +1626,18 @@ static void exercise_s2_automatic(App *a) {
 
 static void exercise_t2_mode(App *a) {
     int standard=a->standard, source=a->source, sr=a->sr, fec=a->fec, gi=a->gi;
+    gboolean disable_bonding=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->bonding_box));
+    for (int mode=0;mode<5;++mode) {
+        a->standard=mode;
+        for (int opening=0;opening<2;++opening) {
+            show_mode(NULL,a);
+            g_assert_cmpint(gtk_widget_get_visible(a->bonding_box),==,mode==2);
+            g_assert_cmpint(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->bonding_box)),==,disable_bonding);
+            gtk_widget_hide(a->mode_dialog);
+        }
+    }
+    a->standard=standard;
+    scatter_refresh(a);
     /* A compatible source lets the preview validate the complete T2 path. */
     a->source=2;
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),3);

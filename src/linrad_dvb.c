@@ -812,6 +812,7 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 }
 
 static void scatter_refresh(App *a) {
+    if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2);
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
     if (a->dab.info) {
@@ -3596,6 +3597,8 @@ static void create_mode_renderer(App *a) {
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->bonding_box),g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL));
     gtk_widget_set_tooltip_text(a->bonding_box,"Off (default): a valid bonding announcement automatically starts the partner and merger. On: detect only; click the Bonding indicator to join manually. First channel stays centered for both live IQ and files; partner is normally +50 or −50 kHz. Applies at next start. 8 s recovery buffer.");
     gtk_grid_attach(GTK_GRID(a->controls),a->bonding_box,0,14,2,1);
+    gtk_widget_set_no_show_all(a->bonding_box,TRUE);
+    gtk_widget_set_visible(a->bonding_box,a->standard==2);
     g_signal_connect(a->bonding_box,"toggled",G_CALLBACK(bonding_changed),a);
     a->dab_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->dab_controls),8);
