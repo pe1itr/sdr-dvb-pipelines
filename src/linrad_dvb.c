@@ -2865,9 +2865,15 @@ static void show_about(GtkWidget *widget, gpointer data) {
     if (strcmp(LINRAD_GIT_COMMIT,"unknown"))
         about_link(box,"View source commit on GitHub",
             "https://github.com/pe1itr/sdr-dvb-pipelines/commit/" LINRAD_GIT_COMMIT);
-    about_label(box,"linrad_dvb is an application for amateur radio operators receiving digital "
-        "amateur television under weak signal conditions (DVB-S, DVB-S2 and narrowband DVB-T), "
-        "supported 8 MHz broadcast DVB-T2 and DAB/DAB+ radio.",NULL);
+    about_label(box,"Linrad DVB is a receiver for digital amateur television under weak-signal "
+        "conditions (DVB-S, DVB-S2 and narrowband DVB-T), supported 8 MHz DVB-T2 broadcasts "
+        "and DAB/DAB+ radio. It is developed and maintained by Rob Hardenberg / PE1ITR, "
+        "building on the work of the authors and projects credited in Acknowledgements below.",NULL);
+    about_link(box,"Full credits, source origins and licenses",
+        "https://github.com/pe1itr/sdr-dvb-pipelines/blob/main/docs/credits.md");
+    about_label(box,"The project began as a decoder for Linrad's network IQ output and later "
+        "became a standalone receiver with direct SDR support. Its name acknowledges "
+        "Linrad and its author, Leif Åsbrink / SM5BSZ. Linrad input remains supported.",NULL);
     about_label(box,"DAB is implemented as a separate receiver component, developed from "
         "Rob Hardenberg / PE1ITR's own dab-monitor. It provides Band III channel tuning, "
         "DAB+ audio, station selection, MOT slideshow, constellation and ensemble information, "
@@ -2877,7 +2883,6 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"TSscatterFix is a utility that uses machine learning to reconstruct recurring "
         "elements in static test patterns from fragments of the received "
         "MPEG-TS stream. It is designed specifically for (D)ATV contests.",NULL);
-    about_label(box,"Created by Rob Hardenberg, PE1ITR.",NULL);
     about_label(box,"Copyright (c) 2026 Rob Hardenberg / PE1ITR. "
         "Linrad DVB is free software under GNU GPL version 3 only (GPL-3.0-only). "
         "You may use, modify and redistribute it under those terms. "
@@ -2971,22 +2976,32 @@ static void show_about(GtkWidget *widget, gpointer data) {
     about_label(box,"LeanSDR / LeanDVB: pabr@pabr.org, DVB-S/S2 demodulation (GPL-3.0-or-later). "
         "LDPC: Ahmet Inan (xdsopl), with the external decoder adaptation by pabr@pabr.org (0BSD). "
         "DVB-S2 acquisition corrections: Ondřej OK1CDJ, LeanDVB issue #41. "
-        "rbdvbt, TSscatterFix, dab-monitor and DAB integration: Rob Hardenberg, PE1ITR.",NULL);
-    about_label(box,"DVB-T2: based on the OnAir receiver by adswill and contributors, "
-        "including its C++ receiver core and Rust FEC code (GPL-3.0). "
+        "DVB-T / rbdvbt, TSscatterFix, DAB / dab-monitor and DVB-T bonding: "
+        "Rob Hardenberg / PE1ITR. The DVB-T project also acknowledges gr-dvbt and "
+        "LeanSDR as implementation and testing references.",NULL);
+    about_label(box,"DVB-T2: based on the OnAir receiver by Kristijonas Adomaitis / adswill "
+        "and contributors, including its receiver core and CPU/GPU FEC implementations (GPL-3.0). "
+        "The P1 tables inherited through OnAir originate from gr-dvbt2 by "
+        "Ron Economos / W6RZ (GPL-3.0-or-later). "
         "DAB also reuses OnAir's generic polyphase resampler and DSP support. "
-        "Integration and local optimizations are maintained in this project.",NULL);
-    about_label(box,"DAB+ radio decoding: project libdxdabsdr. AAC audio decoding: FAAD2 (GPL-2.0-or-later). "
+        "Rob Hardenberg maintains the integration, local fixes and optimizations. "
+        "The optional Linux DVB-S2 GPU helper also reuses OnAir's LDPC and Vulkan code.",NULL);
+    about_label(box,"DAB/DAB+ demodulation and transport: Rob Hardenberg's libdxdabsdr, "
+        "developed from dab-monitor. AAC audio decoding: FAAD2 (GPL-2.0-or-later). "
         "Code from FAAD2 is copyright (c) Nero AG, www.nero.com. "
-        "Audio output uses ALSA; sample-rate conversion also uses libsamplerate.",NULL);
+        "Audio output uses ALSA on Linux and PortAudio on Windows; "
+        "sample-rate conversion also uses libsamplerate.",NULL);
+    about_link(box,"Linrad · Leif Åsbrink / SM5BSZ","https://www.sm5bsz.com/linuxdsp/linrad.htm");
     about_link(box,"LeanSDR / LeanDVB · pabr","https://github.com/pabr/leansdr");
     about_link(box,"LDPC · Ahmet Inan (xdsopl)","https://github.com/xdsopl/LDPC");
     about_link(box,"LDPC helper adaptation · pabr","https://github.com/pabr/xdsopl-LDPC-pabr");
     about_link(box,"Acquisition patch · Ondřej OK1CDJ (issue #41)","https://github.com/pabr/leansdr/issues/41");
     about_link(box,"OnAir · DVB-T2 receiver and shared DAB resampler","https://github.com/adswill/OnAir");
+    about_link(box,"gr-dvbt2 · Ron Economos / W6RZ, inherited P1 tables","https://github.com/drmpeg/gr-dvbt2");
     about_link(box,"FAAD2 · AAC decoder","https://github.com/knik0/faad2");
     about_label(box,"Also built on Linrad, GTK / GLib, libVLC, FFmpeg, FFTW, libzvbi, "
-        "FAAD2, ALSA, libsamplerate, json-c, SoapySDR, UHD and optional LimeSuite. "
+        "FAAD2, ALSA, libsamplerate, json-c, SoapySDR, UHD, libiio, hidapi, PortAudio "
+        "and optional LimeSuite. "
         "Thanks also to the SoapySDR driver and device-library authors, including "
         "HackRF, RFSPACE, RTL-SDR, SDRplay and Airspy support.",NULL);
     about_label(box,"Source provenance, local changes and license texts are included under "
