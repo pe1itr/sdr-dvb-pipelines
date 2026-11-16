@@ -77,7 +77,7 @@ typedef struct {
     GtkWidget *dab_channel_box, *dab_profile_box, *dab_filter_box, *dab_mixer_box, *dab_lo_box, *dab_if_box, *dab_input_box, *dab_lo_port_box;
     GtkWidget *video_frame, *dab_previous, *dab_next;
     GtkWidget *dab_controls, *dab_free_box, *dab_frequency_box;
-    GtkWidget *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box, *s2_gpu_box;
+    GtkWidget *s2_controls, *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box, *s2_gpu_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
@@ -88,7 +88,7 @@ typedef struct {
     gboolean replay_eof;
     Stage stages[4];
     int stage_count;
-    GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *constellation_box;
+    GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *gi_label, *constellation_box;
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
     GtkWidget *record_button, *reception_button, *reception_dialog;
     GtkWidget *log_menu, *log_popover, *application_log_item;
@@ -149,7 +149,7 @@ static gboolean udp_output(App *a) {
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
 static gboolean use_scatter(App *a) { return a->standard != 4 && a->scatter; }
 static const int airspyr2_rates[] = {2500000, 10000000};
-static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000};
+static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 1500000, 2000000, 4000000, 5000000};
 static const int dab_rates[] = {1536000};
 static const char *dab_profiles[] = {"normal", "weak", "aircraft"};
 static int dab_channel(App *a) {
@@ -816,8 +816,10 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
 }
 
 static void scatter_refresh(App *a) {
+    if (a->gi_box) gtk_widget_set_visible(a->gi_box,a->standard==2);
+    if (a->gi_label) gtk_widget_set_visible(a->gi_label,a->standard==2);
     if (a->t2_controls) gtk_widget_set_visible(a->t2_controls,a->standard==3);
-    if (a->s2_gpu_box) gtk_widget_set_visible(a->s2_gpu_box,a->standard==1);
+    if (a->s2_controls) gtk_widget_set_visible(a->s2_controls,a->standard==1);
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2);
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
@@ -3652,19 +3654,26 @@ static void create_mode_renderer(App *a) {
     a->sr_label = gtk_grid_get_child_at(GTK_GRID(a->controls), 0, 1);
     a->fec_box = combo(a->controls, "FEC", 2, NULL, 0, -1);
     a->gi_box = combo(a->controls, "Guard interval", 3, guards, 4, a->gi);
+    a->gi_label = gtk_grid_get_child_at(GTK_GRID(a->controls),0,3);
+    gtk_widget_set_no_show_all(a->gi_box,TRUE);
+    gtk_widget_set_no_show_all(a->gi_label,TRUE);
     a->constellation_box = combo(a->controls, "Constellation", 4, constellations, 2, a->constellation);
+    a->s2_controls=gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(a->s2_controls),8);
+    gtk_grid_set_column_spacing(GTK_GRID(a->s2_controls),12);
+    gtk_grid_attach(GTK_GRID(a->controls),a->s2_controls,0,5,2,1);
     char *ldpc_mode=setting(a,"leandvb","ldpc_mode");
-    a->ldpc_mode_box=combo(a->controls,"DVB-S2 error correction",5,(const char *[]){"Soft-decision LDPC","Bit-flipping"},2,!strcmp(ldpc_mode,"bitflip"));
-    a->ldpc_workers_box=spin(a->controls,"LDPC workers",6,1,8,1);
+    a->ldpc_mode_box=combo(a->s2_controls,"DVB-S2 error correction",0,(const char *[]){"Soft-decision LDPC","Bit-flipping"},2,!strcmp(ldpc_mode,"bitflip"));
+    a->ldpc_workers_box=spin(a->s2_controls,"LDPC workers",1,1,8,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->ldpc_workers_box),integer_setting(a,"leandvb","helpers",1,8));
-    a->ldpc_latency_box=combo(a->controls,"LDPC processing",7,(const char *[]){"Automatic (symbol rate)","Low latency","Throughput"},3,
+    a->ldpc_latency_box=combo(a->s2_controls,"LDPC processing",2,(const char *[]){"Automatic (symbol rate)","Low latency","Throughput"},3,
         s2_choice(a,"latency",s2_latency_modes,G_N_ELEMENTS(s2_latency_modes)));
-    a->s2_acquisition_box=combo(a->controls,"DVB-S2 acquisition",8,(const char *[]){"Automatic (symbol rate)","Continuous search","Normal search"},3,
+    a->s2_acquisition_box=combo(a->s2_controls,"DVB-S2 acquisition",3,(const char *[]){"Automatic (symbol rate)","Continuous search","Normal search"},3,
         s2_choice(a,"acquisition",s2_acquisition_modes,G_N_ELEMENTS(s2_acquisition_modes)));
     GtkWidget *auto_hint=gtk_label_new("Automatic: up to 333 ksym/s, continuous search + low latency.\n"
         "Above 333 ksym/s, normal search + throughput.");
     gtk_label_set_xalign(GTK_LABEL(auto_hint),0);
-    gtk_grid_attach(GTK_GRID(a->controls),auto_hint,0,9,2,1);
+    gtk_grid_attach(GTK_GRID(a->s2_controls),auto_hint,0,4,2,1);
     a->s2_gpu_box=gtk_check_button_new_with_label("Use GPU for DVB-S2 LDPC (experimental)");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box),g_key_file_get_boolean(a->config,"leandvb","gpu_ldpc",NULL));
     gtk_widget_set_tooltip_text(a->s2_gpu_box,"Linux: try GPU for 8PSK 3/4 normal frames (PI6EHV). Other frames, unavailable GPU and decode failures use CPU. One GPU executor; CPU worker setting is retained. Applies at next reception start; video rendering is separate.");
@@ -3672,9 +3681,10 @@ static void create_mode_renderer(App *a) {
     gtk_widget_set_sensitive(a->s2_gpu_box,FALSE);
     gtk_widget_set_tooltip_text(a->s2_gpu_box,"DVB-S2 GPU LDPC is currently validated on Linux only. Windows uses CPU LDPC.");
 #endif
-    gtk_grid_attach(GTK_GRID(a->controls),a->s2_gpu_box,0,10,2,1);
-    gtk_widget_set_no_show_all(a->s2_gpu_box,TRUE);
-    gtk_widget_set_visible(a->s2_gpu_box,a->standard==1);
+    gtk_grid_attach(GTK_GRID(a->s2_controls),a->s2_gpu_box,0,5,2,1);
+    gtk_widget_show_all(a->s2_controls);
+    gtk_widget_set_no_show_all(a->s2_controls,TRUE);
+    gtk_widget_set_visible(a->s2_controls,a->standard==1);
     g_free(ldpc_mode);
     a->t2_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->t2_controls),8);
@@ -4251,7 +4261,7 @@ int main(int argc, char **argv) {
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2, pluto or file", "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
-        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
+        {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 1500000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
         {"plp", 0, 0, G_OPTION_ARG_INT, &plp, "DVB-T2 PLP ID (-1 = automatic, 0..255 = explicit)", "ID"},
         {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC supported by the standard/constellation (e.g. 3/4)", "FEC"},
         {"gi", 0, 0, G_OPTION_ARG_STRING, &gi, "DVB-T: 1/32, 1/16, 1/8 or auto", "GI"},

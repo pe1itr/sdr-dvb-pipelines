@@ -1710,7 +1710,9 @@ static void exercise_t2_mode(App *a) {
         for (int opening=0;opening<2;++opening) {
             show_mode(NULL,a);
             g_assert_cmpint(gtk_widget_get_visible(a->bonding_box),==,mode==2);
-            g_assert_cmpint(gtk_widget_get_visible(a->s2_gpu_box),==,mode==1);
+            g_assert_cmpint(gtk_widget_get_visible(a->s2_controls),==,mode==1);
+            g_assert_cmpint(gtk_widget_is_drawable(a->ldpc_mode_box),==,mode==1);
+            g_assert_cmpint(gtk_widget_is_drawable(a->s2_gpu_box),==,mode==1);
             g_assert_cmpint(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->bonding_box)),==,disable_bonding);
             gtk_widget_hide(a->mode_dialog);
         }
@@ -2056,7 +2058,7 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->gain_display)), ==, "LNA 32 / VGA 12 dB");
         g_assert_cmpint(gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)), ==, 12000000);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 1);
-        gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), 9);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->sr_box), G_N_ELEMENTS(sat_rates)-1);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->fec_box), 2);
         g_assert_cmpint(a->sr, ==, 5000000);
         char *pipeline = describe(a);
