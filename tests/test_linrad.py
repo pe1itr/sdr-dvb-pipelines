@@ -1010,6 +1010,26 @@ while True:
                         pass
 
     @unittest.skipUnless(shutil.which("broadwayd"), "GTK Broadway daemon not installed")
+    def test_receiver_presets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, path = self.fixture(tmp)
+            display = free_port()
+            env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",
+                       XDG_RUNTIME_DIR=tmp, NO_AT_BRIDGE="1", G_DEBUG="fatal-criticals")
+            daemon = subprocess.Popen(["broadwayd", "--address", "127.0.0.1", "--port",
+                                       str(free_port()), f":{display}"], env=env,
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            try:
+                time.sleep(0.2)
+                result = subprocess.run([ROOT / "build/gui_smoke", "--test-presets", path],
+                                        env=env, capture_output=True, timeout=25)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIn(b"manual-change checks passed", result.stdout)
+            finally:
+                daemon.terminate()
+                daemon.communicate(timeout=3)
+
+    @unittest.skipUnless(shutil.which("broadwayd"), "GTK Broadway daemon not installed")
     def test_gui_controls_stop_restart_and_close(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, path = self.fixture(tmp)

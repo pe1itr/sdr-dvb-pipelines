@@ -53,6 +53,10 @@ enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
     GKeyFile *config;
+    GKeyFile *presets;
+    GtkWidget *preset_buttons[6], *preset_labels[6], *presets_dialog, *preset_message;
+    int active_preset, pending_preset; /* 1..6, zero means none */
+    char *preset_signature;
     StatusHttp *status_http;
     GString *status_log;
     SdrRxStatus sdr_status;
@@ -878,6 +882,8 @@ static void power_refresh(App *a) {
     gtk_widget_set_sensitive(a->power_button, !a->stopping && !problem);
 }
 
+static void presets_refresh(App *a);
+static void preset_apply(App *a, int index);
 static void start_pipeline(App *a);
 static void finish_if_stopped(App *a) {
     if (!a->stopping || a->kill_timer) return;
@@ -896,6 +902,9 @@ static void finish_if_stopped(App *a) {
         gtk_widget_set_sensitive(a->hardware, TRUE);
         gtk_widget_set_sensitive(a->renderer_panel, TRUE);
         gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && hardware_source(a));
+    }
+    if (a->pending_preset && !a->closing) {
+        int index=a->pending_preset; a->pending_preset=0; preset_apply(a,index);
     }
     power_refresh(a);
     if (a->headless) g_main_loop_quit(a->loop);
@@ -1507,13 +1516,13 @@ static void filter_step(App *a, int direction) {
     filter_apply(a, CLAMP(width + direction*step, low, high), TRUE);
 }
 
-static void save_settings(App *a) {
+static void collect_settings(App *a, gboolean commit_fields) {
     /* Commit any numeric text still being edited before serializing. */
     if (a->window) {
         GtkWidget *fields[] = {a->offset_box, a->receiver_offset_box, a->step_box, a->frequency_box,
                               a->rate_box,a->dab_frequency_box};
         for (unsigned i = 0; i < G_N_ELEMENTS(fields); ++i)
-            if (gtk_widget_is_sensitive(fields[i])) gtk_spin_button_update(GTK_SPIN_BUTTON(fields[i]));
+            if (commit_fields && gtk_widget_is_sensitive(fields[i])) gtk_spin_button_update(GTK_SPIN_BUTTON(fields[i]));
         g_key_file_set_double(a->config, "display", "floor_dbfs_hz", a->iq_view.floor);
         g_key_file_set_double(a->config, "display", "range_db", a->iq_view.span);
         signal_meter_save(&a->iq_view.meter,a->config);
@@ -1526,6 +1535,10 @@ static void save_settings(App *a) {
     g_key_file_set_string(a->config, "session", "constellation", constellations[a->standard == 1 ? a->constellation : 0]);
     g_key_file_set_boolean(a->config, "session", "scatterfix", a->scatter);
     g_key_file_set_string(a->config, "session", "renderer", renderers[a->renderer]);
+}
+
+static void save_settings(App *a) {
+    collect_settings(a,TRUE);
     GError *error = NULL;
     gsize length;
     char *contents = g_key_file_to_data(a->config, &length, &error);
@@ -2430,6 +2443,7 @@ static gboolean decoder_tick(gpointer data) {
 
 static gboolean monitor_tick(gpointer data) {
     App *a = data;
+    presets_refresh(a);
     const char *section = sources[a->source];
     a->iq_view.active = a->running && !a->stopping;
     a->iq_view.bandwidth = g_key_file_get_double(a->config, section, "filter_bandwidth", NULL);
@@ -2889,6 +2903,10 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "Provided without warranty. Bundled components retain their own license notices.",NULL);
     about_link(box,"Project source and documentation","https://github.com/pe1itr/sdr-dvb-pipelines");
     about_link(box,"GNU General Public License version 3","https://www.gnu.org/licenses/gpl-3.0.html");
+    about_label(box,"Presets: the six buttons below the constellation load saved receiver settings. "
+        "Use Presets in the menu to edit their labels and save current settings to each slot. "
+        "Selecting a preset stops reception; click Start SDR to receive. A green button marks "
+        "the selected preset. Changing settings clears that selection. W still saves the regular INI.",NULL);
     about_label(box,"Receiver controls","about-heading");
     about_label(box,"Power: start / stop reception. Input: Linrad, SDR hardware or IQ-file playback. "
         "Mode: DVB-S/S2/T/T2 or DAB, with the corresponding decoder and channel settings. "
@@ -3819,6 +3837,26 @@ static void create_mode_renderer(App *a) {
     g_signal_connect(a->renderer_dialog, "delete-event", G_CALLBACK(renderer_close), a);
 }
 
+static void connect_settings_controls(App *a) {
+    g_signal_connect(a->receiver_offset_box,"value-changed",G_CALLBACK(tuning_changed),a);
+    g_signal_connect(a->offset_box, "value-changed", G_CALLBACK(tuning_changed), a);
+    g_signal_connect(a->step_box, "value-changed", G_CALLBACK(tuning_changed), a);
+    g_signal_connect(a->format_box, "changed", G_CALLBACK(source_changed), a);
+    g_signal_connect(a->source_box, "changed", G_CALLBACK(source_changed), a);
+    g_signal_connect(a->sdriq_rate_box, "changed", G_CALLBACK(source_changed), a);
+    g_signal_connect(a->rate_box, "value-changed", G_CALLBACK(source_changed), a);
+    g_signal_connect(a->frequency_box, "value-changed", G_CALLBACK(source_changed), a);
+    g_signal_connect(a->constellation_box, "changed", G_CALLBACK(constellation_changed), a);
+    g_signal_connect(a->standard_box, "changed", G_CALLBACK(standard_changed), a);
+    g_signal_connect(a->sr_box, "changed", G_CALLBACK(selection_changed), a);
+    g_signal_connect(a->fec_box, "changed", G_CALLBACK(selection_changed), a);
+    g_signal_connect(a->gi_box, "changed", G_CALLBACK(selection_changed), a);
+    g_signal_connect(a->renderer_box, "changed", G_CALLBACK(renderer_selection_changed), a);
+}
+
+static void show_presets(GtkWidget *widget, gpointer data);
+static GtkWidget *presets_create(App *a);
+
 static void gui(App *a) {
     source_defaults(a);
     if (!g_key_file_has_key(a->config, "session", "renderer", NULL)) a->renderer = RENDER_EMBEDDED;
@@ -3857,6 +3895,9 @@ static void gui(App *a) {
     GtkWidget *mode_item = gtk_button_new_with_label("Mode"), *renderer_item = gtk_button_new_with_label("Renderer");
     gtk_box_pack_start(GTK_BOX(menu), mode_item, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(menu), renderer_item, FALSE, FALSE, 0);
+    GtkWidget *presets_item=gtk_button_new_with_label("Presets");
+    gtk_box_pack_start(GTK_BOX(menu),presets_item,FALSE,FALSE,0);
+    g_signal_connect(presets_item,"clicked",G_CALLBACK(show_presets),a);
     GtkWidget *tci_item=gtk_button_new_with_label("TCI");
     gtk_box_pack_start(GTK_BOX(menu),tci_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(tci_item,"Open TCI · Alt+T");
@@ -4016,6 +4057,15 @@ static void gui(App *a) {
     GtkWidget *receiver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(receiver_row, GTK_ALIGN_START);
     GtkWidget *decoder=decoder_view_create(&a->decoder_view);
+    GtkWidget *constellation=gtk_widget_get_parent(a->decoder_view.area);
+    g_object_ref(constellation);
+    gtk_container_remove(GTK_CONTAINER(decoder),constellation);
+    GtkWidget *constellation_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
+    gtk_box_pack_start(GTK_BOX(constellation_column),constellation,FALSE,FALSE,0);
+    g_object_unref(constellation);
+    gtk_box_pack_start(GTK_BOX(constellation_column),presets_create(a),FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(decoder),constellation_column,FALSE,FALSE,0);
+    gtk_box_reorder_child(GTK_BOX(decoder),constellation_column,0);
     dab_view_create(&a->dab,&a->decoder_view,GTK_WINDOW(a->window),dab_log_reception,dab_logged_tii,a);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->dab.tii_button,FALSE,FALSE,0);
     gtk_box_reorder_child(GTK_BOX(a->iq_view.filter_controls),a->dab.tii_button,1);
@@ -4072,28 +4122,17 @@ static void gui(App *a) {
     create_diagnostics(a);
     create_config(a);
     source_changed(a->source_box, a);
-    g_signal_connect(a->receiver_offset_box,"value-changed",G_CALLBACK(tuning_changed),a);
-    g_signal_connect(a->offset_box, "value-changed", G_CALLBACK(tuning_changed), a);
-    g_signal_connect(a->step_box, "value-changed", G_CALLBACK(tuning_changed), a);
+    connect_settings_controls(a);
     g_signal_connect(a->window, "key-press-event", G_CALLBACK(tuning_key), a);
     g_signal_connect(a->filter_box, "toggled", G_CALLBACK(filter_changed), a);
-    g_signal_connect(a->format_box, "changed", G_CALLBACK(source_changed), a);
-    g_signal_connect(a->source_box, "changed", G_CALLBACK(source_changed), a);
-    g_signal_connect(a->sdriq_rate_box, "changed", G_CALLBACK(source_changed), a);
-    g_signal_connect(a->rate_box, "value-changed", G_CALLBACK(source_changed), a);
-    g_signal_connect(a->frequency_box, "value-changed", G_CALLBACK(source_changed), a);
-    g_signal_connect(a->constellation_box, "changed", G_CALLBACK(constellation_changed), a);
-    g_signal_connect(a->standard_box, "changed", G_CALLBACK(standard_changed), a);
-    g_signal_connect(a->sr_box, "changed", G_CALLBACK(selection_changed), a);
-    g_signal_connect(a->fec_box, "changed", G_CALLBACK(selection_changed), a);
-    g_signal_connect(a->gi_box, "changed", G_CALLBACK(selection_changed), a);
     g_signal_connect(a->scatter_box, "toggled", G_CALLBACK(scatter_changed), a);
-    g_signal_connect(a->renderer_box, "changed", G_CALLBACK(renderer_selection_changed), a);
     g_signal_connect(a->power_button, "clicked", G_CALLBACK(power_clicked), a);
     g_signal_connect(a->window, "delete-event", G_CALLBACK(window_close), a);
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
     guint decoder_timer = g_timeout_add(50, decoder_tick, a);
     monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); scatter_refresh(a); gtk_main();
+    g_clear_pointer(&a->presets,g_key_file_unref);
+    g_clear_pointer(&a->preset_signature,g_free);
     g_source_remove(decoder_timer);
     g_source_remove(a->iq_view.timer);
     usb_receiver_free(a->usb_receiver); a->usb_receiver=NULL;
@@ -4141,6 +4180,214 @@ static void load_session(App *a) {
         a->scatter = g_key_file_get_boolean(a->config, "session", "scatterfix", &error);
         if (error) fatal("Config [session] scatterfix: %s", error->message);
     }
+}
+
+/* Presets store the same receiver snapshot as W, independently of the active
+ * INI. Station/logging and the diagnostic endpoint remain application-wide. */
+static char *preset_snapshot(App *a) {
+    collect_settings(a,FALSE);
+    GKeyFile *copy=g_key_file_new();
+    char *data=g_key_file_to_data(a->config,NULL,NULL);
+    g_key_file_load_from_data(copy,data,-1,G_KEY_FILE_NONE,NULL);g_free(data);
+    g_key_file_remove_group(copy,"logging",NULL);
+    g_key_file_remove_group(copy,"status",NULL);
+    data=g_key_file_to_data(copy,NULL,NULL);g_key_file_unref(copy);
+    return data;
+}
+
+static gboolean preset_equal(const char *left,const char *right) {
+    GKeyFile *a=g_key_file_new(), *b=g_key_file_new();
+    gboolean equal=g_key_file_load_from_data(a,left,-1,G_KEY_FILE_NONE,NULL) &&
+        g_key_file_load_from_data(b,right,-1,G_KEY_FILE_NONE,NULL);
+    gsize na=0,nb=0;char **groups=g_key_file_get_groups(a,&na);
+    char **other=g_key_file_get_groups(b,&nb);equal=equal && na==nb;g_strfreev(other);
+    for (gsize i=0;equal && i<na;++i) {
+        gsize ka=0,kb=0;char **keys=g_key_file_get_keys(a,groups[i],&ka,NULL);
+        other=g_key_file_get_keys(b,groups[i],&kb,NULL);equal=ka==kb;g_strfreev(other);
+        for (gsize j=0;equal && j<ka;++j) {
+            char *va=g_key_file_get_value(a,groups[i],keys[j],NULL);
+            char *vb=g_key_file_get_value(b,groups[i],keys[j],NULL);
+            equal=!g_strcmp0(va,vb);g_free(va);g_free(vb);
+        }
+        g_strfreev(keys);
+    }
+    g_strfreev(groups);g_key_file_unref(a);g_key_file_unref(b);return equal;
+}
+
+static char *preset_label(App *a,int index) {
+    char group[24];g_snprintf(group,sizeof(group),"preset%d",index);
+    char *label=g_key_file_get_string(a->presets,group,"label",NULL);
+    if (!label || !*label) {g_free(label);return g_strdup_printf("Preset %d",index);}
+    return label;
+}
+
+static gboolean presets_write(App *a) {
+    char *path=g_strconcat(a->config_path,".presets.ini",NULL);
+    char *data=g_key_file_to_data(a->presets,NULL,NULL);GError *error=NULL;
+    GFile *file=g_file_new_for_path(path);
+    gboolean ok=g_file_replace_contents(file,data,strlen(data),NULL,FALSE,
+        G_FILE_CREATE_PRIVATE,NULL,NULL,&error);
+    if (!ok) {
+        char *message=g_strdup_printf("Cannot save presets: %s",error->message);
+        status(a,message);gtk_label_set_text(GTK_LABEL(a->preset_message),message);g_free(message);
+    }
+    g_clear_error(&error);g_object_unref(file);g_free(data);g_free(path);return ok;
+}
+
+static void presets_refresh(App *a) {
+    if (!a->presets) return;
+    if (a->active_preset && a->preset_signature) {
+        char *current=preset_snapshot(a);
+        if (!preset_equal(current,a->preset_signature)) a->active_preset=0;
+        g_free(current);
+    }
+    for (int i=0;i<6;++i) {
+        char group[24];g_snprintf(group,sizeof(group),"preset%d",i+1);
+        char *label=preset_label(a,i+1);gtk_button_set_label(GTK_BUTTON(a->preset_buttons[i]),label);
+        g_free(label);
+        gboolean saved=g_key_file_has_key(a->presets,group,"settings",NULL);
+        gtk_widget_set_sensitive(a->preset_buttons[i],saved && !a->stopping);
+        gtk_widget_set_tooltip_text(a->preset_buttons[i],saved ?
+            "Load preset and stop reception. Click Start SDR to receive." :
+            "Empty preset. Open Presets in the menu to save current settings.");
+        GtkStyleContext *style=gtk_widget_get_style_context(a->preset_buttons[i]);
+        if (a->active_preset==i+1) gtk_style_context_add_class(style,"preset-active");
+        else gtk_style_context_remove_class(style,"preset-active");
+    }
+}
+
+static void preset_apply(App *a,int index) {
+    char group[24];g_snprintf(group,sizeof(group),"preset%d",index);
+    char *data=g_key_file_get_string(a->presets,group,"settings",NULL);
+    GKeyFile *saved=g_key_file_new();GError *error=NULL;
+    if (!data || !g_key_file_load_from_data(saved,data,-1,G_KEY_FILE_NONE,&error)) {
+        status(a,error ? error->message : "This preset is empty");
+        g_clear_error(&error);g_free(data);g_key_file_unref(saved);return;
+    }
+    /* Keep global settings current; replace the receiver's saved groups. */
+    gsize count;char **groups=g_key_file_get_groups(saved,&count);
+    for (gsize i=0;i<count;++i) {
+        if (!strcmp(groups[i],"logging") || !strcmp(groups[i],"status")) continue;
+        g_key_file_remove_group(a->config,groups[i],NULL);
+        char **keys=g_key_file_get_keys(saved,groups[i],NULL,NULL);
+        for (int j=0;keys[j];++j) {
+            char *value=g_key_file_get_value(saved,groups[i],keys[j],NULL);
+            g_key_file_set_value(a->config,groups[i],keys[j],value);g_free(value);
+        }
+        g_strfreev(keys);
+    }
+    g_strfreev(groups);g_key_file_unref(saved);g_free(data);
+    load_session(a);source_defaults(a);
+    /* Rebuild the settings dialogs so every mode-specific field reflects the
+     * snapshot, including fields belonging to currently inactive SDRs. */
+    gtk_widget_destroy(a->mode_dialog);gtk_widget_destroy(a->renderer_dialog);
+    gtk_widget_destroy(a->config_dialog);gtk_widget_destroy(a->tci_dialog);
+    memset(a->hardware_entries,0,sizeof(a->hardware_entries));
+    create_mode_renderer(a);create_config(a);create_tci(a,NULL);
+    populate_rates(a);populate_fecs(a);
+    source_changed(a->source_box,a);
+    connect_settings_controls(a);
+    g_signal_handlers_block_by_func(a->scatter_box,scatter_changed,a);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
+    g_signal_handlers_unblock_by_func(a->scatter_box,scatter_changed,a);
+    a->iq_view.floor=iq_view_saved_level(a->config,"floor_dbfs_hz",-160,-200,-10);
+    a->iq_view.span=iq_view_saved_level(a->config,"range_db",100,10,160);
+    a->iq_view.meter.reference=signal_meter_setting(a->config,"meter_reference_dbfs",-50,-200,20);
+    a->iq_view.meter.span=signal_meter_setting(a->config,"meter_range_db",80,1,160);
+    a->iq_view.meter.interval=signal_meter_setting(a->config,"meter_seconds_per_point",.1,.1,12.8);
+    signal_meter_reset(&a->iq_view.meter);
+    char *program=setting(a,"ffplay","gpu_program"),*device=setting(a,"ffplay","gpu_device");
+    video_view_set_gpu_player(&a->video_view,program,device);g_free(program);g_free(device);
+    a->exit_code=0;refresh_preview(a);monitor_refresh(a);
+    g_free(a->preset_signature);a->preset_signature=preset_snapshot(a);a->active_preset=index;
+    presets_refresh(a);
+    char *label=preset_label(a,index),*message=g_strdup_printf("Preset %s loaded · click Start SDR",label);
+    status(a,message);g_free(label);g_free(message);
+}
+
+static void preset_clicked(GtkButton *button,gpointer data) {
+    App *a=data;if (a->stopping) return;
+    int index=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"preset-index"));
+    if (a->running) {a->pending_preset=index;stop_pipeline(a);}
+    else preset_apply(a,index);
+}
+
+static void preset_store(GtkButton *button,gpointer data) {
+    App *a=data;int index=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"preset-index"));
+    if (a->stopping) {gtk_label_set_text(GTK_LABEL(a->preset_message),"Wait until reception has stopped.");return;}
+    collect_settings(a,TRUE);
+    char *snapshot=preset_snapshot(a),*backup=g_key_file_to_data(a->presets,NULL,NULL);
+    char group[24];g_snprintf(group,sizeof(group),"preset%d",index);
+    g_key_file_set_string(a->presets,group,"settings",snapshot);
+    g_key_file_set_string(a->presets,group,"label",gtk_entry_get_text(GTK_ENTRY(a->preset_labels[index-1])));
+    if (presets_write(a)) gtk_label_set_text(GTK_LABEL(a->preset_message),"Current settings saved to this preset. The regular INI is unchanged.");
+    else g_key_file_load_from_data(a->presets,backup,-1,G_KEY_FILE_NONE,NULL);
+    g_free(backup);g_free(snapshot);presets_refresh(a);
+}
+
+static void presets_response(GtkDialog *dialog,gint response,gpointer data) {
+    (void)response;App *a=data;char *backup=g_key_file_to_data(a->presets,NULL,NULL);
+    for (int i=0;i<6;++i) {
+        char group[24];g_snprintf(group,sizeof(group),"preset%d",i+1);
+        g_key_file_set_string(a->presets,group,"label",gtk_entry_get_text(GTK_ENTRY(a->preset_labels[i])));
+    }
+    if (presets_write(a)) gtk_widget_hide(GTK_WIDGET(dialog));
+    else g_key_file_load_from_data(a->presets,backup,-1,G_KEY_FILE_NONE,NULL);
+    g_free(backup);presets_refresh(a);
+}
+static gboolean presets_close(GtkWidget *widget,GdkEvent *event,gpointer data) {
+    (void)event;presets_response(GTK_DIALOG(widget),GTK_RESPONSE_CLOSE,data);return TRUE;
+}
+static void show_presets(GtkWidget *widget,gpointer data) {
+    (void)widget;App *a=data;
+    if (!a->presets_dialog) {
+        GtkWidget *grid;a->presets_dialog=settings_dialog(a,"Presets · Receiver settings",&grid);
+        GtkWidget *hint=gtk_label_new("Set each button label. Save current settings stores only that preset.\n"
+            "Selecting a preset stops reception; click Start SDR to receive.\n"
+            "Changing settings clears the green selection. Logging and status endpoint settings are shared.");
+        gtk_label_set_xalign(GTK_LABEL(hint),0);gtk_grid_attach(GTK_GRID(grid),hint,0,0,3,1);
+        for (int i=0;i<6;++i) {
+            char *number=g_strdup_printf("%d",i+1),*label=preset_label(a,i+1);
+            gtk_grid_attach(GTK_GRID(grid),gtk_label_new(number),0,i+1,1,1);g_free(number);
+            a->preset_labels[i]=gtk_entry_new();gtk_entry_set_max_length(GTK_ENTRY(a->preset_labels[i]),40);
+            gtk_entry_set_text(GTK_ENTRY(a->preset_labels[i]),label);g_free(label);
+            gtk_grid_attach(GTK_GRID(grid),a->preset_labels[i],1,i+1,1,1);
+            GtkWidget *save=gtk_button_new_with_label("Save current settings");
+            g_object_set_data(G_OBJECT(save),"preset-index",GINT_TO_POINTER(i+1));
+            g_signal_connect(save,"clicked",G_CALLBACK(preset_store),a);
+            gtk_grid_attach(GTK_GRID(grid),save,2,i+1,1,1);
+        }
+        a->preset_message=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(a->preset_message),TRUE);
+        gtk_label_set_max_width_chars(GTK_LABEL(a->preset_message),70);
+        gtk_grid_attach(GTK_GRID(grid),a->preset_message,0,7,3,1);
+        g_signal_connect(a->presets_dialog,"response",G_CALLBACK(presets_response),a);
+        g_signal_connect(a->presets_dialog,"delete-event",G_CALLBACK(presets_close),a);
+    }
+    gtk_widget_show_all(a->presets_dialog);gtk_window_present(GTK_WINDOW(a->presets_dialog));
+}
+
+static GtkWidget *presets_create(App *a) {
+    a->presets=g_key_file_new();char *path=g_strconcat(a->config_path,".presets.ini",NULL);GError *error=NULL;
+    if (!g_key_file_load_from_file(a->presets,path,G_KEY_FILE_NONE,&error) &&
+        !g_error_matches(error,G_FILE_ERROR,G_FILE_ERROR_NOENT)) {
+        status(a,error->message);
+    }
+    g_clear_error(&error);g_free(path);
+    GtkWidget *grid=gtk_grid_new();gtk_grid_set_column_homogeneous(GTK_GRID(grid),TRUE);
+    gtk_grid_set_row_homogeneous(GTK_GRID(grid),TRUE);
+    gtk_grid_set_column_spacing(GTK_GRID(grid),4);gtk_grid_set_row_spacing(GTK_GRID(grid),4);
+    gtk_widget_set_size_request(grid,220,-1);
+    for (int i=0;i<6;++i) {
+        a->preset_buttons[i]=gtk_button_new_with_label("");
+        GtkWidget *label=gtk_bin_get_child(GTK_BIN(a->preset_buttons[i]));
+        gtk_label_set_ellipsize(GTK_LABEL(label),PANGO_ELLIPSIZE_END);
+        gtk_label_set_width_chars(GTK_LABEL(label),6);gtk_label_set_max_width_chars(GTK_LABEL(label),8);
+        gtk_style_context_add_class(gtk_widget_get_style_context(a->preset_buttons[i]),"receiver-preset");
+        g_object_set_data(G_OBJECT(a->preset_buttons[i]),"preset-index",GINT_TO_POINTER(i+1));
+        g_signal_connect(a->preset_buttons[i],"clicked",G_CALLBACK(preset_clicked),a);
+        gtk_grid_attach(GTK_GRID(grid),a->preset_buttons[i],i%3,i/3,1,1);
+    }
+    presets_refresh(a);return grid;
 }
 
 /* Main-context snapshot: no GTK access from network threads, no status files. */

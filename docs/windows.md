@@ -36,6 +36,16 @@ nodig om het programma te gebruiken. Gebruik Windows 10/11, 64-bit.
    volledige map verplaatsen. Een nieuwe ZIP bevat alleen de voorbeeldconfiguratie;
    uitpakken over een bestaande installatie overschrijft je eigen INI niet.
 
+Onder het constellatiescherm staan zes presetknoppen (drie kolommen, twee rijen).
+Via **Presets** stel je per knop een label in en sla je met **Save current settings**
+de actuele ontvangerinstellingen op. Dit overschrijft de gewone INI niet.
+Sluiten van het venster bewaart de labels. De presets staan in
+`linrad-dvb.ini.presets.ini`; bewaar dit bestand ook bij updates of verplaatsingen.
+Een preset kiezen stopt eerst de ontvangst. Start daarna zelf met **Start SDR**.
+De gekozen knop is groen; handmatig gewijzigde instellingen heffen die selectie op.
+Opnieuw starten maakt dan geen preset actief. **W** blijft de gewone INI opslaan.
+Logboek-/stationinstellingen en de HTTP-statusinstellingen gelden voor alle presets.
+
 De decoders zijn beschikbaar voor DVB-S, DVB-S2, DVB-T, DVB-T2 en DAB/DAB+.
 Het DVB-T2-bereik blijft gelijk aan de Linux-versie: de ondersteunde 8 MHz
 broadcastmodi. Ingebouwde video gebruikt de meegeleverde libVLC-plugins.

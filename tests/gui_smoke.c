@@ -870,7 +870,8 @@ static void exercise_menu_clicks(App *a) {
     GtkWidget *menu = controls->data;
     g_assert_cmpstr(gtk_widget_get_name(menu), ==, "receiver-menu");
     GList *buttons = gtk_container_get_children(GTK_CONTAINER(menu));
-    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->tci_dialog};
+    show_presets(NULL,a);gtk_widget_hide(a->presets_dialog);
+    GtkWidget *dialogs[] = {a->config_dialog, a->mode_dialog, a->renderer_dialog, a->presets_dialog, a->tci_dialog};
     g_assert_cmpuint(g_list_length(buttons), ==, G_N_ELEMENTS(dialogs) + 2);
     g_assert_nonnull(g_list_find(buttons,a->log_menu));
     buttons=g_list_remove(buttons,a->log_menu);
@@ -2354,6 +2355,84 @@ static void exercise_bonding(void) {
     puts("Bonding metadata, relative tuning, detection lamp and activation passed");
 }
 
+static gboolean exercise_presets(gpointer data) {
+    App *a=data;static int phase,ticks;static char *original_ini,*preset_one;
+    g_assert_cmpint(++ticks,<,100);
+    if (!phase) {
+        g_assert_true(g_file_get_contents(a->config_path,&original_ini,NULL,NULL));
+        g_assert_cmpint(a->active_preset,==,0);
+        for (int i=0;i<6;++i) {
+            g_assert_false(gtk_widget_get_sensitive(a->preset_buttons[i]));
+            GtkWidget *grid=gtk_widget_get_parent(a->preset_buttons[i]);int column,row;
+            gtk_container_child_get(GTK_CONTAINER(grid),a->preset_buttons[i],"left-attach",&column,"top-attach",&row,NULL);
+            g_assert_cmpint(column,==,i%3);g_assert_cmpint(row,==,i/3);
+        }
+        show_presets(NULL,a);
+        GtkWidget *grid=gtk_widget_get_parent(a->preset_labels[0]);
+        gtk_entry_set_text(GTK_ENTRY(a->preset_labels[0]),"PI6EHV");
+        a->renderer=0;gtk_combo_box_set_active(GTK_COMBO_BOX(a->renderer_box),0);
+        GtkWidget *save=gtk_grid_get_child_at(GTK_GRID(grid),2,1);
+        gtk_button_clicked(GTK_BUTTON(save));
+        g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a->preset_buttons[0])),==,"PI6EHV");
+        g_assert_cmpint(a->active_preset,==,0); /* Saving alone does not select. */
+        preset_one=preset_snapshot(a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
+        g_key_file_set_double(a->config,"b210","gain",53);
+        g_key_file_set_string(a->config,"b210","args","type=b200");
+        a->iq_view.floor=-142;a->iq_view.meter.span=70;
+        gtk_entry_set_text(GTK_ENTRY(a->preset_labels[1]),"Satellite");
+        gtk_button_clicked(GTK_BUTTON(gtk_grid_get_child_at(GTK_GRID(grid),2,2)));
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),2);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_channel_box),0);
+        gtk_entry_set_text(GTK_ENTRY(a->preset_labels[2]),"DAB 5A");
+        gtk_button_clicked(GTK_BUTTON(gtk_grid_get_child_at(GTK_GRID(grid),2,3)));
+        gtk_dialog_response(GTK_DIALOG(a->presets_dialog),GTK_RESPONSE_CLOSE);
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[2]));
+        g_assert_cmpint(a->source,==,2);g_assert_cmpint(a->standard,==,4);
+        g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_channel_box)),==,0);
+        g_assert_cmpint(a->active_preset,==,3);
+        char *disk=NULL;g_assert_true(g_file_get_contents(a->config_path,&disk,NULL,NULL));
+        g_assert_cmpstr(disk,==,original_ini);g_free(disk);
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
+        g_assert_false(a->running);g_assert_cmpint(a->active_preset,==,1);
+        char *snapshot=preset_snapshot(a);g_assert_true(preset_equal(snapshot,preset_one));g_free(snapshot);
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->preset_buttons[0]),"preset-active"));
+        /* Mode, hardware and display controls must all follow the snapshot. */
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[1]));
+        g_assert_cmpint(a->standard,==,1);
+        g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->standard_box)),==,1);
+        g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[2][0])),==,"type=b200");
+        g_assert_cmpfloat(a->iq_view.floor,==,-142);g_assert_cmpfloat(a->iq_view.meter.span,==,70);
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
+        start_pipeline(a);g_assert_true(a->running);
+        presets_refresh(a);g_assert_cmpint(a->active_preset,==,1);
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[1]));
+        g_assert_true(a->stopping);g_assert_cmpint(a->pending_preset,==,2);
+        g_assert_cmpint(a->standard,==,0); /* Old settings retained until stopped. */
+        phase=1;return G_SOURCE_CONTINUE;
+    }
+    if (a->running || a->stopping) return G_SOURCE_CONTINUE;
+    g_assert_cmpint(a->pending_preset,==,0);g_assert_cmpint(a->active_preset,==,2);
+    g_assert_cmpint(a->standard,==,1);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),0);
+    presets_refresh(a);g_assert_cmpint(a->active_preset,==,0);
+    g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->preset_buttons[1]),"preset-active"));
+    /* Going back manually must not reactivate a preset. */
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
+    presets_refresh(a);g_assert_cmpint(a->active_preset,==,0);
+    char *path=g_strconcat(a->config_path,".presets.ini",NULL);GKeyFile *stored=g_key_file_new();
+    g_assert_true(g_key_file_load_from_file(stored,path,G_KEY_FILE_NONE,NULL));
+    char *label=g_key_file_get_string(stored,"preset1","label",NULL);
+    g_assert_cmpstr(label,==,"PI6EHV");g_free(label);
+    g_assert_true(g_key_file_has_key(stored,"preset2","settings",NULL));
+    g_key_file_unref(stored);g_free(path);
+    char *disk=NULL;g_assert_true(g_file_get_contents(a->config_path,&disk,NULL,NULL));
+    g_assert_cmpstr(disk,==,original_ini);g_free(disk);g_free(original_ini);g_free(preset_one);
+    a->exit_code=0;gtk_main_quit();puts("Preset layout, persistence, recall, stop and manual-change checks passed");
+    return G_SOURCE_REMOVE;
+}
+
 int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--test-bonding")) {gtk_init(&argc,&argv);exercise_bonding();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=bonding")) return dvbt_bonding_main(argc-1,argv+1);
@@ -2362,6 +2441,8 @@ int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
+    gboolean preset_test=argc==3 && !strcmp(argv[1],"--test-presets");
+    if (preset_test) {--argc;++argv;}
     g_assert_cmpint(argc, ==, 2);
     App a = {.sr = 125000, .tune_fd = -1};
     a.config = g_key_file_new();
@@ -2369,7 +2450,7 @@ int main(int argc, char **argv) {
     a.directory = g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS, NULL));
     signal(SIGPIPE, SIG_IGN);
-    g_timeout_add(150, exercise, &a);
+    g_timeout_add(150, preset_test ? exercise_presets : exercise, &a);
     gui(&a);
     g_assert_false(a.running);
     g_assert_cmpint(a.exit_code, ==, 0);

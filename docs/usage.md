@@ -80,11 +80,26 @@ Zie de componentdocumentatie voor tests, herkomst en GPL-3.0-licentie.
 De GUI gebruikt één venster zonder tabs, standaard 83% van de beschikbare
 schermbreedte en 80% van de beschikbare hoogte.
 Bovenaan staan de menu's
-**Input**, **Mode**, **Renderer**, **TCI** en **About**. About toont uitleg over de
+**Input**, **Mode**, **Renderer**, **Presets**, **TCI**, **Log** en **About**. About toont uitleg over de
 bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
 projectlinks voor LeanDVB, LDPC, de acquisitiepatch van Ondřej OK1CDJ en
 OnAir (de basis van de DVB-T2-decoder). Het
 venster is scrollbaar zodat ook op kleinere schermen alle informatie bereikbaar is.
+Onder het constellatiescherm staan zes presetknoppen in drie kolommen en twee
+rijen. Open **Presets** om per knop een label in te stellen. **Save current
+settings** bewaart de actuele ontvangerinstellingen alleen in die preset;
+de gewone INI blijft ongewijzigd. Sluiten van het venster bewaart de labels.
+De presets staan naast de INI, bijvoorbeeld in `linrad-dvb.ini.presets.ini`.
+Bewaar dit bestand bij het verplaatsen of bijwerken van de installatie.
+Logboek-/stationinstellingen en de HTTP-statusinstellingen gelden voor alle presets.
+
+Een preset kiezen stopt eerst de lopende ontvangst en laadt daarna de opgeslagen
+instellingen. Start de ontvangst zelf weer met **Start SDR**. De gekozen preset
+is groen. Instellingen handmatig wijzigen heft die selectie op; opnieuw starten
+of handmatig terugzetten maakt geen preset actief. Een lege presetknop is
+uitgeschakeld totdat je er instellingen in opslaat. **W** blijft de gewone INI
+opslaan en overschrijft geen presets.
+
 De waterval en het spectrum staan bovenaan over de volle breedte. Daaronder staan
 links de decoderinformatie en daarnaast een vast playerkader met dezelfde breedte
 en hoogte als Service info. Rechts daarvan verschijnt het TSscatterFix-paneel
