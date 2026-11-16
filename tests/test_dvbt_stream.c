@@ -143,7 +143,52 @@ static void check_soft_stream(rbdvbt_fec_t fec) {
 }
 #endif
 
+/* A live split must preserve both sides of the delayed FIR window. */
+static void check_resampler_chunks(unsigned sr, int channel_filter)
+{
+    enum { COUNT = 20000 };
+    complexf_t *input = malloc(COUNT * sizeof(*input));
+    complexf_t *whole = NULL;
+    size_t whole_count = 0, output_pos = 0;
+    double ratio = (sr * 8.0 / 7.0) / 1010526.0;
+    unsigned rate = (unsigned)lrint(sr * 8.0 / 7.0);
+    assert(input != NULL);
+    for (unsigned i = 0; i < COUNT; ++i) {
+        input[i].re = (float)(sin(i * 0.12) + 0.3 * cos(i * 0.63));
+        input[i].im = (float)(cos(i * 0.17) - 0.2 * sin(i * 0.55));
+    }
+    live_resampler_release(&live_resampler_state);
+    assert(resample_sinc_ratio_live(input, COUNT, ratio, 1010526, rate,
+                                    channel_filter, &whole, &whole_count) == 0);
+    live_resampler_release(&live_resampler_state);
+    for (unsigned offset = 0, block = 0; offset < COUNT; ++block) {
+        size_t count = 701u + block % 7u * 93u;
+        size_t part_count = 0;
+        complexf_t *part = NULL;
+        if (count > COUNT - offset) count = COUNT - offset;
+        assert(resample_sinc_ratio_live(input + offset, count, ratio, 1010526,
+                                        rate, channel_filter, &part, &part_count) == 0);
+        assert(output_pos + part_count <= whole_count);
+        for (size_t j = 0; j < part_count; ++j) {
+            assert(fabsf(part[j].re - whole[output_pos + j].re) < 1e-5f);
+            assert(fabsf(part[j].im - whole[output_pos + j].im) < 1e-5f);
+        }
+        output_pos += part_count;
+        offset += (unsigned)count;
+        free(part);
+    }
+    assert(output_pos == whole_count);
+    free(whole);
+    free(input);
+    live_resampler_release(&live_resampler_state);
+}
+
 int main(void) {
+    rbdvbt_log_set_level(RBDVBT_LOG_ERROR);
+    check_resampler_chunks(250000, 0);
+    check_resampler_chunks(333000, 0);
+    check_resampler_chunks(250000, 1);
+    check_resampler_chunks(333000, 1);
     viterbi_init_tables();
 #if defined(RBDVBT_HAVE_VITERBI_AVX2) || defined(RBDVBT_HAVE_VITERBI_NEON)
 #ifdef RBDVBT_HAVE_VITERBI_AVX2
@@ -152,6 +197,7 @@ int main(void) {
     assert(viterbi_use_simd==!getenv("LINRAD_DVBT_VITERBI_SCALAR"));
 #endif
 #endif
+    puts("DVB-T live resampler: whole/split continuity at 250k and 333k passed");
     check_acs();
     const rbdvbt_fec_t rates[]={RBDVBT_FEC_1_2,RBDVBT_FEC_2_3,RBDVBT_FEC_3_4,RBDVBT_FEC_5_6,RBDVBT_FEC_7_8};
     for (unsigned i=0;i<sizeof(rates)/sizeof(rates[0]);++i)

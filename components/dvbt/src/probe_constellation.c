@@ -2191,7 +2191,10 @@ static int live_resampler_configure(double ratio,
         return -1;
     }
 
-    st->tail_cap = (size_t)st->radius;
+    /* Output near the end of a chunk waits for right-hand filter support.
+     * On the next call its center can still be radius samples before the
+     * boundary, and its left-hand support needs another radius samples. */
+    st->tail_cap = (size_t)st->radius * 2u;
     st->tail = calloc(st->tail_cap, sizeof(*st->tail));
     if (st->tail == NULL) {
         live_resampler_release(st);
