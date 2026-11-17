@@ -374,7 +374,9 @@ static gboolean start_player(VideoView *v, guint16 program) {
     libvlc_media_release(media);
     if (!v->player) return FALSE;
     v->volume_initialized=FALSE;
-    libvlc_audio_set_volume(v->player,100);
+    /* PipeWire's output may exist before its stream has started. Setting its
+     * volume here can dereference an uninitialized stream when VLC is reopened.
+     * tick() sets unity once audio is playing, after output initialization. */
     libvlc_audio_set_mute(v->player, v->muted);
     libvlc_video_set_callbacks(v->player, lock_frame, unlock_frame, display_frame, v);
     libvlc_video_set_format_callbacks(v->player, setup, NULL);

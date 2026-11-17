@@ -10,6 +10,14 @@
 #include <errno.h>
 #include <unistd.h>
 
+int __real_libvlc_audio_set_volume(libvlc_media_player_t *player, int volume);
+int __wrap_libvlc_audio_set_volume(libvlc_media_player_t *player, int volume) {
+    /* PipeWire can crash on volume changes before its stream is initialized.
+     * Enforce the startup contract even when CI uses another audio backend. */
+    g_assert_cmpint(libvlc_media_player_get_state(player), ==, libvlc_Playing);
+    return __real_libvlc_audio_set_volume(player, volume);
+}
+
 static void iterate(void) {
     while (g_main_context_iteration(NULL, FALSE)) {}
     g_usleep(10000);
@@ -179,6 +187,10 @@ static void check_external(const char *path, const char *directory) {
     g_assert_cmpint(kill(pid, SIGTERM), ==, 0); /* Closing the external window. */
     wait_embedded(&v);
     g_assert_cmpuint(v.program, ==, 101);
+    gint64 audio_until = g_get_monotonic_time() + 5 * G_USEC_PER_SEC;
+    while (!v.volume_initialized && g_get_monotonic_time() < audio_until) iterate();
+    g_assert_true(v.volume_initialized);
+    g_assert_cmpint(libvlc_audio_get_volume(v.player), ==, 100);
     g_assert_cmpint(libvlc_audio_get_mute(v.player), ==, 0);
     g_assert_true(v.relay == relay); g_assert_cmpint(v.source_fd, ==, source);
 

@@ -1101,8 +1101,10 @@ class VideoTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "switch.ts")
             subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
-                            "color=c=green:s=320x240:r=25", "-t", "120", "-c:v", "mpeg2video",
-                            "-g", "12", "-program", "program_num=101:st=0",
+                            "color=c=green:s=320x240:r=25", "-f", "lavfi", "-i",
+                            "anullsrc=r=48000:cl=stereo", "-t", "120", "-c:v", "mpeg2video",
+                            "-c:a", "mp2", "-b:a", "64k", "-g", "12",
+                            "-program", "program_num=101:st=0:st=1",
                             "-muxrate", "1000000", "-f", "mpegts", str(path)],
                            check=True, capture_output=True, timeout=20)
             player = Path(tmp, "fake player")
