@@ -543,3 +543,14 @@ Changes already present at that migration in `probe_constellation.c` and
 
 Keep the license with source and binary distributions. See the
 [component development guide](../README.md) for the shared workflow.
+
+## Decoder fixes synchronized from dvbt-rx (2026-11-17)
+
+Explicitly imported the DVB-T changes from dvbt-rx revision `8b3ee09`:
+a four-second minimum live IQ buffer independent of demodulation block size,
+interval IQ-loss and per-symbol pilot-lock diagnostics, and a guarded payload
+pilot-phase fallback for isolated phase-unwrapping slips. Acquisition retains
+the original estimator. The matching frontend regressions cover buffer
+headroom, damaged pilots, good fits and incoherent noise. The C11-compatible
+NEON initializer declaration is synchronized as well. The existing live
+resampler-history fix remains included.

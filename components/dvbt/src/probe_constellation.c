@@ -1813,12 +1813,16 @@ static void *live_iq_ring_reader_main(void *arg)
     }
 }
 
-static int live_iq_ring_start(rbdvbt_input_format_t format,
-                              size_t chunk_samples,
-                              int gui_enabled,
-                              uint32_t sample_rate_hz, double frequency_offset_hz)
+static size_t live_iq_ring_capacity(size_t chunk_samples, uint32_t sample_rate_hz)
 {
     size_t cap = chunk_samples * 4u;
+    size_t min_cap = (size_t)sample_rate_hz * 4u;
+
+    /* Shorter demodulation blocks must not also shorten the protection against
+     * acquisition, scheduling or diagnostic-output stalls on slower hosts. */
+    if (cap < min_cap) {
+        cap = min_cap;
+    }
 
     if (cap < chunk_samples + 4096u) {
         cap = chunk_samples + 4096u;
@@ -1826,6 +1830,15 @@ static int live_iq_ring_start(rbdvbt_input_format_t format,
     if (cap < 16384u) {
         cap = 16384u;
     }
+    return cap;
+}
+
+static int live_iq_ring_start(rbdvbt_input_format_t format,
+                              size_t chunk_samples,
+                              int gui_enabled,
+                              uint32_t sample_rate_hz, double frequency_offset_hz)
+{
+    size_t cap = live_iq_ring_capacity(chunk_samples, sample_rate_hz);
 
     pthread_mutex_lock(&live_iq_ring.mutex);
     if (live_iq_ring.started) {
@@ -5178,6 +5191,7 @@ typedef struct {
 
 static pthread_mutex_t live_health_mutex = PTHREAD_MUTEX_INITIALIZER;
 static live_health_t live_health;
+static uint64_t live_health_last_iq_drops;
 
 #define LIVE_HEALTH_PERIOD_SECONDS 5.0
 
@@ -5228,7 +5242,7 @@ static void live_health_maybe_emit_locked(double now)
                               &iq_wait_samples);
 
         rbdvbt_log_printf(RBDVBT_LOG_INFO,
-                "[health] %.1fs chunks=%u lock_min=%.5f lock_avg=%.5f snr_min=%.2fdB snr_avg=%.2fdB cont_bad=%u max_delta=%llu max_phase_delta=%llu fifo_max=%u fifo_drops=%u fifo_drop_symbols=%u low_pilot=%u packets=%u rs_uncorr=%u cc=%u tei=%u sync_bad=%u iq_fill=%zu/%zu iq_max=%zu iq_drops=%llu iq_waits=%llu iq_wait_samples=%llu outer_acquire_pending=%zu outer_state=%s rs_bad=%u rs_corrected=%u rs_uncorrectable=%u written_packets=%u\n",
+                "[health] %.1fs chunks=%u lock_min=%.5f lock_avg=%.5f snr_min=%.2fdB snr_avg=%.2fdB cont_bad=%u max_delta=%llu max_phase_delta=%llu fifo_max=%u fifo_drops=%u fifo_drop_symbols=%u low_pilot=%u packets=%u rs_uncorr=%u cc=%u tei=%u sync_bad=%u iq_fill=%zu/%zu iq_max=%zu iq_drops=%llu iq_drop_delta=%llu iq_waits=%llu iq_wait_samples=%llu outer_acquire_pending=%zu outer_state=%s rs_bad=%u rs_corrected=%u rs_uncorrectable=%u written_packets=%u\n",
                 elapsed,
                 live_health.chunks,
                 lock_min,
@@ -5251,6 +5265,7 @@ static void live_health_maybe_emit_locked(double now)
                 iq_capacity,
                 iq_max_fill,
                 (unsigned long long)iq_drops,
+                (unsigned long long)(iq_drops - live_health_last_iq_drops),
                 (unsigned long long)iq_waits,
                 (unsigned long long)iq_wait_samples,
                 live_health.outer_acquire_pending,
@@ -5259,6 +5274,7 @@ static void live_health_maybe_emit_locked(double now)
                 live_health.rs_corrected,
                 live_health.rs_uncorrectable,
                 live_health.written_packets);
+        live_health_last_iq_drops = iq_drops;
     }
     live_health_reset_locked(now);
 }
@@ -6631,11 +6647,11 @@ static int write_viterbi_output(rbdvbt_fec_t fec,
     viterbi_detail_t detail;
 
     memset(&detail, 0, sizeof(detail));
-	
+
 	    if (fec != RBDVBT_FEC_AUTO) {
 	        double final_metrics[128];
 		        const double *initial_metrics = NULL;
-		
+
                 if (status != NULL && status->live_mode) {
                     viterbi_t0 = monotonic_seconds();
                 }
@@ -7741,6 +7757,115 @@ static int estimate_dvbt2k_pilot_phase(const complexf_t *shifted,
     return pilot_count >= 2u ? 0 : -1;
 }
 
+static int pilot_slope_compare(const void *a, const void *b)
+{
+    double x = *(const double *)a;
+    double y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+static int estimate_dvbt2k_payload_phase(const complexf_t *shifted,
+                                        uint32_t symbol_index,
+                                        int bin_shift,
+                                        int conjugate,
+                                        double *out_intercept,
+                                        double *out_slope,
+                                        double *out_lock,
+                                        uint32_t *out_pilot_count,
+                                        int *out_repaired)
+{
+    /* Acquisition still uses the original estimator. Only retry a weak fit
+     * on the selected payload hypothesis, avoiding extra work in bin scans. */
+    enum { MAX_PILOTS = RBDVBT_DVBT_2K_ACTIVE_CARRIERS - RBDVBT_DVBT_2K_DATA_CELLS };
+    double phases[MAX_PILOTS], positions[MAX_PILOTS], slopes[MAX_PILOTS];
+    uint32_t n = 0u;
+    double intercept, slope, re = 0.0, im = 0.0;
+    int rc = estimate_dvbt2k_pilot_phase(shifted, symbol_index, bin_shift, conjugate,
+        out_intercept, out_slope, out_lock, out_pilot_count);
+
+    *out_repaired = 0;
+    if (rc != 0 || *out_lock >= LIVE_DECODE_PILOT_LOCK_MIN) {
+        return rc;
+    }
+    for (uint32_t k = 0; k < RBDVBT_DVBT_2K_ACTIVE_CARRIERS; ++k) {
+        rbdvbt_dvbt_carrier_role_t role = rbdvbt_dvbt_2k_carrier_role(symbol_index, k);
+        int bin = (int)rbdvbt_dvbt_2k_logical_to_fft_bin(k) + bin_shift;
+        if ((role != RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT &&
+             role != RBDVBT_DVBT_CARRIER_SCATTERED_PILOT) ||
+            bin < 0 || bin >= (int)RBDVBT_DVBT_2K_FFT_SIZE) {
+            continue;
+        }
+        complexf_t z = shifted[bin];
+        if (!isfinite(z.re) || !isfinite(z.im) || c_abs2(z) <= 0.0f) {
+            continue;
+        }
+        int sign = rbdvbt_dvbt_2k_pilot_sign(k);
+        phases[n] = atan2((conjugate ? -z.im : z.im) * sign, z.re * sign);
+        positions[n] = (double)((int)k - 852);
+        if (n > 0u) {
+            double delta = phases[n] - phases[n - 1u];
+            delta = atan2(sin(delta), cos(delta));
+            slopes[n - 1u] = delta / (positions[n] - positions[n - 1u]);
+        }
+        n++;
+    }
+    if (n < 4u) {
+        return rc;
+    }
+
+    /* A single bad pilot corrupts at most two local slopes. The median gives
+     * an independent reference instead of propagating a 2*pi unwrap slip. */
+    qsort(slopes, n - 1u, sizeof(*slopes), pilot_slope_compare);
+    slope = slopes[(n - 1u) / 2u];
+    for (uint32_t i = 0; i < n; ++i) {
+        double residual = phases[i] - slope * positions[i];
+        re += cos(residual);
+        im += sin(residual);
+    }
+    intercept = atan2(im, re);
+
+    for (unsigned pass = 0; pass < 2u; ++pass) {
+        double fit_n = 0.0, fit_x = 0.0, fit_y = 0.0;
+        double fit_xx = 0.0, fit_xy = 0.0;
+        for (uint32_t i = 0; i < n; ++i) {
+            double x = positions[i];
+            double residual = phases[i] - intercept - slope * x;
+            residual = atan2(sin(residual), cos(residual));
+            if (fabs(residual) > M_PI / 2.0) {
+                continue;
+            }
+            fit_n += 1.0;
+            fit_x += x;
+            fit_y += residual;
+            fit_xx += x * x;
+            fit_xy += x * residual;
+        }
+        double denom = fit_n * fit_xx - fit_x * fit_x;
+        if (fit_n < 0.75 * n || fabs(denom) <= 1e-12) {
+            return rc;
+        }
+        double correction = (fit_n * fit_xy - fit_x * fit_y) / denom;
+        slope += correction;
+        intercept += (fit_y - correction * fit_x) / fit_n;
+    }
+
+    re = im = 0.0;
+    for (uint32_t i = 0; i < n; ++i) {
+        double residual = phases[i] - intercept - slope * positions[i];
+        re += cos(residual);
+        im += sin(residual);
+    }
+    double lock = hypot(re, im) / n;
+    /* Validate against every pilot, including those excluded from the fit. */
+    if (n == *out_pilot_count && lock >= LIVE_DECODE_PILOT_LOCK_MIN && lock > *out_lock) {
+        *out_intercept = intercept;
+        *out_slope = slope;
+        *out_lock = lock;
+        *out_repaired = 1;
+    }
+    return rc;
+}
+
 static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
                                        const complexf_t *samples,
                                        size_t count,
@@ -7884,6 +8009,10 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
     uint64_t point_index = 0;
     uint64_t svg_stride = 1;
     double pilot_lock_sum = 0.0;
+    double pilot_lock_min = 1.0;
+    uint32_t pilot_lock_min_symbol = 0u;
+    uint32_t weak_pilot_symbols = 0u;
+    uint32_t phase_repairs = 0u;
     double evm_error_sum = 0.0;
     uint64_t evm_count = 0;
     uint32_t pilot_lock_count = 0;
@@ -8171,6 +8300,7 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
         double normalizer = 1.0;
         uint32_t pilot_count = 0;
         uint32_t data_count = 0;
+        int phase_repaired = 0;
 
         memset(rx_sio, 0, sizeof(rx_sio));
         memset(rx_sii, 0, sizeof(rx_sii));
@@ -8191,20 +8321,22 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
         fftwf_execute(plan);
         fftshift_copy(fft_out, shifted, RBDVBT_DVBT_2K_FFT_SIZE);
 
-        if (estimate_dvbt2k_pilot_phase(shifted,
+        if (estimate_dvbt2k_payload_phase(shifted,
                                         model_symbol,
                                         best_bin_shift,
                                         best_conjugate,
                                         &phase_intercept,
                                         &phase_slope,
                                         &pilot_lock,
-                                        &pilot_count) != 0) {
+                                        &pilot_count,
+                                        &phase_repaired) != 0) {
             continue;
         }
 
         if (s < skip_symbols) {
             continue;
         }
+        phase_repairs += (uint32_t)phase_repaired;
 
         for (uint32_t di = 0; di < RBDVBT_DVBT_2K_DATA_CELLS; ++di) {
             uint32_t logical_k;
@@ -8381,6 +8513,13 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             }
         }
 
+        if (pilot_lock < pilot_lock_min) {
+            pilot_lock_min = pilot_lock;
+            pilot_lock_min_symbol = used_symbols;
+        }
+        if (pilot_lock < LIVE_DECODE_PILOT_LOCK_MIN) {
+            weak_pilot_symbols++;
+        }
         pilot_lock_sum += pilot_lock;
         pilot_lock_count++;
         used_symbols++;
@@ -8720,13 +8859,17 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
 
     if (rbdvbt_log_enabled(RBDVBT_LOG_INFO)) {
         rbdvbt_log_printf(RBDVBT_LOG_INFO,
-                "[dvbt2k] fft=2048 gi=%u symbol=%u symbols=%u data_carriers=%u demap_dibits=%llu avg_pilot_lock=%.5f snr=%.2fdB cfo=%.2fHz bin_shift=%d conjugate=%d symbol_phase=%d constellation=%s svg=%s demap=%s viterbi=%s ts=%s fec=%s\n",
+                "[dvbt2k] fft=2048 gi=%u symbol=%u symbols=%u data_carriers=%u demap_dibits=%llu avg_pilot_lock=%.5f min_pilot_lock=%.5f min_pilot_symbol=%u weak_pilot_symbols=%u phase_repairs=%u snr=%.2fdB cfo=%.2fHz bin_shift=%d conjugate=%d symbol_phase=%d constellation=%s svg=%s demap=%s viterbi=%s ts=%s fec=%s\n",
                 gi_len,
                 symbol_len,
                 used_symbols,
                 RBDVBT_DVBT_2K_DATA_CELLS,
                 (unsigned long long)demap_dibits,
                 pilot_lock_count > 0 ? pilot_lock_sum / (double)pilot_lock_count : 0.0,
+                pilot_lock_min,
+                pilot_lock_min_symbol,
+                weak_pilot_symbols,
+                phase_repairs,
                 evm_count > 0 && evm_error_sum > 0.0 ? 10.0 * log10((double)evm_count / evm_error_sum) : 0.0,
                 cfo_hz,
                 best_bin_shift,
