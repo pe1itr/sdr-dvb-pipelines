@@ -4385,7 +4385,7 @@ static GtkWidget *presets_create(App *a) {
         gtk_style_context_add_class(gtk_widget_get_style_context(a->preset_buttons[i]),"receiver-preset");
         g_object_set_data(G_OBJECT(a->preset_buttons[i]),"preset-index",GINT_TO_POINTER(i+1));
         g_signal_connect(a->preset_buttons[i],"clicked",G_CALLBACK(preset_clicked),a);
-        gtk_grid_attach(GTK_GRID(grid),a->preset_buttons[i],i%3,i/3,1,1);
+        gtk_grid_attach(GTK_GRID(grid),a->preset_buttons[i],i%2,i/2,1,1);
     }
     presets_refresh(a);return grid;
 }

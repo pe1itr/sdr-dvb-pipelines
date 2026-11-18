@@ -2365,7 +2365,7 @@ static gboolean exercise_presets(gpointer data) {
             g_assert_false(gtk_widget_get_sensitive(a->preset_buttons[i]));
             GtkWidget *grid=gtk_widget_get_parent(a->preset_buttons[i]);int column,row;
             gtk_container_child_get(GTK_CONTAINER(grid),a->preset_buttons[i],"left-attach",&column,"top-attach",&row,NULL);
-            g_assert_cmpint(column,==,i%3);g_assert_cmpint(row,==,i/3);
+            g_assert_cmpint(column,==,i%2);g_assert_cmpint(row,==,i/2);
         }
         show_presets(NULL,a);
         GtkWidget *grid=gtk_widget_get_parent(a->preset_labels[0]);
