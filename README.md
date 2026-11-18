@@ -32,7 +32,7 @@ implementation; the signal meter also takes inspiration from Linrad.
 | DVB-S/S2 | [LeanSDR / LeanDVB](https://github.com/pabr/leansdr) · pabr | Integration, telemetry and FEC improvements |
 | DVB-S2 CPU LDPC | Ahmet Inan / xdsopl, adapted by [pabr](https://github.com/pabr/xdsopl-LDPC-pabr) | SIMD selection, batching and worker management |
 | DVB-S2 GPU LDPC | OnAir LDPC code, tables and Vulkan backend; locally optimized kernel | Optional S2 helper, soft-bit conversion, original-input CPU fallback/retry, tests and measurements |
-| DVB-T bonding | [dvb-channel-bonding](components/bonding/ORIGIN) · PE1ITR, component 1.6.0 | Bonding library, receiver merger, partner control and integration |
+| DVB-T bonding | [dvb-channel-bonding](components/bonding/README.md) · PE1ITR, component 1.6.0 | Bonding library, receiver merger, partner control and integration |
 | DAB/DAB+ | [dab-monitor](components/dab/ORIGIN) · PE1ITR | Receiver, audio, data services and DX recovery |
 | TSscatterFix | [TSscatterFix](components/tsscatterfix/README.md) · PE1ITR | Image recovery and application integration |
 
