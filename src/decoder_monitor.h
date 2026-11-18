@@ -7,7 +7,7 @@
  * Separate messages let status continue during constellation/acquisition gaps. */
 #define DECODER_MONITOR_MAGIC 0x4c444d31u
 #define DECODER_POINTS 768
-enum { DECODER_STATUS = 1, DECODER_CONSTELLATION = 2, DECODER_BUFFER = 3 };
+enum { DECODER_STATUS = 1, DECODER_CONSTELLATION = 2, DECODER_BUFFER = 3, DECODER_DVBT_HEALTH = 4 };
 enum { DECODER_OFDM = 1, DECODER_FEC = 2, DECODER_TS = 4, DECODER_SERVICE = 8 };
 typedef struct {
     uint32_t magic, type;
@@ -33,4 +33,12 @@ typedef struct {
 typedef struct {
     uint32_t magic, type, queued, capacity;
 } DecoderBuffer;
+typedef struct {
+    uint32_t magic, type, chunks, rs_uncorrectable, written_packets;
+    uint32_t symbols, weak_pilot_symbols, phase_repairs, frontend_discontinuities;
+    uint32_t fifo_drop_symbols, low_pilot_drops, rs_corrected, cc_errors, transport_errors, sync_bad;
+    uint64_t iq_dropped_samples_total, iq_producer_waits_total, outer_acquire_pending;
+    char outer_state[24];
+    double window_seconds, pilot_min, pilot_avg, snr_min, snr_avg;
+} DecoderDvbtHealth;
 #endif

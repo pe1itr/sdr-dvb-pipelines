@@ -5165,7 +5165,7 @@ static void live_decode_status_snapshot(rbdvbt_status_context_t *status)
 typedef struct {
     int active;
     double t0;
-    uint32_t chunks;
+    uint32_t chunks, symbols, weak_pilot_symbols, phase_repairs;
     double lock_sum;
     double lock_min;
     double snr_sum;
@@ -5218,6 +5218,28 @@ static void live_health_maybe_emit_locked(double now)
         return;
     }
 
+#ifdef LINRAD_EMBEDDED_DVBT
+    if (dvbt_monitor_enabled()) {
+        unsigned chunks = live_health.chunks;
+        DecoderDvbtHealth frame = {
+            .window_seconds = elapsed, .chunks = chunks,
+            .pilot_min = live_health.lock_min, .snr_min = live_health.snr_min,
+            .pilot_avg = chunks ? live_health.lock_sum / chunks : 0,
+            .snr_avg = chunks ? live_health.snr_sum / chunks : 0,
+            .rs_uncorrectable = live_health.rs_uncorrectable,
+            .symbols = live_health.symbols, .weak_pilot_symbols = live_health.weak_pilot_symbols,
+            .phase_repairs = live_health.phase_repairs, .frontend_discontinuities = live_health.cont_bad,
+            .fifo_drop_symbols = live_health.fifo_drop_symbols, .low_pilot_drops = live_health.low_pilot_drops,
+            .rs_corrected = live_health.rs_corrected, .cc_errors = live_health.cc_errors,
+            .sync_bad = live_health.sync_bad, .transport_errors = live_health.transport_errors,
+            .outer_acquire_pending = live_health.outer_acquire_pending,
+            .written_packets = live_health.written_packets
+        };
+        memcpy(frame.outer_state,live_health.outer_state,sizeof(frame.outer_state));
+        live_iq_ring_snapshot(NULL,NULL,NULL,&frame.iq_dropped_samples_total,&frame.iq_producer_waits_total,NULL);
+        dvbt_monitor_health(&frame);
+    }
+#endif
     if (rbdvbt_log_enabled(RBDVBT_LOG_INFO) &&
         (live_health.chunks > 0u || live_health.packets > 0u ||
          live_health.fifo_drops > 0u || live_health.cont_bad > 0u)) {
@@ -5281,6 +5303,7 @@ static void live_health_maybe_emit_locked(double now)
 
 static void live_health_note_frontend(double lock,
                                       double snr_db,
+                                      unsigned symbols, unsigned weak_pilot_symbols, unsigned phase_repairs,
                                       int have_continuity_measurement,
                                       int frontend_continuous,
                                       uint64_t delta_samples,
@@ -5293,6 +5316,9 @@ static void live_health_note_frontend(double lock,
         live_health_reset_locked(now);
     }
     live_health.chunks++;
+    live_health.symbols += symbols;
+    live_health.weak_pilot_symbols += weak_pilot_symbols;
+    live_health.phase_repairs += phase_repairs;
     live_health.lock_sum += lock;
     live_health.snr_sum += snr_db;
     if (lock < live_health.lock_min) {
@@ -8674,6 +8700,7 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
 	        }
         live_health_note_frontend(live_frontend_cursor.pilot_lock,
                                   evm_count > 0 && evm_error_sum > 0.0 ? 10.0 * log10((double)evm_count / evm_error_sum) : 0.0,
+                                  pilot_lock_count, weak_pilot_symbols, phase_repairs,
                                   health_have_continuity,
                                   frontend_continuous,
                                   health_delta_samples,

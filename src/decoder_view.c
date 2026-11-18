@@ -178,7 +178,7 @@ void decoder_view_stop(DecoderView *v) {
     v->fd=-1; v->port=0; v->active=FALSE;
     v->service_valid=FALSE; v->selected_service[0]=v->selected_provider[0]=0;
     v->selected_video_codec[0]=v->selected_audio_codec[0]=0;
-    v->status_time=v->points_time=v->buffer_time=0;
+    v->status_time=v->points_time=v->buffer_time=v->health_time=0;
     memset(v->history_time,0,sizeof(v->history_time));
     v->history_next=0;
     memset(&v->queue,0,sizeof(v->queue));
@@ -200,7 +200,7 @@ gboolean decoder_view_start(DecoderView *v) {
 
 static void receive_frames(DecoderView *v) {
     if (v->fd<0 || !v->port) return;
-    union { DecoderStatus status; DecoderConstellation points; DecoderBuffer queue; } frame;
+    union { DecoderStatus status; DecoderConstellation points; DecoderBuffer queue; DecoderDvbtHealth health; } frame;
     /* Bound GUI work even if a backend produces too many updates. MSG_TRUNC
      * ensures oversized datagrams cannot masquerade as a valid frame. */
     for (int i=0;i<64;++i) {
@@ -217,9 +217,14 @@ static void receive_frames(DecoderView *v) {
             v->status_time=g_get_monotonic_time();
         } else if (frame.points.type==DECODER_CONSTELLATION && n==sizeof(DecoderConstellation) && frame.points.count<=DECODER_POINTS) {
             v->points=frame.points; v->points_time=g_get_monotonic_time();
+            v->points_received_us=g_get_real_time();
             v->history[v->history_next]=frame.points;
             v->history_time[v->history_next]=v->points_time;
             v->history_next=(v->history_next+1)%DECODER_HISTORY_FRAMES;
+        } else if (frame.health.type==DECODER_DVBT_HEALTH && n==sizeof(DecoderDvbtHealth)) {
+            v->health=frame.health; v->health.outer_state[sizeof(v->health.outer_state)-1]=0;
+            v->health_time=g_get_monotonic_time();
+            v->health_received_us=g_get_real_time();
         } else if (frame.queue.type==DECODER_BUFFER && n==sizeof(DecoderBuffer)) {
             v->queue=frame.queue; v->buffer_time=g_get_monotonic_time();
         }

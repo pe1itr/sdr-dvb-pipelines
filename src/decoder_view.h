@@ -21,6 +21,8 @@ typedef struct {
     gint64 history_time[DECODER_HISTORY_FRAMES];
     unsigned history_next;
     DecoderBuffer queue;
+    DecoderDvbtHealth health;
+    gint64 health_time, health_received_us, points_received_us;
 } DecoderView;
 GtkWidget *decoder_view_create(DecoderView *v);
 gboolean decoder_view_start(DecoderView *v);

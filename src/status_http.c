@@ -6,7 +6,7 @@
 struct StatusHttp {
     GSocketService *service;
     GList *clients;
-    StatusHttpSnapshot snapshot;
+    StatusHttpSnapshot snapshot, constellation;
     gpointer data;
     guint16 port;
 };
@@ -59,9 +59,10 @@ static void received(GObject *object,GAsyncResult *result,gpointer data) {
     if (g_strv_length(parts)!=3 || (strcmp(parts[2],"HTTP/1.0") && strcmp(parts[2],"HTTP/1.1")))
         respond(c,"400 Bad Request","{\"error\":\"invalid request\"}","");
     else if (strcmp(parts[0],"GET")) respond(c,"405 Method Not Allowed","{\"error\":\"GET required\"}","Allow: GET\r\n");
-    else if (strcmp(parts[1],"/status")) respond(c,"404 Not Found","{\"error\":\"use /status\"}","");
+    else if (strcmp(parts[1],"/status") && strcmp(parts[1],"/constellation")) respond(c,"404 Not Found","{\"error\":\"unknown route\"}","");
     else {
-        char *json=c->server->snapshot(c->server->data);
+        StatusHttpSnapshot snapshot = !strcmp(parts[1],"/constellation") ? c->server->constellation : c->server->snapshot;
+        char *json=snapshot(c->server->data);
         respond(c,"200 OK",json,"");g_free(json);
     }
     g_strfreev(parts);
@@ -77,10 +78,10 @@ static gboolean incoming(GSocketService *service,GSocketConnection *connection,G
     s->clients=g_list_prepend(s->clients,c);c->timer=g_timeout_add_seconds(3,expired,c);
     read_request(c);return TRUE;
 }
-StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,gpointer data,GError **error) {
+StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,gpointer data,GError **error) {
     GInetAddress *ip=g_inet_address_new_from_string(address);
     if (!ip) {g_set_error_literal(error,G_IO_ERROR,G_IO_ERROR_INVALID_ARGUMENT,"Status bind address must be a numeric IPv4 or IPv6 address");return NULL;}
-    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->data=data;
+    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;
     GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;g_object_unref(ip);
     gboolean ok=g_socket_listener_add_address(G_SOCKET_LISTENER(s->service),bind,G_SOCKET_TYPE_STREAM,
         G_SOCKET_PROTOCOL_TCP,NULL,&effective,error);g_object_unref(bind);

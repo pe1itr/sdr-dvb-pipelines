@@ -1,6 +1,8 @@
 #ifndef DVBT_BACKEND_H
 #define DVBT_BACKEND_H
 #include <stddef.h>
+#include "decoder_monitor.h"
+void dvbt_monitor_health(DecoderDvbtHealth *frame);
 #include "dvbt_outer.h"
 int dvbt_backend_main(int argc, char **argv);
 int dvbt_monitor_enabled(void);

@@ -20,6 +20,13 @@ int dvbt_monitor_enabled(void) { return monitor_fd >= 0; }
 
 void dvbt_thread_name(const char *name) { (void)prctl(PR_SET_NAME,name,0,0,0); }
 
+void dvbt_monitor_health(DecoderDvbtHealth *frame) {
+    if (monitor_fd < 0) return;
+    frame->magic = DECODER_MONITOR_MAGIC;
+    frame->type = DECODER_DVBT_HEALTH;
+    (void)send(monitor_fd,frame,sizeof(*frame),MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
 void dvbt_monitor_buffer(unsigned queued, unsigned capacity) {
     if (monitor_fd<0) return;
     DecoderBuffer frame={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_BUFFER,

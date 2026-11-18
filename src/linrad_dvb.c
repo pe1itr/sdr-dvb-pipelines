@@ -3361,6 +3361,7 @@ static void show_my_station(GtkWidget *widget, gpointer data) {
 }
 
 static char *network_status(gpointer data);
+static char *network_constellation(gpointer data);
 
 static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
     App *a=data;
@@ -3371,7 +3372,7 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
         const char *bind=gtk_entry_get_text(GTK_ENTRY(a->status_endpoint_bind));
         int port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->status_endpoint_port));
         GError *error=NULL;
-        a->status_http=status_http_start(bind,port,network_status,a,&error);
+        a->status_http=status_http_start(bind,port,network_status,network_constellation,a,&error);
         if (!a->status_http) {
             message=g_strdup_printf("Cannot start status endpoint: %s",error->message);
             g_clear_error(&error);enabled=FALSE;
@@ -4394,6 +4395,47 @@ static GtkWidget *presets_create(App *a) {
 static json_object *status_number(double value) {
     return isfinite(value) ? json_object_new_double(value) : NULL;
 }
+/* Times refer to receipt of this particular local monitor frame. */
+static void add_measurement_time(json_object *object, App *a, gint64 stamp, gint64 received_us, double max_age_ms) {
+    double age = stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
+    json_object_object_add(object,"age_ms",status_number(age));
+    json_object_object_add(object,"received_unix_ms",status_number(stamp ? received_us/1000.0 : NAN));
+    json_object_object_add(object,"fresh",json_object_new_boolean(
+        a->running && !a->stopping && isfinite(age) && age < max_age_ms));
+}
+
+static double configured_channel_hz(App *a) {
+    const char *section = sources[a->source];
+    if (!a->config || !g_key_file_has_key(a->config,section,"frequency",NULL)) return NAN;
+    double hz = g_key_file_get_double(a->config,section,"frequency",NULL) + receiver_offset(a);
+    if (hardware_source(a)) hz += g_key_file_get_double(a->config,section,"lo_offset",NULL);
+    return hz;
+}
+
+static char *network_constellation(gpointer data) {
+    App *a = data;
+    DecoderView *v = &a->decoder_view;
+    json_object *root = json_object_new_object();
+    json_object *points = json_object_new_array();
+    gint64 stamp = a->standard == 2 ? v->points_time : 0;
+    json_object_object_add(root,"standard",json_object_new_string(standards[a->standard]));
+    json_object_object_add(root,"supported",json_object_new_boolean(a->standard == 2));
+    json_object_object_add(root,"configured_frequency_hz",status_number(a->standard == 2 ? configured_channel_hz(a) : NAN));
+    add_measurement_time(root,a,stamp,v->points_received_us,2000);
+    for (unsigned i=0; stamp && i<v->points.count; ++i) {
+        float re=v->points.iq[2*i], im=v->points.iq[2*i+1];
+        if (!isfinite(re) || !isfinite(im)) continue;
+        json_object *pair=json_object_new_array_ext(2);
+        json_object_array_add(pair,json_object_new_double(re));
+        json_object_array_add(pair,json_object_new_double(im));
+        json_object_array_add(points,pair);
+    }
+    json_object_object_add(root,"points",points);
+    char *text=g_strdup(json_object_to_json_string_ext(root,JSON_C_TO_STRING_PLAIN));
+    json_object_put(root);
+    return text;
+}
+
 static char *network_status(gpointer data) {
     App *a=data;json_object *root=json_object_new_object();
 #define STR(o,k,v) json_object_object_add(o,k,json_object_new_string(v))
@@ -4419,6 +4461,38 @@ static char *network_status(gpointer data) {
     double age=stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
     NUM(root,"telemetry_age_ms",age);
     BOOL(root,"telemetry_fresh",a->running && !a->stopping && isfinite(age) && age<2000);
+    if (a->standard==2) {
+        NUM(root,"configured_frequency_hz",configured_channel_hz(a));
+        json_object *window=NULL;
+        if (a->decoder_view.health_time) {
+            const DecoderDvbtHealth *h=&a->decoder_view.health;
+            window=json_object_new_object();
+            add_measurement_time(window,a,a->decoder_view.health_time,a->decoder_view.health_received_us,10000);
+            NUM(window,"window_seconds",h->window_seconds);
+            NUM(window,"chunks",h->chunks);
+            NUM(window,"pilot_lock_min",h->chunks ? h->pilot_min : NAN);
+            NUM(window,"pilot_lock_avg",h->chunks ? h->pilot_avg : NAN);
+            NUM(window,"snr_db_min",h->chunks ? h->snr_min : NAN);
+            NUM(window,"snr_db_avg",h->chunks ? h->snr_avg : NAN);
+            NUM(window,"symbols",h->symbols);
+            NUM(window,"weak_pilot_symbols",h->weak_pilot_symbols);
+            NUM(window,"phase_repairs",h->phase_repairs);
+            NUM(window,"frontend_discontinuities",h->frontend_discontinuities);
+            NUM(window,"low_pilot_drops",h->low_pilot_drops);
+            NUM(window,"fifo_drop_symbols",h->fifo_drop_symbols);
+            NUM(window,"rs_corrected",h->rs_corrected);
+            NUM(window,"cc_errors",h->cc_errors);
+            NUM(window,"transport_errors",h->transport_errors);
+            NUM(window,"sync_bad",h->sync_bad);
+            json_object_object_add(window,"outer_state",strcmp(h->outer_state,"-") ? json_object_new_string(h->outer_state) : NULL);
+            json_object_object_add(window,"outer_acquire_pending",strcmp(h->outer_state,"-") ? json_object_new_uint64(h->outer_acquire_pending) : NULL);
+            json_object_object_add(window,"iq_dropped_samples_total",json_object_new_uint64(h->iq_dropped_samples_total));
+            json_object_object_add(window,"iq_producer_waits_total",json_object_new_uint64(h->iq_producer_waits_total));
+            NUM(window,"rs_uncorrectable",h->rs_uncorrectable);
+            NUM(window,"written_packets",h->written_packets);
+        }
+        json_object_object_add(root,"dvbt_health",window);
+    }
     json_object *sdr=NULL;
     if (a->sdr_status_time) {
         sdr=json_object_new_object();SdrRxStatus *s=&a->sdr_status;
@@ -4447,7 +4521,8 @@ static char *network_status(gpointer data) {
         if (stamp) {
             d=json_object_new_object();DecoderStatus *v=&a->decoder_view.status;
             NUM(d,"locks",v->locks);NUM(d,"lock_valid",v->lock_valid);
-            NUM(d,"snr_db",v->snr_db);NUM(d,"mer_db",v->mer_db);NUM(d,"cfo_hz",v->cfo_hz);
+            NUM(d,"snr_db",v->snr_db);NUM(d,"mer_db",a->standard==2 ? NAN : v->mer_db);NUM(d,"cfo_hz",v->cfo_hz);
+            if (a->standard==2) NUM(d,"pilot_lock",v->pilot_lock);
             NUM(d,"rms_dbfs",v->rms_dbfs);NUM(d,"peak_dbfs",v->peak_dbfs);
             NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
             NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
@@ -4646,7 +4721,7 @@ int main(int argc, char **argv) {
         if (!status_bind) status_bind=g_key_file_get_string(a.config,"status","bind",NULL);
         if (!status_bind) status_bind=g_strdup("127.0.0.1");
         if (status_port) {
-            a.status_http=status_http_start(status_bind,status_port,network_status,&a,&error);
+            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,&a,&error);
             if (!a.status_http) fatal("Cannot start status endpoint: %s",error->message);
             fprintf(stderr,"[status] HTTP listening on %s port %d (/status)\n",status_bind,status_port);
         }

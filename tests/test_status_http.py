@@ -99,6 +99,13 @@ class StatusTests(unittest.TestCase):
         self.assertGreaterEqual(state['telemetry_age_ms'], 0)
         self.assertIn('Pipeline running', state['recent_log'])
         self.assertIn('error', state['dab'])
+        code, constellation = self.get('/constellation')
+        self.assertEqual(code, 200)
+        self.assertFalse(constellation['supported'])
+        self.assertFalse(constellation['fresh'])
+        self.assertIsNone(constellation['received_unix_ms'])
+        self.assertEqual(constellation['points'], [])
+        self.assertEqual(self.get('/constellation', 'POST')[0], 405)
         self.assertEqual(self.get('/missing')[0], 404)
         self.assertEqual(self.get(method='POST')[0], 405)
         # Internal DAB status now travels through a pipe, never through state.json.

@@ -574,6 +574,46 @@ reception is healthy. The endpoint stays available when reception stops or fails
 in the GUI, until the application closes. With `--run`, it ends when the receiver
 process exits. Errors before application startup remain on stderr.
 
+#### DVB-T reception quality
+
+For a headless repeater or the GUI, poll `GET /status` for numbers and
+`GET /constellation` for the latest equalized QPSK points. Both routes describe
+the primary DVB-T channel. With bonding this is the anchor. The separate
+Python multichannel launcher has its own process topology and no HTTP server.
+
+* `decoder.snr_db` estimates quality from the mean squared distance to the
+  nearest ideal QPSK symbol after equalization. Higher values mean tighter
+  clusters. `decoder.pilot_lock` reports pilot coherence. `decoder.mer_db`
+  is null for DVB-T. Use the window below for trends during fading.
+* `dvbt_health` contains the most recently completed decoder interval (normally
+  about five seconds). `window_seconds` gives its actual duration.
+  `snr_db_min/avg` and `pilot_lock_min/avg` are the minimum and mean of **chunk**
+  estimates. They are null in a window with zero chunks. `weak_pilot_symbols`,
+  `symbols` and `phase_repairs` count individual OFDM symbols. A phase repair
+  records a correction attempt by the pilot phase tracker.
+* `frontend_discontinuities` counts failed continuity checks,
+  `low_pilot_drops` counts chunks withheld from decoding for weak pilots, and
+  `fifo_drop_symbols` counts symbols discarded from the decoder queue.
+  `iq_dropped_samples_total` and `iq_producer_waits_total` are cumulative
+  decoder input-ring counters since worker start. A producer wait is a
+  backpressure event. SDR hardware overflow counts belong to the SDR.
+* `outer_state` and `outer_acquire_pending` give the last outer decoder state
+  and pending acquisition bytes observed in that window. `rs_corrected`,
+  `rs_uncorrectable`, `written_packets`, `cc_errors`, `transport_errors`
+  and `sync_bad` are counts within the same window. Compare them with pilot
+  quality to see whether the delivered transport stream is affected.
+* `/constellation` returns up to 768 finite `[I,Q]` pairs under `points`.
+  Plot both axes on the same scale. Ideal QPSK coordinates are ±0.707 on each
+  axis. The response includes `configured_frequency_hz`, `standard`,
+  `supported`, `received_unix_ms`, `age_ms` and `fresh`. Before the first
+  frame the array is empty and the times are null. Other modes report
+  `supported=false`.
+* Each window and constellation frame has its own host receipt timestamp.
+  Polling twice can return the same frame. `fresh` requires a running receiver
+  and an age under two seconds for points, ten seconds for a completed health
+  window. Check it before using a retained measurement. `dvbt_health` is null
+  until the first window arrives.
+
 Slow clients have a three-second deadline; at most sixteen connections are kept
 open. Requests never wait for new IQ or decoder data. The standalone `dab_worker`
 retains its legacy file output for existing scripts; `--status-stdout` selects the
