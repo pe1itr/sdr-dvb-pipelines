@@ -787,7 +787,12 @@ static void exercise_file_selection(App *a) {
     g_assert_false(gtk_widget_get_sensitive(a->offset_box));
     g_assert_false(gtk_widget_get_sensitive(a->format_box));
     g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->file_details)), "0.004 s"));
+    g_assert_true(gtk_widget_is_sensitive(a->receiver_offset_box));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),50);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)), ==, "144.650000 MHz");
     char *command=describe(a);
+    g_assert_nonnull(strstr(command,"'--receiver-offset' '50000'"));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),0);
     g_assert_nonnull(strstr(command,"iq_file_to_stdout"));
     g_assert_nonnull(strstr(command,"'--sr' '40000'")); g_free(command);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->rate_box),200000);

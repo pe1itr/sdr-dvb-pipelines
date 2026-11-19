@@ -220,7 +220,7 @@ static void select_rtlsdr_serial(App *a, const char *serial) {
 /* Converter LO changes RF labels; receiver offset selects a channel inside
  * the raw SDR band. Keep these independent, including raw recording metadata. */
 static double receiver_offset(App *a) {
-    if (!hardware_source(a) || !g_key_file_has_key(a->config,sources[a->source],"receiver_offset",NULL)) return 0;
+    if (!a->source || (a->source==SOURCE_FILE && a->standard==4) || !g_key_file_has_key(a->config,sources[a->source],"receiver_offset",NULL)) return 0;
     GError *error=NULL;
     double offset=g_key_file_get_double(a->config,sources[a->source],"receiver_offset",&error);
     if (error) { g_error_free(error); return NAN; }
@@ -310,7 +310,7 @@ static const char *receiver_offset_problem(App *a) {
         if (g_key_file_get_boolean(a->config,section,"filter_enabled",NULL) && filter < 8000000)
             return "DVB-T2: disable the narrow IQ filter or select at least 8 MHz.";
     }
-    if (!hardware_source(a)) return NULL;
+    if (!a->source || (a->source==SOURCE_FILE && receiver_offset(a)==0)) return NULL;
     const char *section=sources[a->source];
     GError *error=NULL;
     double frequency=g_key_file_get_double(a->config,section,"frequency",&error);
@@ -324,8 +324,8 @@ static const char *receiver_offset_problem(App *a) {
             "Airspy R2: select sample rate 2500000 or 10000000 samples/s (also checked against the connected device).");
         return a->receiver_offset_error;
     }
-    if (!rx_tuning_valid(section,frequency,offset) || !isfinite(lo) ||
-        !isfinite(frequency+lo+offset) || frequency+lo+offset < 0) {
+    if (hardware_source(a) && (!rx_tuning_valid(section,frequency,offset) || !isfinite(lo) ||
+        !isfinite(frequency+lo+offset) || frequency+lo+offset < 0)) {
         g_snprintf(a->receiver_offset_error,sizeof(a->receiver_offset_error),
             "%s: invalid SDR/IF tuning. SDR/IF %.9g Hz + converter LO %+.9g Hz + receiver offset %+.9g Hz. "
             "Hardware range: %.9g..%.9g Hz%s. Converter LO changes the RF label, not the hardware range.",
@@ -441,6 +441,10 @@ static void build_pipeline(App *a) {
         char *resolved = *path ? g_canonicalize_filename(path, a->directory) : g_strdup("");
         add(s, "--in"); add(s, resolved);
         add_number(s, "--sample-rate", sample_rate);
+        if (receiver_offset(a)!=0) {
+            char value[G_ASCII_DTOSTR_BUF_SIZE];
+            add(s,"--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
+        }
         add(s, "--input-format"); add(s, input_format);
         add_number(s, "--header-bytes", integer_setting(a,"file","header_bytes",0,100000000));
         if (a->window) add(s,"--control-stdin");
@@ -1225,8 +1229,13 @@ static void tuning_refresh(App *a) {
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
-    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && hardware_source(a));
+    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0);
     gtk_widget_set_sensitive(a->step_box, (a->standard!=4 || dab_free_tuning(a)) && hardware_source(a));
+    double rx_offset=receiver_offset(a);
+    a->iq_view.receiver_offset=rx_offset;
+    g_signal_handlers_block_by_func(a->receiver_offset_box, tuning_changed, a);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),isfinite(rx_offset) ? rx_offset/1000.0 : 0);
+    g_signal_handlers_unblock_by_func(a->receiver_offset_box, tuning_changed, a);
     if (a->standard==4) {
         int channel=dab_channel(a);
         char *label=dab_free_tuning(a) ? g_strdup_printf("%.6f MHz",dab_frequency(a)/1e6) :
@@ -1244,9 +1253,9 @@ static void tuning_refresh(App *a) {
     }
     if (a->source==SOURCE_FILE) {
         double frequency=g_key_file_get_double(a->config,"file","frequency",NULL);
-        char *text=g_strdup_printf("%.6f MHz",frequency/1e6);
+        char *text=g_strdup_printf("%.6f MHz",(frequency+rx_offset)/1e6);
         gtk_label_set_text(GTK_LABEL(a->frequency_display),text); g_free(text);
-        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"File input: the receive frequency only sets the display scale; hardware tuning and gain are disabled.");
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"File input: DVB receive frequency = recording center + receiver offset.");
         return;
     }
     if (!a->source) {
@@ -1256,13 +1265,8 @@ static void tuning_refresh(App *a) {
     }
     const char *section = sources[a->source];
     double offset = g_key_file_get_double(a->config, section, "lo_offset", NULL);
-    double rx_offset=receiver_offset(a);
-    a->iq_view.receiver_offset=rx_offset;
     double step = g_key_file_get_double(a->config, section, "tune_step", NULL);
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
-    g_signal_handlers_block_by_func(a->receiver_offset_box, tuning_changed, a);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),isfinite(rx_offset) ? rx_offset/1000.0 : 0);
-    g_signal_handlers_unblock_by_func(a->receiver_offset_box, tuning_changed, a);
     g_signal_handlers_block_by_func(a->offset_box, tuning_changed, a);
     g_signal_handlers_block_by_func(a->step_box, tuning_changed, a);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box), offset/1000.0);
@@ -1281,15 +1285,17 @@ static void tuning_refresh(App *a) {
 
 static void tuning_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
-    if (!hardware_source(a)) return;
+    if (!hardware_source(a) && !(a->source==SOURCE_FILE && widget==a->receiver_offset_box)) return;
     if (widget == a->receiver_offset_box && a->running) return;
     const char *section = sources[a->source];
     g_key_file_set_double(a->config,section,"receiver_offset",
         gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->receiver_offset_box))*1000.0);
-    g_key_file_set_double(a->config, section, "lo_offset",
-        gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->offset_box))*1000.0);
-    g_key_file_set_double(a->config, section, "tune_step",
-        gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->step_box)));
+    if (hardware_source(a)) {
+        g_key_file_set_double(a->config, section, "lo_offset",
+            gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->offset_box))*1000.0);
+        g_key_file_set_double(a->config, section, "tune_step",
+            gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->step_box)));
+    }
     tuning_refresh(a);
     if (!a->running) refresh_preview(a);
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
@@ -2270,7 +2276,7 @@ static void rate_cell_data(GtkCellLayout *layout, GtkCellRenderer *cell,
     char *label=NULL;
     gtk_tree_model_get(model,iter,0,&label,-1);
     double width=label ? g_ascii_strtod(label,NULL)*(a->standard >= 2 ? 1 : 1.35) : NAN;
-    gboolean valid=!hardware_source(a) || rx_bandwidth_fits(sources[a->source],
+    gboolean valid=(!hardware_source(a) && receiver_offset(a)==0) || rx_bandwidth_fits(sources[a->source],
         g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL),receiver_offset(a),width);
     g_object_set(cell,"sensitive",valid,NULL);
     g_free(label);
@@ -3096,7 +3102,7 @@ static void create_config(App *a) {
             g_signal_connect(browse,"clicked",G_CALLBACK(choose_iq_file),a);
             a->file_format=combo(grid,"File format",1,file_formats,G_N_ELEMENTS(file_formats),0);
             a->file_header=spin(grid,"Skip header (bytes)",2,0,100000000,1);
-            a->file_center=spin(grid,"Receive frequency (MHz)",3,0,1000000,1);
+            a->file_center=spin(grid,"Recording center (MHz)",3,0,1000000,1);
             gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->file_center),6);
             a->file_details=gtk_label_new("");
             gtk_label_set_xalign(GTK_LABEL(a->file_details),0);

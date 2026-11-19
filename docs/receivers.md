@@ -288,8 +288,8 @@ Signed offsets are supported; this is an additive offset, not a high-side mixer
 inversion mode.
 
 **DVB receiver offset (kHz)** is a separate setting in **SDR**, available for
-direct hardware sources while stopped. It selects a DVB channel above (positive)
-or below (negative) the hardware center. **0 bypasses the frequency conversion
+direct hardware sources and IQ files while stopped. It selects a DVB channel above (positive)
+or below (negative) the hardware or recording center. **0 bypasses the frequency conversion
 entirely**, retaining the existing sample processing. **W** saves the offset per
 source as `receiver_offset` in **Hz**; older configurations default to zero.
 

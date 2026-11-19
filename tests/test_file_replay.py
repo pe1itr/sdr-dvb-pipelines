@@ -34,6 +34,22 @@ class FileReplayTests(unittest.TestCase):
                 self.assertLess(elapsed, 2)
                 self.assertIn(b'end of file', p.stderr)
 
+    def test_receiver_offset_centers_tones_across_chunks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'tone.iq')
+            for fmt, code, amplitude, zero in [('s16', 'h', 8192, 0), ('u8', 'B', 32, 128),
+                                                ('cf32', 'f', .25, 0)]:
+                for sign in (-1, 1):
+                    with self.subTest(fmt=fmt, sign=sign):
+                        cycle = (1, 0, 0, sign, -1, 0, 0, -sign)
+                        path.write_bytes(struct.pack('<8' + code, *(zero + amplitude*x for x in cycle))*31)
+                        p = subprocess.run([PLAYER, '--in', path, '--sample-rate', '1100',
+                                            '--input-format', fmt, '--receiver-offset', str(sign*275)],
+                                           capture_output=True, timeout=3)
+                        self.assertEqual(p.returncode, 0, p.stderr)
+                        expected = struct.pack('<2B', 160, 128) if fmt=='u8' else struct.pack('<2h', 8192, 0)
+                        self.assertEqual(p.stdout, expected*124)
+
     def test_float_conversion_and_invalid_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, 'samples.cf32')

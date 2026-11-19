@@ -3,6 +3,7 @@
 #include <glib/gstdio.h>
 #include "iq_bandfilter.h"
 #include "iq_monitor.h"
+#include "iq_shift.h"
 #include "tune_control.h"
 #include <fcntl.h>
 #include <poll.h>
@@ -19,6 +20,7 @@ typedef struct {
     gboolean control;
     int rate;
     double bandwidth;
+    IQShift shift;
     TuneControl parser;
     IQBandFilter *filter;
 } Replay;
@@ -27,6 +29,10 @@ static gboolean controls(Replay *r) {
     double unused=0, bandwidth=r->bandwidth;
     int changed=tune_control_read(&r->parser,STDIN_FILENO,1,0,&unused,1,0,0,&unused,r->rate,&bandwidth);
     if ((changed&4) && bandwidth!=r->bandwidth) {
+        if (r->shift.offset && !iq_shift_fits(r->rate,r->shift.offset,bandwidth)) {
+            fprintf(stderr,"[iq-file] Filter exceeds recorded band at selected offset\n");
+            return TRUE;
+        }
         if (iq_bandfilter_set(r->filter,bandwidth)) return FALSE;
         r->bandwidth=bandwidth;
         fprintf(stderr,"[iq-file] IQ filter width %.0f Hz (0=bypass)\n",bandwidth);
@@ -71,11 +77,13 @@ int main(int argc, char **argv) {
 #endif
     char *path=NULL, *format=NULL;
     int header=0; Replay r={0};
+    double offset=0;
     GOptionEntry entries[]={
         {"in",0,0,G_OPTION_ARG_FILENAME,&path,"IQ file","FILE"},
         {"sample-rate",0,0,G_OPTION_ARG_INT,&r.rate,"Samples per second","HZ"},
         {"input-format",0,0,G_OPTION_ARG_STRING,&format,"s16, u8 or cf32 (little-endian IQ)","FORMAT"},
         {"header-bytes",0,0,G_OPTION_ARG_INT,&header,"Bytes to skip at the start","N"},
+        {"receiver-offset",0,0,G_OPTION_ARG_DOUBLE,&offset,"Channel offset from recording center","HZ"},
         {"filter-bandwidth",0,0,G_OPTION_ARG_DOUBLE,&r.bandwidth,"Total IQ bandwidth; 0=bypass","HZ"},
         {"control-stdin",0,0,G_OPTION_ARG_NONE,&r.control,"Live bandwidth commands on stdin",NULL}, {NULL}
     };
@@ -91,6 +99,9 @@ int main(int argc, char **argv) {
     if (!format) format=g_strdup("s16");
     if (argc!=1 || !path || r.rate<1 || r.rate>100000000 || !iq_bandfilter_valid(r.rate,r.bandwidth)) {
         g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Invalid file, sample rate or bandwidth"); goto invalid;
+    }
+    if (iq_shift_init(&r.shift,r.rate,offset) || (offset && !iq_shift_fits(r.rate,offset,r.bandwidth))) {
+        g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Receiver offset or filter exceeds recorded band"); goto invalid;
     }
     if (!iq_file_validate(path,format,header,&samples,&error)) goto invalid;
     FILE *file=g_fopen(path,"rb");
@@ -108,6 +119,7 @@ int main(int argc, char **argv) {
     gboolean u8=!strcmp(format,"u8"), cf32=!strcmp(format,"cf32");
     size_t stride=u8 ? 2 : cf32 ? 8 : 4, chunk=CLAMP(r.rate/100,1,8192);
     uint8_t input[8192*8], converted[8192*4];
+    float shifted[8192*2];
     guint64 sent=0; int result=0;
     gint64 start=g_get_monotonic_time(), epoch=start;
     fprintf(stderr,"[iq-file] %s: %s, %d samples/s, %.3f s, realtime\n",path,format,r.rate,(double)samples/r.rate);
@@ -128,7 +140,13 @@ int main(int argc, char **argv) {
         }
         if (!controls(&r)) { result=1; break; }
         iq_monitor_feed(out,count,u8,r.rate);
-        iq_bandfilter_process(r.filter,out,count,u8);
+        if (offset) {
+            for (size_t i=0; i<count*2; ++i)
+                shifted[i]=u8 ? ((int)out[i]-128)*256 : (int16_t)(out[2*i] | (out[2*i+1]<<8));
+            iq_shift_process(&r.shift,shifted,count);
+            iq_bandfilter_process_float(r.filter,shifted,count);
+            iq_shift_pack(shifted,out,count,u8);
+        } else iq_bandfilter_process(r.filter,out,count,u8);
         if (!output(&r,out,count*(u8 ? 2 : 4))) { if (!stopping) { perror("IQ stdout"); result=1; } break; }
         sent+=count;
         gint64 deadline=epoch+(gint64)((long double)sent*G_USEC_PER_SEC/r.rate);
