@@ -449,16 +449,20 @@ instellingen onder `[lime]`; bestaande configuraties krijgen automatisch default
 Installeer de klassieke **LimeSuite** ontwikkelbestanden (`LimeSuite.pc`,
 `lime/LimeSuite.h`, `libLimeSuite`) en bouw opnieuw. SoapyLMS7 is niet nodig.
 Zonder LimeSuite blijft de rest van het programma bouwen, maar geeft de
-LimeSDR-ingang bij starten een duidelijke foutmelding. Voor de lokale
-installatie die ook `datv-transmitter` gebruikt:
+LimeSDR-ingang bij starten de melding `Built without LimeSuite`. Staat
+`datv-transmitter` naast deze checkout, gebruik dan zijn bestaande installatie.
+Voer vanuit de hoofdmap van `sdr-dvb-pipelines` uit:
 
 ```bash
-export PKG_CONFIG_PATH="/path/to/limesuite/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export PKG_CONFIG_PATH="$(realpath ../datv-transmitter/build/limesuite/lib/pkgconfig)${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+pkg-config --modversion LimeSuite
 bash tools/build.sh -j4
 ./build/linrad_dvb --source lime
 ```
 
-De build neemt het librarypad op in de RX-helper. Het project vereist geen
+Voer de export opnieuw uit als je in een nieuwe terminal bouwt. Bewaar de
+LimeSuite-installatie ook na de build: de RX-helper laadt de bibliotheek
+tijdens ontvangst uit het ingebouwde librarypad. Het project vereist geen
 naastgelegen checkout als LimeSuite via de normale pkg-config-paden beschikbaar
 is. Bij wisselen van LimeSuite-installatie of bouwen zonder LimeSuite wordt de
 helper automatisch opnieuw gebouwd.
