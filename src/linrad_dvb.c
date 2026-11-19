@@ -61,6 +61,7 @@ typedef struct {
     GString *status_log;
     SdrRxStatus sdr_status;
     gint64 sdr_status_time;
+    double rtlsdr_readback_hz;
     char *status_message;
     char *config_path, *directory;
     int standard, sr, fec, gi, exit_code, source, constellation;
@@ -775,6 +776,11 @@ static void record_log(App *a, const char *text, size_t length) {
                     g_free(a->bond_json);a->bond_json=g_strdup(line+strlen("[bond-status] "));
                 }
             }
+            if (a->running && !a->stopping && a->source == SOURCE_RTLSDR) {
+                double hz;
+                if (sscanf(line, "[SDR] RTL-SDR tuner readback: %lf", &hz) == 1)
+                    a->rtlsdr_readback_hz = hz;
+            }
             if (a->running && !a->stopping && sdr_rx_status_parse(line,&a->sdr_status))
                 a->sdr_status_time=g_get_monotonic_time();
             if (g_str_has_prefix(line, "[iq-record] ")) {
@@ -1107,6 +1113,7 @@ static void start_pipeline(App *a) {
     }
     if ((a->window || a->status_http) && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decoder telemetry unavailable; reception continues.\n");
+    a->rtlsdr_readback_hz = 0;
     a->sdr_status=(SdrRxStatus){0};a->sdr_status_time=0;a->record_log_used=0;
     a->running = TRUE;
     if (a->controls) {
@@ -4468,8 +4475,23 @@ static char *network_status(gpointer data) {
     double age=stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
     NUM(root,"telemetry_age_ms",age);
     BOOL(root,"telemetry_fresh",a->running && !a->stopping && isfinite(age) && age<2000);
+    NUM(root,"configured_frequency_hz",configured_channel_hz(a));
+    if (a->source == SOURCE_RTLSDR && a->config) {
+        json_object *tuning = json_object_new_object();
+        double set_hz = g_key_file_has_key(a->config,"rtlsdr","frequency",NULL)
+            ? g_key_file_get_double(a->config,"rtlsdr","frequency",NULL) : NAN;
+        double lo = g_key_file_get_double(a->config,"rtlsdr","lo_offset",NULL);
+        double offset = receiver_offset(a);
+        double readback = a->running && !a->stopping && a->rtlsdr_readback_hz > 0
+            ? a->rtlsdr_readback_hz : NAN;
+        NUM(tuning,"sdr_set_hz",set_hz);
+        NUM(tuning,"sdr_readback_hz",readback);
+        NUM(tuning,"lo_offset_hz",lo);
+        NUM(tuning,"receiver_offset_hz",offset);
+        NUM(tuning,"rf_frequency_hz",readback + lo + offset);
+        json_object_object_add(root,"tuning",tuning);
+    }
     if (a->standard==2) {
-        NUM(root,"configured_frequency_hz",configured_channel_hz(a));
         json_object *window=NULL;
         if (a->decoder_view.health_time) {
             const DecoderDvbtHealth *h=&a->decoder_view.health;

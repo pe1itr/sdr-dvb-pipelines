@@ -61,6 +61,11 @@ static void report_output(IQOutput *output, double rate, int sample_bytes,
             (unsigned long long)stats.write_stalls);
     *previous = stats;
 }
+static void report_rtlsdr_frequency(SoapySDRDevice *dev) {
+    double hz = SoapySDRDevice_getFrequency(dev, SOAPY_SDR_RX, 0);
+    fprintf(stderr, "[SDR] RTL-SDR tuner readback: %.0f Hz\n",
+            isfinite(hz) && hz > 0 ? hz : 0);
+}
 static double number(const char *s) {
     char *end; errno = 0; double v = strtod(s, &end);
     if (errno || end == s || *end || !isfinite(v)) { fprintf(stderr, "Invalid number: %s\n", s); exit(2); }
@@ -286,6 +291,7 @@ int main(int argc, char **argv) {
         actual = SoapySDRDevice_getSampleRate(dev, SOAPY_SDR_RX, 0);
         if (rsp) S(SoapySDRDevice_setBandwidth(dev, SOAPY_SDR_RX, 0, rate));
         S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, freq, NULL));
+        if (rtlsdr) report_rtlsdr_frequency(dev);
         if (airspyr2) {
             /* SoapyAirspy exposes raw LNA/MIX/VGA steps as aggregate gain.
              * It has no settable analog bandwidth; the sample rate sets it. */
@@ -456,6 +462,7 @@ int main(int argc, char **argv) {
                 if (afedri_frequency(net, requested)) goto done;
             } else if (dev) {
                 S(SoapySDRDevice_setFrequency(dev, SOAPY_SDR_RX, 0, requested, NULL));
+                if (rtlsdr) report_rtlsdr_frequency(dev);
             } else if (!dab_if) {
                 uhd_tune_request_t tune = {.target_freq=requested, .rf_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO,
                     .dsp_freq_policy=UHD_TUNE_REQUEST_POLICY_AUTO, .args=""};

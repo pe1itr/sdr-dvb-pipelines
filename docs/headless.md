@@ -172,11 +172,19 @@ Na de build wordt **pi6ehv-odroid.ini** aangemaakt, alleen als die nog niet
 bestaat. Deze configuratie verwijst naar de juiste helpers en FFmpeg en kiest
 RTL-SDR, DVB-T en SRT-caller naar `44.137.26.85:4001`. Stel voor het starten in:
 
-- `[rtlsdr] frequency`: de werkelijke ontvangstfrequentie in Hz. De template
+- `[rtlsdr] frequency`: de afstemfrequentie van de SDR in Hz (na de omzetter). De template
   gebruikt bewust `0`, zodat hij niet op een aangenomen frequentie begint.
 - `[session] sr`, `fec`, `gi`: de zenderinstellingen. `sr=250000` en `fec=1/2`
   zijn voorbeeldwaarden, geen vastgestelde PI6EHV-instellingen.
 - `[rtlsdr] gain` en zo nodig `sample_rate`.
+
+Bij RTL-SDR toont HTTP `/status` onder `tuning` de ingestelde frequentie
+(`sdr_set_hz`) en de door de driver teruggemelde frequentie (`sdr_readback_hz`).
+De kanaalfrequentie `rf_frequency_hz` is de teruggemelde frequentie plus
+`lo_offset_hz` en `receiver_offset_hz`. Bij 144600000 Hz, een externe LO van
+10224000000 Hz en nul kanaaloffset is dat 10368600000 Hz. De externe LO komt
+uit de configuratie. Tot de driver een waarde meldt, zijn de teruglezing en
+de daarvan afgeleide RF-frequentie `null`. Dit werkt ook zonder DVB-lock.
 
 Kies één van je drie dongles op het **USB-serienummer**, bijvoorbeeld **1002**:
 

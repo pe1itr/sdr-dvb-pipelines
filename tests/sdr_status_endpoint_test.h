@@ -63,5 +63,26 @@ static void exercise_sdr_status(void) {
     g_assert_null(json_object_object_get(root,"received_unix_ms"));
     g_assert_cmpint(json_object_array_length(json_object_object_get(root,"points")),==,0);
     json_object_put(root);
+    a.standard=0;
+    a.source=SOURCE_RTLSDR;
+    a.config=g_key_file_new();
+    g_key_file_set_double(a.config,"rtlsdr","frequency",144600000);
+    g_key_file_set_double(a.config,"rtlsdr","lo_offset",10224000000.);
+    text=network_status(&a);root=json_tokener_parse(text);g_free(text);
+    json_object *tuning=json_object_object_get(root,"tuning");
+    g_assert_cmpfloat(json_object_get_double(json_object_object_get(root,"configured_frequency_hz")),==,10368600000.);
+    g_assert_cmpfloat(json_object_get_double(json_object_object_get(tuning,"sdr_set_hz")),==,144600000);
+    g_assert_null(json_object_object_get(tuning,"rf_frequency_hz"));
+    json_object_put(root);
+    const char *readback="[SDR] RTL-SDR tuner readback: 144599999 Hz\n";
+    record_log(&a,readback,12);
+    record_log(&a,readback+12,strlen(readback)-12);
+    g_key_file_set_double(a.config,"rtlsdr","receiver_offset",-5000);
+    text=network_status(&a);root=json_tokener_parse(text);g_free(text);
+    tuning=json_object_object_get(root,"tuning");
+    g_assert_cmpfloat(json_object_get_double(json_object_object_get(tuning,"sdr_readback_hz")),==,144599999);
+    g_assert_cmpfloat(json_object_get_double(json_object_object_get(tuning,"rf_frequency_hz")),==,10368594999.);
+    json_object_put(root);
+    g_key_file_unref(a.config);
     puts("SDR endpoint: fragmented logs, separate losses, stale/stopped freshness passed");
 }
