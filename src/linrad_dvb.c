@@ -4395,6 +4395,13 @@ static GtkWidget *presets_create(App *a) {
 static json_object *status_number(double value) {
     return isfinite(value) ? json_object_new_double(value) : NULL;
 }
+static json_object *status_counter(guint64 value) {
+    if (value <= G_MAXINT64) return json_object_new_int64((gint64)value);
+    /* Older json-c versions accept exact numeric text through double_s. */
+    char decimal[21];
+    g_snprintf(decimal, sizeof(decimal), "%" G_GUINT64_FORMAT, value);
+    return json_object_new_double_s((double)value, decimal);
+}
 /* Times refer to receipt of this particular local monitor frame. */
 static void add_measurement_time(json_object *object, App *a, gint64 stamp, gint64 received_us, double max_age_ms) {
     double age = stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
@@ -4425,7 +4432,7 @@ static char *network_constellation(gpointer data) {
     for (unsigned i=0; stamp && i<v->points.count; ++i) {
         float re=v->points.iq[2*i], im=v->points.iq[2*i+1];
         if (!isfinite(re) || !isfinite(im)) continue;
-        json_object *pair=json_object_new_array_ext(2);
+        json_object *pair=json_object_new_array();
         json_object_array_add(pair,json_object_new_double(re));
         json_object_array_add(pair,json_object_new_double(im));
         json_object_array_add(points,pair);
@@ -4485,9 +4492,9 @@ static char *network_status(gpointer data) {
             NUM(window,"transport_errors",h->transport_errors);
             NUM(window,"sync_bad",h->sync_bad);
             json_object_object_add(window,"outer_state",strcmp(h->outer_state,"-") ? json_object_new_string(h->outer_state) : NULL);
-            json_object_object_add(window,"outer_acquire_pending",strcmp(h->outer_state,"-") ? json_object_new_uint64(h->outer_acquire_pending) : NULL);
-            json_object_object_add(window,"iq_dropped_samples_total",json_object_new_uint64(h->iq_dropped_samples_total));
-            json_object_object_add(window,"iq_producer_waits_total",json_object_new_uint64(h->iq_producer_waits_total));
+            json_object_object_add(window,"outer_acquire_pending",strcmp(h->outer_state,"-") ? status_counter(h->outer_acquire_pending) : NULL);
+            json_object_object_add(window,"iq_dropped_samples_total",status_counter(h->iq_dropped_samples_total));
+            json_object_object_add(window,"iq_producer_waits_total",status_counter(h->iq_producer_waits_total));
             NUM(window,"rs_uncorrectable",h->rs_uncorrectable);
             NUM(window,"written_packets",h->written_packets);
         }
@@ -4500,7 +4507,7 @@ static char *network_status(gpointer data) {
         NUM(sdr,"telemetry_age_ms",sdr_age);
         BOOL(sdr,"telemetry_fresh",a->running && !a->stopping && sdr_age<3000);
         STR(sdr,"driver","uhd");NUM(sdr,"sample_rate",s->rate);
-#define COUNT(k,v) json_object_object_add(sdr,k,json_object_new_uint64(v))
+#define COUNT(k,v) json_object_object_add(sdr,k,status_counter(v))
         COUNT("recv_calls",s->calls);COUNT("received_samples",s->samples);
         COUNT("hardware_overflows",s->overflows);COUNT("recv_timeouts",s->timeouts);
         COUNT("output_dropped_samples",s->output_dropped);
@@ -4529,16 +4536,16 @@ static char *network_status(gpointer data) {
             NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
             BOOL(d,"buffer_valid",v->buffer_valid);
             if (v->buffer_valid) NUM(d,"buffer_percent",v->buffer_percent);
-            json_object_object_add(d,"input_dropped",json_object_new_uint64(v->input_dropped));
-            json_object_object_add(d,"fec_frames_dropped",json_object_new_uint64(v->fec_frames_dropped));
+            json_object_object_add(d,"input_dropped",status_counter(v->input_dropped));
+            json_object_object_add(d,"fec_frames_dropped",status_counter(v->fec_frames_dropped));
             STR(d,"service",v->service);STR(d,"provider",v->provider);
             STR(d,"modulation",v->modulation);STR(d,"fec",v->fec);STR(d,"guard",v->guard);
             NUM(d,"plp_id",v->plp_id);
             if (a->standard==3) {
                 BOOL(d,"ldpc_gpu_requested",v->ldpc_gpu_requested);
                 STR(d,"ldpc_backend",v->ldpc_backend==2 ? "gpu" : v->ldpc_backend==1 ? "cpu" : "waiting");
-                json_object_object_add(d,"ldpc_gpu_frames",json_object_new_uint64(v->ldpc_gpu_frames));
-                json_object_object_add(d,"ldpc_cpu_frames",json_object_new_uint64(v->ldpc_cpu_frames));
+                json_object_object_add(d,"ldpc_gpu_frames",status_counter(v->ldpc_gpu_frames));
+                json_object_object_add(d,"ldpc_cpu_frames",status_counter(v->ldpc_cpu_frames));
             }
         }
         json_object_object_add(root,"decoder",d);

@@ -219,7 +219,7 @@ void StreamingChannelizer::process(
             std::memcpy(&front,&history_[newest-tap-1],sizeof(front));
             std::memcpy(&back,&history_[newest-(ring_size_-1-tap)],sizeof(back));
             std::memcpy(&weights,&paired_taps_[2*tap],sizeof(weights));
-            back=__builtin_shufflevector(back,back,2,3,0,1);
+            back=Float4{back[2],back[3],back[0],back[1]};
             accumulator+=(front+back)*weights;
         }
         sum+=std::complex<float>{accumulator[0]+accumulator[2],accumulator[1]+accumulator[3]};
