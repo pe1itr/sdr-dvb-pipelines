@@ -276,9 +276,13 @@ static gboolean tick(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
-GtkWidget *video_view_create(VideoView *v) {
+void video_view_init(VideoView *v) {
     g_mutex_init(&v->mutex); g_mutex_init(&v->output_mutex);
     v->fd = v->source_fd = v->video_fd = v->udp_fd = -1;
+}
+
+GtkWidget *video_view_create(VideoView *v) {
+    video_view_init(v);
     v->gpu_program = g_strdup("/usr/bin/ffplay"); v->gpu_device = g_strdup("NVIDIA");
     v->area = gtk_drawing_area_new();
     gtk_widget_set_size_request(v->area, 320, 180);
@@ -558,8 +562,8 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
 start_relay:
     v->relay = g_thread_new("video-ts-relay", relay_ts, v);
     v->active = TRUE;
-    output_controls(v);
-    gtk_widget_queue_draw(v->area);
+    if (v->output_button) output_controls(v);
+    if (v->area) gtk_widget_queue_draw(v->area);
     return TRUE;
 fail:
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot start video / UDP output: %s",

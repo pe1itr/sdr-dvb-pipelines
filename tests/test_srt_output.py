@@ -166,6 +166,41 @@ class SrtTests(unittest.TestCase):
                                     input=b"", capture_output=True, timeout=3)
             self.assertNotEqual(result.returncode, 0)
 
+    def test_headless_udp_forwards_transport_stream(self):
+        expected = b"".join(packet(cc=i) for i in range(10))
+        (self.directory / "sample.ts").write_bytes(expected)
+        source = self.directory / "sdr"
+        source.write_text("#!/bin/sh\nexec sleep 30\n")
+        decoder = self.directory / "decoder"
+        decoder.write_text("#!/bin/sh\ncat sample.ts\nexec sleep 30\n")
+        for helper in (source, decoder):
+            helper.chmod(0o755)
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(ROOT / "linrad-dvb.example.ini")
+        cfg["paths"]["sdr"] = str(source)
+        cfg["paths"]["leandvb"] = str(decoder)
+        cfg["leandvb"]["backend"] = "external"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            sock.settimeout(5)
+            cfg["renderer"]["udp_host"] = "127.0.0.1"
+            cfg["renderer"]["udp_port"] = str(sock.getsockname()[1])
+            path = self.directory / "receiver.ini"
+            with path.open("w") as out:
+                cfg.write(out)
+            p = subprocess.Popen([UI, "--config", path, "--source", "rtlsdr", "--standard", "DVB-S",
+                                  "--sr", "125000", "--fec", "1/2", "--headless", "--renderer", "udp"],
+                                 env={**os.environ, "DISPLAY": "", "WAYLAND_DISPLAY": "", "G_DEBUG": "fatal-criticals"})
+            self.addCleanup(stop, p)
+            received = bytearray()
+            while len(received) < len(expected):
+                datagram = sock.recv(65535)
+                self.assertEqual(len(datagram) % 188, 0)
+                received.extend(datagram)
+            self.assertEqual(received, expected)
+            p.terminate()
+            self.assertEqual(p.wait(timeout=5), 0)
+
     def test_headless_pipeline_shutdown_without_display(self):
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read(ROOT / "linrad-dvb.example.ini")

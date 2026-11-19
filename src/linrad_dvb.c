@@ -890,7 +890,7 @@ static void finish_if_stopped(App *a) {
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
     if (!scatter_backend_done(a->scatter_backend)) return;
     scatter_backend_destroy(a->scatter_backend); a->scatter_backend = NULL;
-    if (a->video_view.area) video_view_stop(&a->video_view);
+    if (a->video_view.active) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
     a->bond_detected=a->bond_active=a->bond_pair=FALSE;bonding_refresh(a);
@@ -933,7 +933,7 @@ static void stop_pipeline(App *a) {
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     scatter_backend_stop(a->scatter_backend);
-    if (a->video_view.area) video_view_stop(&a->video_view);
+    if (a->video_view.active) video_view_stop(&a->video_view);
     scatter_view_reset(&a->scatter_view);
     decoder_view_stop(&a->decoder_view);
     decoder_view_tick(&a->decoder_view, FALSE, standards[a->standard]);
@@ -1024,9 +1024,9 @@ static void start_pipeline(App *a) {
     }
     build_pipeline(a); a->exit_code = 0;
     if (a->standard==4) {dab_view_reset(&a->dab);dab_view_mute(&a->dab,a->video_view.muted);}
-    if (internal_player(a) && !a->video_view.area) {
+    if (internal_player(a) && a->renderer == RENDER_EMBEDDED && !a->video_view.area) {
         a->exit_code = 1;
-        status(a, "Embedded/UDP playback requires the GUI; use --renderer cvlc, ffplay or mpegts with --run.");
+        status(a, "Embedded playback requires the GUI; use --renderer udp for headless UDP output.");
         return;
     }
     a->replay_eof=FALSE;
@@ -1164,7 +1164,7 @@ pipe_error:
     if (dab_pipe[0]>=0) close(dab_pipe[0]);
     if (dab_pipe[1]>=0) close(dab_pipe[1]);
     if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
-    if (a->video_view.area) video_view_stop(&a->video_view);
+    if (a->video_view.active) video_view_stop(&a->video_view);
     if (output_fd >= 0) close(output_fd);
     if (tune_pipe[0] >= 0) close(tune_pipe[0]);
     if (tune_pipe[1] >= 0) close(tune_pipe[1]);
@@ -4738,11 +4738,13 @@ int main(int argc, char **argv) {
         signal(SIGPIPE, SIG_IGN);
         guint sigint = g_unix_signal_add(SIGINT, exit_signal, &a), sigterm = g_unix_signal_add(SIGTERM, exit_signal, &a);
         if (run) {
+            video_view_init(&a.video_view);
             a.loop = g_main_loop_new(NULL, FALSE); start_pipeline(&a);
             guint output_timer = g_timeout_add(100, decoder_tick, &a);
             if (a.running) g_main_loop_run(a.loop);
             g_source_remove(output_timer);
             g_main_loop_unref(a.loop);
+            video_view_destroy(&a.video_view);
         } else gui(&a);
         g_source_remove(sigint); g_source_remove(sigterm);
     }

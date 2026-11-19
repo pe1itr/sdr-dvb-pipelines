@@ -31,6 +31,7 @@ typedef struct {
     unsigned caching;
 } VideoView;
 
+void video_view_init(VideoView *v);
 GtkWidget *video_view_create(VideoView *v);
 gboolean video_view_start(VideoView *v, int fd, const char *url,
                           const char *udp_destination, gboolean display, GError **error);
