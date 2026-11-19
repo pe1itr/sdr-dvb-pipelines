@@ -83,6 +83,8 @@ static void apply_receiver_theme(void) {
         "#spectrum-usb label, #spectrum-fm label, #spectrum-fm-data label { background-color: transparent; }"
         "#spectrum-bonding { min-width: 76px; min-height: 18px; padding: 0 4px; border-radius: 2px; font-size: 9px; font-weight: bold; }"
         "#spectrum-bonding label { background-color: transparent; }"
+        "#spectrum-bonding.bonding-manual, #spectrum-bonding.bonding-manual:disabled {"
+        " background-color: #994600; background-image: none; border-color: #ff9e42; }"
         "#spectrum-bonding.bonding-lit, #spectrum-bonding.bonding-lit:disabled {"
         " background-color: #145c2e; background-image: none; border-color: #53ed85; opacity: 1; }"
         "#spectrum-bonding.bonding-lit label, #spectrum-bonding.bonding-lit:disabled label {"

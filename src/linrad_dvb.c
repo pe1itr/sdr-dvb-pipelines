@@ -252,9 +252,14 @@ static void bonding_refresh(App *a) {
     GtkStyleContext *style=gtk_widget_get_style_context(a->bonding_button);
     /* The active button is intentionally not clickable, but its status lamp
      * must remain lit. Use explicit styling for the disabled state too. */
-    if (a->running && !a->stopping && a->bond_detected) gtk_style_context_add_class(style,"bonding-lit");
+    gboolean receiving=a->running && !a->stopping;
+    gboolean lit=receiving && (a->bond_detected || a->bond_active);
+    gboolean automatic=bonding_enabled(a);
+    if (lit && !automatic) gtk_style_context_add_class(style,"bonding-manual");
+    else gtk_style_context_remove_class(style,"bonding-manual");
+    if (lit && automatic) gtk_style_context_add_class(style,"bonding-lit");
     else gtk_style_context_remove_class(style,"bonding-lit");
-    gtk_widget_set_sensitive(a->bonding_button,a->running && !a->stopping && a->bond_detected && !a->bond_active);
+    gtk_widget_set_sensitive(a->bonding_button,receiving && a->bond_detected && !a->bond_active);
     char *tip=a->bond_detected ? g_strdup_printf("Partner at %+.0f Hz in this IQ input. %s Recovery buffer: 8 seconds.",a->bond_peer_offset,
         a->bond_pair ? "Bonding is active; both channel announcements verified." :
         a->bond_active ? "Merger enabled; waiting for the partner announcement." :

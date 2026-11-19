@@ -2309,7 +2309,6 @@ static void exercise_bonding(void) {
     for (unsigned i=0;i<a.stages[1].args->len-1;++i)
         if (!strcmp(g_ptr_array_index(a.stages[1].args,i),"--no-auto")) opt_out=TRUE;
     g_assert_true(opt_out);
-    g_key_file_set_boolean(a.config,"dvbt","disable_bonding",FALSE);
 
     a.bond_control=g_build_filename(dir,"enable",NULL);a.running=TRUE;
     bonding_refresh(&a);g_assert_false(gtk_widget_get_sensitive(a.bonding_button));
@@ -2319,6 +2318,9 @@ static void exercise_bonding(void) {
     gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
     g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
     g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Detected");
+    GtkStyleContext *lamp=gtk_widget_get_style_context(a.bonding_button);
+    g_assert_true(gtk_style_context_has_class(lamp,"bonding-manual"));
+    g_assert_false(gtk_style_context_has_class(lamp,"bonding-lit"));
     bonding_clicked(GTK_BUTTON(a.bonding_button),&a);g_assert_true(g_file_test(a.bond_control,G_FILE_TEST_EXISTS));
     int filter_control[2];g_assert_cmpint(pipe(filter_control),==,0);a.tune_fd=filter_control[1];
     g_key_file_set_boolean(a.config,"file","filter_enabled",TRUE);
@@ -2331,18 +2333,24 @@ static void exercise_bonding(void) {
     gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
     g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
     g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Merging");
+    g_assert_true(gtk_style_context_has_class(lamp,"bonding-manual"));
+    g_assert_false(gtk_style_context_has_class(lamp,"bonding-lit"));
     line="[bond] pair confirmed\n";record_log(&a,line,strlen(line));
     gtk_widget_get_preferred_size(a.bonding_button,NULL,&on_size);
     g_assert_cmpint(off_size.width,==,on_size.width);g_assert_cmpint(off_size.height,==,on_size.height);
     g_assert_cmpstr(gtk_button_get_label(GTK_BUTTON(a.bonding_button)),==,"Bonding\n● Paired");
     g_assert_true(a.bond_active);g_assert_true(a.bond_pair);g_assert_false(gtk_widget_get_sensitive(a.bonding_button));
-    GtkStyleContext *lamp=gtk_widget_get_style_context(a.bonding_button);
+    g_assert_true(gtk_style_context_has_class(lamp,"bonding-manual"));
+    g_assert_false(gtk_style_context_has_class(lamp,"bonding-lit"));
+    g_key_file_set_boolean(a.config,"dvbt","disable_bonding",FALSE);
+    bonding_refresh(&a);
+    g_assert_false(gtk_style_context_has_class(lamp,"bonding-manual"));
     g_assert_true(gtk_style_context_has_class(lamp,"bonding-lit"));
     GtkWidget *label=gtk_bin_get_child(GTK_BIN(a.bonding_button));GdkRGBA color;
     gtk_style_context_get_color(gtk_widget_get_style_context(label),gtk_widget_get_state_flags(label),&color);
-    g_assert_cmpfloat_with_epsilon(color.red,112.0/255,.01);
+    g_assert_cmpfloat_with_epsilon(color.red,1,.01);
     g_assert_cmpfloat_with_epsilon(color.green,1,.01);
-    g_assert_cmpfloat_with_epsilon(color.blue,156.0/255,.01);
+    g_assert_cmpfloat_with_epsilon(color.blue,1,.01);
     char *tip=gtk_widget_get_tooltip_text(a.bonding_button);
     g_assert_nonnull(strstr(tip,"both channel announcements verified"));
     g_assert_nonnull(strstr(tip,"8 seconds"));g_free(tip);
