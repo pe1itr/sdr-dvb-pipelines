@@ -2123,6 +2123,12 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
             status(a, "TSscatterFix reset; waiting for new TS data.");
         }
         return TRUE;
+    case GDK_KEY_q: {
+        GtkWidget *focus = gtk_window_get_focus(GTK_WINDOW(a->window));
+        if (GTK_IS_EDITABLE(focus) || GTK_IS_TEXT_VIEW(focus)) return FALSE;
+        gtk_window_close(GTK_WINDOW(a->window));
+        return TRUE;
+    }
     case GDK_KEY_p: save_screenshot(a); return TRUE;
     default: break;
     }
@@ -2971,7 +2977,8 @@ static void show_about(GtkWidget *widget, gpointer data) {
         {"↑ / ↓","Increase / decrease gain"},
         {"[ / ]","Narrow / widen the IQ bandpass filter"},
         {"W","Save settings, including spectrum and waterfall"},
-        {"P","Save the entire main window as a PNG screenshot"}
+        {"P","Save the entire main window as a PNG screenshot"},
+        {"Q","Quit Linrad DVB"}
     };
     for (unsigned row=0;row<G_N_ELEMENTS(shortcuts);++row) {
         for (int column=0;column<2;++column) {

@@ -2292,7 +2292,9 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpint(a->stages[1].pid, ==, decoder_pid);
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle),TRUE);
         g_assert_true(usb_receiver_running(a->usb_receiver));
-        window_close(a->window, NULL, a);
+        gtk_window_set_focus(GTK_WINDOW(a->window), a->power_button);
+        GdkEventKey quit = {.type=GDK_KEY_PRESS, .keyval=GDK_KEY_q};
+        g_assert_true(tuning_key(a->window, &quit, a));
         return G_SOURCE_REMOVE;
     }
     return G_SOURCE_CONTINUE;

@@ -154,6 +154,7 @@ melding; de ontvangst blijft doorlopen.
 - **Output → Program Map Table (PMT)** toont de streams per programma.
 - **Alt+I / Alt+M / Alt+R / Alt+T / Alt+A**: open Input, Mode, Renderer, TCI en About.
   Kleine letters werken ook; houd Alt ingedrukt om een menu te openen.
+- **Q**: sluit Linrad DVB af vanuit het hoofdvenster.
 - **R**: reset de actieve TSscatterFix-reconstructie. Herstelbuffer, beeld en
   status worden gewist; reconstructie begint opnieuw met nieuwe TS-data.
   De ontvangst en gewone videospeler blijven doorlopen.

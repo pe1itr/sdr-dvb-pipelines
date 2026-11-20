@@ -286,6 +286,7 @@ With the main receiver window focused:
 | **Page Up / Page Down** | Tune the audio monitor down/up: 100 Hz for USB, 2.5 kHz for FM/FM-DATA. |
 | **M** | Mute/unmute speaker audio; TCI audio continues. |
 | **R** | Reset TSscatterFix reconstruction. |
+| **Q** | Quit Linrad DVB. |
 | **P** | Save a PNG screenshot of the whole main window. |
 | **W** | Save receiver settings, including spectrum/waterfall settings. |
 | **Alt+I / Alt+M / Alt+R / Alt+T / Alt+L / Alt+A** | Open Input / Mode / Renderer / TCI / Application log / About. |
