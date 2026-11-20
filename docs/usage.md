@@ -80,7 +80,7 @@ Zie de componentdocumentatie voor tests, herkomst en GPL-3.0-licentie.
 De GUI gebruikt één venster zonder tabs, standaard 83% van de beschikbare
 schermbreedte en 80% van de beschikbare hoogte.
 Bovenaan staan de menu's
-**Input**, **Mode**, **Renderer**, **Presets**, **TCI**, **Log** en **About**. About toont uitleg over de
+**Input**, **Mode**, **Output**, **Presets**, **TCI**, **Log** en **About**. About toont uitleg over de
 bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
 projectlinks voor LeanDVB, LDPC, de acquisitiepatch van Ondřej OK1CDJ en
 OnAir (de basis van de DVB-T2-decoder). Het
@@ -148,8 +148,9 @@ melding; de ontvangst blijft doorlopen.
   Kies **Bestand (IQ)** om een opname met bijbehorende JSON-instellingen af te spelen.
 - **Mode**: DVB-mode, symbolrate of BW, FEC, guard interval en constellatie;
   voor DVB-S2 ook LDPC-methode, 1–8 workers en automatische acquisitie/verwerking.
-- **Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
+- **Output → Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
+- **Output → Program Map Table (PMT)** toont de streams per programma.
 - **Alt+I / Alt+M / Alt+R / Alt+T / Alt+A**: open Input, Mode, Renderer, TCI en About.
   Kleine letters werken ook; houd Alt ingedrukt om een menu te openen.
 - **R**: reset de actieve TSscatterFix-reconstructie. Herstelbuffer, beeld en
@@ -248,7 +249,7 @@ de volledige pipeline. Daarna kun je opnieuw parameters kiezen en starten.
 
 ### Tijdens ontvangst overschakelen naar de NVIDIA-speler
 
-Bij **Renderer → ingebouwde player** staat onder **Received video** de knop
+Bij **Output → Renderer → ingebouwde player** staat onder **Received video** de knop
 **Extern op GPU**. Klik tijdens ontvangst om het beeld naar systeem-FFplay met
 CUDA-decodering en NVIDIA Vulkan-weergave te verplaatsen. De ingebouwde
 VLC-videospeler stopt daarbij, zodat hij dezelfde stream niet ook op de CPU
@@ -277,7 +278,7 @@ het volume gewoon met de systeemmixer aanpassen; **M** blijft dempen.
 
 De knop gebruikt standaard `/usr/bin/ffplay` en selecteert een Vulkan-device
 waarvan de naam `NVIDIA` bevat. Dit staat los van de bestaande FFplay-renderer
-in het Renderer-menu. Zo wordt de oudere eigen FFplay-build in de home-directory
+onder **Output → Renderer**. Zo wordt de oudere eigen FFplay-build in de home-directory
 niet per ongeluk gebruikt. Eventuele aanpassingen in het INI-bestand:
 
 ```ini
@@ -505,7 +506,7 @@ De ontvangstfrequentie bepaalt alleen de frequentieschaal. Hardware-afstemming
 en gain zijn uitgeschakeld. De ingebouwde `iq_file_to_stdout` speelt op basis van
 het aantal samples en een monotone klok af; als de decoder achterloopt, vertraagt
 het afspelen zonder samples over te slaan. De helper wordt met `make all` gebouwd.
-**Renderer** kiest zoals gebruikelijk een speler of rechtstreekse MPEG-TS-uitvoer.
+**Output → Renderer** kiest zoals gebruikelijk een speler of rechtstreekse MPEG-TS-uitvoer.
 
 Vanaf de opdrachtregel kan dit ook:
 
@@ -596,7 +597,7 @@ passen. FM vereist minstens **12.500 IQ-samples/s**, FM-DATA **24.000**;
 bij een te smalle bron of afstelling blijft een mislukte omschakeling in de vorige stand.
 
 TCI is standaard bereikbaar op **`ws://127.0.0.1:40031`**. De poort is aanpasbaar
-via **TCI**, direct na **Renderer** (ook **Alt+T**), wanneer de monitor uitstaat.
+via **TCI** (ook **Alt+T**), wanneer de monitor uitstaat.
 **W** in het hoofdvenster bewaart de instelling. Voor bijvoorbeeld MSHV kies je
 **TCI Client RX1**, host `127.0.0.1`, poort `40031`, en **TCI Client Input** als
 audio-input. TCI geeft de frequentie, modus (**USB** of **NFM**, ook voor FM-DATA) en filtergrenzen
@@ -693,7 +694,7 @@ monitorstatus; verlies verderop in het netwerk is hiermee niet meetbaar.
 
 ### Renderer en rechtstreeks MPEG-TS opslaan
 
-Via **Renderer** kies je **Embedded player (right panel)**, **UDP stream (external player)**,
+Via **Output → Renderer** kies je **Embedded player (right panel)**, **UDP stream (external player)**,
 VLC, VLC met bediening, **FFplay**, een eigen programma of **MPEG-TS-bestand**.
 De rendererkeuze staat in dit menu; Scatterfix bedien je met
 de knop naast **BW** in het spectrum.

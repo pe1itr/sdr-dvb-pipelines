@@ -2932,13 +2932,13 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "and automatic acquisition/processing based on symbol rate: up to 333 ksym/s, "
         "continuous search and low latency; above that, normal search and throughput. "
         "Manual overrides are available. W saves these settings.",NULL);
-    about_label(box,"Renderer: embedded video, UDP, SRT, external player or MPEG-TS file. "
-        "Configure SRT output under [srt] in the INI file. "
+    about_label(box,"Output → Renderer: embedded video, UDP, SRT, external player or MPEG-TS file. "
+        "Output → Program Map Table (PMT) shows the program streams. Configure SRT output under [srt] in the INI file. "
         "Spectrum controls: IQ filter, IQ recording, TSscatterFix, USB / FM / FM-DATA, "
         "Service info / EPG / Teletext. In DAB, TII opens the transmitter-code table; "
         "green indicates received codes, and a green check marks an ensemble/TII combination "
         "already saved in the reception log. TCI: monitor audio and control connection.",NULL);
-    about_label(box,"GPU video playback: select Embedded player in Renderer, then click "
+    about_label(box,"GPU video playback: select Embedded player in Output → Renderer, then click "
         "Extern op GPU below Received video during DVB reception. This switches to external "
         "FFplay with NVIDIA CUDA decoding and Vulkan rendering while the SDR and DVB decoder "
         "keep running. Terug in venster, or closing FFplay, returns to embedded VLC. "
@@ -3911,9 +3911,23 @@ static void gui(App *a) {
     gtk_widget_set_name(menu, "receiver-menu");
     GtkWidget *config_item = gtk_button_new_with_label("Input"), *about_item = gtk_button_new_with_label("About");
     gtk_box_pack_start(GTK_BOX(menu), config_item, FALSE, FALSE, 0);
-    GtkWidget *mode_item = gtk_button_new_with_label("Mode"), *renderer_item = gtk_button_new_with_label("Renderer");
+    GtkWidget *mode_item = gtk_button_new_with_label("Mode");
     gtk_box_pack_start(GTK_BOX(menu), mode_item, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(menu), renderer_item, FALSE, FALSE, 0);
+    GtkWidget *output_menu = gtk_menu_button_new();
+    gtk_button_set_label(GTK_BUTTON(output_menu), "Output");
+    gtk_box_pack_start(GTK_BOX(menu), output_menu, FALSE, FALSE, 0);
+    GtkWidget *output_popover = gtk_popover_new(output_menu);
+    GtkWidget *output_options = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_set_border_width(GTK_CONTAINER(output_options), 6);
+    gtk_container_add(GTK_CONTAINER(output_popover), output_options);
+    GtkWidget *renderer_item = gtk_model_button_new();
+    g_object_set(renderer_item, "text", "Renderer", NULL);
+    gtk_box_pack_start(GTK_BOX(output_options), renderer_item, FALSE, FALSE, 0);
+    GtkWidget *pmt_item = gtk_model_button_new();
+    g_object_set(pmt_item, "text", "Program Map Table (PMT)…", NULL);
+    gtk_box_pack_start(GTK_BOX(output_options), pmt_item, FALSE, FALSE, 0);
+    gtk_widget_show_all(output_options);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(output_menu), output_popover);
     GtkWidget *presets_item=gtk_button_new_with_label("Presets");
     gtk_box_pack_start(GTK_BOX(menu),presets_item,FALSE,FALSE,0);
     g_signal_connect(presets_item,"clicked",G_CALLBACK(show_presets),a);
@@ -4027,7 +4041,7 @@ static void gui(App *a) {
     atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix on/off");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
-    ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls);
+    ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls, pmt_item);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),bonding_create_button(a),FALSE,FALSE,0);
     a->usb_toggle=gtk_toggle_button_new_with_label("USB");
     gtk_widget_set_name(a->usb_toggle,"spectrum-usb");

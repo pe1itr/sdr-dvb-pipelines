@@ -40,11 +40,13 @@ static void page_clear(TsInfoSnapshot *s) {
     s->width=s->height=0;
 }
 void ts_info_snapshot_clear(TsInfoSnapshot *s) {
+    g_clear_pointer(&s->pmt_section,g_bytes_unref);
     page_clear(s);
     memset(s,0,sizeof(*s));
 }
 static void snapshot_copy(TsInfoSnapshot *out, const TsInfoSnapshot *in) {
     *out=*in;
+    if (out->pmt_section) g_bytes_ref(out->pmt_section);
     if (out->page) g_bytes_ref(out->page);
     if (out->page_flash_off) g_bytes_ref(out->page_flash_off);
     if (out->page_reveal) g_bytes_ref(out->page_reveal);
@@ -60,6 +62,7 @@ static void content_clear(TsInfoParser *p) {
     memset(p->state.events,0,sizeof(p->state.events));
     p->state.eit_received=p->state.teletext_received=0;
     page_clear(&p->state);
+    g_clear_pointer(&p->state.pmt_section,g_bytes_unref);
     p->state.pmt_seen=p->state.teletext_announced=FALSE;
     p->state.video_codec[0]=p->state.audio_codec[0]=0;
     p->ttx_pid=0x1fff; p->eit_version=-1;
@@ -257,11 +260,81 @@ static void sdt_read(TsInfoParser *p, const guint8 *b, gsize n) {
         at=end;
     }
 }
+static const char *stream_name(guint8 type) {
+    switch (type) {
+        case 0x01: return "MPEG-1 video";
+        case 0x02: return "MPEG-2 video";
+        case 0x03: return "MPEG-1 audio";
+        case 0x04: return "MPEG-2 audio";
+        case 0x05: return "Private sections";
+        case 0x06: return "Private PES";
+        case 0x0a: return "DSM-CC type A";
+        case 0x0b: return "DSM-CC type B";
+        case 0x0c: return "DSM-CC type C";
+        case 0x0d: return "DSM-CC type D";
+        case 0x0f: return "AAC";
+        case 0x10: return "MPEG-4 video";
+        case 0x11: return "AAC (LATM)";
+        case 0x1b: return "H.264/AVC";
+        case 0x24: return "H.265/HEVC";
+        default: return "Other stream";
+    }
+}
+
+/* Both descriptor loops have been bounds-checked before publication. */
+static void describe_descriptors(GString *text, const guint8 *data, gsize length) {
+    for (gsize i=0;i<length;i+=2+data[i+1]) {
+        unsigned tag=data[i], size=data[i+1];
+        const guint8 *value=data+i+2;
+        g_string_append_printf(text,"    Descriptor 0x%02X",tag);
+        if (tag==0x0a) {
+            g_string_append(text," · ISO 639");
+            for (unsigned j=0;j+4<=size;j+=4)
+                if (g_ascii_isalpha(value[j]) && g_ascii_isalpha(value[j+1]) && g_ascii_isalpha(value[j+2]))
+                    g_string_append_printf(text," · %.3s",(const char *)(value+j));
+        } else if (tag==0x66 && size>=2) {
+            guint16 id=u16(value);
+            g_string_append_printf(text," · data_broadcast_id 0x%04X",id);
+            if (id==6 || id==7) g_string_append(text,id==6 ? " (data carousel)" : " (object carousel)");
+        } else if (tag==0x56) g_string_append(text," · Teletext");
+        else if (tag==0x6a) g_string_append(text," · AC-3");
+        else if (tag==0x7a) g_string_append(text," · E-AC-3");
+        g_string_append(text,"   ");
+        for (unsigned j=0;j<size;j++) g_string_append_printf(text," %02X",value[j]);
+        g_string_append_c(text,'\n');
+    }
+}
+
+char *ts_info_pmt_text(const TsInfoSnapshot *s) {
+    if (!s->pmt_section) return g_strdup("Waiting for the selected program's PMT");
+    gsize size;
+    const guint8 *b=g_bytes_get_data(s->pmt_section,&size);
+    GString *text=g_string_new(NULL);
+    for (unsigned i=0;i<s->count;i++)
+        if (s->services[i].id==s->selected)
+            g_string_append_printf(text,"PMT PID 0x%04X    ",s->services[i].pmt_pid);
+    g_string_append_printf(text,"Program %u    Version %u    PCR PID 0x%04X\n",
+                           u16(b+3),(b[5]>>1)&31,u16(b+8)&0x1fff);
+    gsize program_length=u16(b+10)&0xfff;
+    describe_descriptors(text,b+12,program_length);
+    for (gsize at=12+program_length;at<size-4;) {
+        gsize length=u16(b+at+3)&0xfff;
+        g_string_append_printf(text,"\nPID 0x%04X    Type 0x%02X    %s\n",
+                               u16(b+at+1)&0x1fff,b[at],stream_name(b[at]));
+        describe_descriptors(text,b+at+5,length);
+        at+=5+length;
+    }
+    return g_string_free(text,FALSE);
+}
 static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
     if (n<16 || u16(b+3)!=p->state.selected || b[6] || b[7]) return;
     gsize at=12+(u16(b+10)&0xfff); guint16 pid=0x1fff; int best=0;
     const char *video="", *audio="";
     if (at>n-4) return;
+    for (gsize d=12;d<at;) {
+        if (d+2>at || d+2+b[d+1]>at) return;
+        d+=2+b[d+1];
+    }
     while (at<n-4) {
         if (at+5>n-4) return;
         gsize end=at+5+(u16(b+at+3)&0xfff); if (end>n-4) return;
@@ -292,6 +365,11 @@ static void pmt_read(TsInfoParser *p, const guint8 *b, gsize n) {
             d+=2+b[d+1];
         }
         at=end;
+    }
+    GBytes *previous=p->state.pmt_section;
+    if (!previous || g_bytes_get_size(previous)!=n || memcmp(g_bytes_get_data(previous,NULL),b,n)) {
+        g_clear_pointer(&p->state.pmt_section,g_bytes_unref);
+        p->state.pmt_section=g_bytes_new(b,n);
     }
     if (pid!=p->ttx_pid) {
         teletext_clear(p); page_clear(&p->state);
@@ -571,6 +649,7 @@ void ts_info_backend_select(TsInfoBackend *b, guint16 service) {
         memset(b->snapshot.events,0,sizeof(b->snapshot.events));
         b->snapshot.eit_received=b->snapshot.teletext_received=0;
         page_clear(&b->snapshot);
+        g_clear_pointer(&b->snapshot.pmt_section,g_bytes_unref);
         b->snapshot.pmt_seen=b->snapshot.teletext_announced=FALSE; b->snapshot.selected=service;
         g_cond_signal(&b->wake);
     }

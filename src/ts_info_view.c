@@ -74,7 +74,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         memcmp(s->services,v->snapshot.services,sizeof(s->services));
     if (catalog) {
         v->updating=TRUE;
-        for (unsigned window=0;window<2;window++) {
+        for (unsigned window=0;window<G_N_ELEMENTS(v->dialogs);window++) {
             gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(v->services[window]));
             for (unsigned i=0;i<s->count;i++) {
                 char id[12]; g_snprintf(id,sizeof(id),"%u",s->services[i].id);
@@ -89,6 +89,11 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
     if (force || memcmp(s->events,v->snapshot.events,sizeof(s->events))) {
         char *text=event_text(s);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->eit)),text,-1); g_free(text);
+    }
+    if (force || catalog || s->pmt_section!=v->snapshot.pmt_section) {
+        char *text=ts_info_pmt_text(s);
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->pmt)),text,-1);
+        g_free(text);
     }
     gboolean ready[2]={s->events[0].valid || s->events[1].valid,s->page!=NULL};
     for (unsigned i=0;i<2;i++) {
@@ -145,7 +150,8 @@ static void hide_dialog(GtkDialog *dialog, gint response, gpointer data) {
 static void open_information(GtkButton *button, gpointer data) {
     TsInfoView *v=data;
     v->next_tick=0; ts_info_view_tick(v,v->backend);
-    GtkWidget *dialog=v->dialogs[GTK_WIDGET(button)==v->buttons[1] ? 1 : 0];
+    unsigned index=GTK_WIDGET(button)==v->buttons[2] ? 2 : GTK_WIDGET(button)==v->buttons[1] ? 1 : 0;
+    GtkWidget *dialog=v->dialogs[index];
     gtk_widget_show_all(dialog);
     gtk_window_present(GTK_WINDOW(dialog));
 }
@@ -160,11 +166,13 @@ static gboolean flash_tick(gpointer data) {
     }
     return G_SOURCE_CONTINUE;
 }
-void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
-    for (unsigned i=0;i<2;i++) {
-        v->dialogs[i]=gtk_dialog_new_with_buttons(i ? "Teletext" : "EIT",parent,GTK_DIALOG_DESTROY_WITH_PARENT,
+void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWidget *pmt_item) {
+    const char *titles[]={"EIT","Teletext","PMT"};
+    const char *names[]={"eit-information","teletext-information","pmt-information"};
+    for (unsigned i=0;i<G_N_ELEMENTS(v->dialogs);i++) {
+        v->dialogs[i]=gtk_dialog_new_with_buttons(titles[i],parent,GTK_DIALOG_DESTROY_WITH_PARENT,
             "Close",GTK_RESPONSE_CLOSE,NULL);
-        gtk_widget_set_name(v->dialogs[i],i ? "teletext-information" : "eit-information");
+        gtk_widget_set_name(v->dialogs[i],names[i]);
         gtk_window_set_default_size(GTK_WINDOW(v->dialogs[i]),680,610);
         g_signal_connect(v->dialogs[i],"response",G_CALLBACK(hide_dialog),v);
         g_signal_connect(v->dialogs[i],"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
@@ -173,26 +181,35 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar) {
         GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
         gtk_box_pack_start(GTK_BOX(row),gtk_label_new("Information for"),FALSE,FALSE,0);
         v->services[i]=gtk_combo_box_text_new(); gtk_box_pack_start(GTK_BOX(row),v->services[i],TRUE,TRUE,0);
-        gtk_widget_set_tooltip_text(v->services[i],"Select the service for both information windows; this does not change the player.");
+        gtk_widget_set_tooltip_text(v->services[i],"Select the service for the information windows; this does not change the player.");
         gtk_box_pack_start(GTK_BOX(content),row,FALSE,FALSE,0);
         g_signal_connect(v->services[i],"changed",G_CALLBACK(service_changed),v);
-        v->buttons[i]=gtk_button_new_with_label(i ? "Teletext" : "EIT");
-        gtk_style_context_add_class(gtk_widget_get_style_context(v->buttons[i]),"information-button");
-        gtk_box_pack_start(GTK_BOX(bar),v->buttons[i],FALSE,FALSE,0);
+        if (i==2) v->buttons[i]=pmt_item;
+        else {
+            v->buttons[i]=gtk_button_new_with_label(titles[i]);
+            gtk_style_context_add_class(gtk_widget_get_style_context(v->buttons[i]),"information-button");
+            gtk_box_pack_start(GTK_BOX(bar),v->buttons[i],FALSE,FALSE,0);
+        }
         g_signal_connect(v->buttons[i],"clicked",G_CALLBACK(open_information),v);
         GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);
         gtk_box_pack_start(GTK_BOX(content),box,TRUE,TRUE,0);
-        v->status[i]=gtk_label_new(""); gtk_label_set_xalign(GTK_LABEL(v->status[i]),0);
-        if (!i) {
-            gtk_label_set_line_wrap(GTK_LABEL(v->status[i]),TRUE);
-            gtk_box_pack_start(GTK_BOX(box),v->status[i],FALSE,FALSE,0);
+        if (i!=2) {
+            v->status[i]=gtk_label_new(""); gtk_label_set_xalign(GTK_LABEL(v->status[i]),0);
+        }
+        if (i!=1) {
+            if (!i) {
+                gtk_label_set_line_wrap(GTK_LABEL(v->status[i]),TRUE);
+                gtk_box_pack_start(GTK_BOX(box),v->status[i],FALSE,FALSE,0);
+            }
             GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
             gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
-            v->eit=gtk_text_view_new(); gtk_text_view_set_editable(GTK_TEXT_VIEW(v->eit),FALSE);
-            gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(v->eit),FALSE);
-            gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(v->eit),GTK_WRAP_WORD_CHAR);
-            gtk_text_view_set_left_margin(GTK_TEXT_VIEW(v->eit),8); gtk_text_view_set_right_margin(GTK_TEXT_VIEW(v->eit),8);
-            gtk_container_add(GTK_CONTAINER(scroll),v->eit); gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
+            GtkWidget *view=gtk_text_view_new();
+            if (i==2) v->pmt=view; else v->eit=view;
+            gtk_text_view_set_editable(GTK_TEXT_VIEW(view),FALSE);
+            gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(view),FALSE);
+            gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(view),GTK_WRAP_WORD_CHAR);
+            gtk_text_view_set_left_margin(GTK_TEXT_VIEW(view),8); gtk_text_view_set_right_margin(GTK_TEXT_VIEW(view),8);
+            gtk_container_add(GTK_CONTAINER(scroll),view); gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
         } else {
             v->page_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
             gtk_box_pack_start(GTK_BOX(box),v->page_controls,FALSE,FALSE,0);
@@ -251,7 +268,7 @@ void ts_info_view_reset(TsInfoView *v) {
 void ts_info_view_destroy(TsInfoView *v) {
     if (v->flash_timer) { g_source_remove(v->flash_timer); v->flash_timer=0; }
     ts_info_snapshot_clear(&v->snapshot); v->backend=NULL;
-    for (unsigned i=0;i<2;i++) {
+    for (unsigned i=0;i<G_N_ELEMENTS(v->dialogs);i++) {
         if (v->dialogs[i]) gtk_widget_destroy(v->dialogs[i]);
         v->dialogs[i]=NULL;
     }

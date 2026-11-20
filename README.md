@@ -253,7 +253,8 @@ only where applicable; hover over a control for its tooltip.
 | **Input** | Select the SDR, Linrad UDP or an IQ file; configure sample rate, device arguments, gain-related options, tuning step and frequency offsets. Stop reception to change hardware settings. |
 | **Receive frequency (MHz)** | Click the displayed frequency to enter a receive frequency in MHz while reception continues; press Enter or Tune. Accepts a decimal point or comma and includes configured frequency offsets. Direct SDR input only. DAB switches to Free frequency for values outside the channel list. |
 | **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 acquisition/CPU/GPU LDPC, DVB-T bonding, DVB-T2 PLP/GPU LDPC, or DAB channel/profile. |
-| **Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
+| **Output → Program Map Table (PMT)** | View the streams in each program. |
+| **Output → Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
 | **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
 | **Record IQ** | Start/stop raw sample recording during live reception, with metadata for replay. This is different from saving decoded MPEG-TS through Renderer. |
 | **BW** | Enable/bypass the IQ channel filter. The bracket keys adjust its width; DVB-T2 requires the full 8 MHz channel. |
@@ -376,7 +377,7 @@ Avoid running decoder benchmarks alongside a live receiver when comparing it.
 
 ## Playback and reception logging
 
-For GPU video playback, select **Renderer → Embedded player** and click
+For GPU video playback, select **Output → Renderer → Embedded player** and click
 **Extern op GPU** below **Received video** during reception. **Terug in venster**
 or closing FFplay returns to embedded VLC while reception continues. This needs
 FFplay with CUDA and Vulkan/libplacebo support; see the

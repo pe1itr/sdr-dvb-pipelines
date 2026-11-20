@@ -361,6 +361,24 @@ class InformationTests(unittest.TestCase):
         self.assertEqual(result[5]['video_codec'], '')
         self.assertEqual(result[5]['audio_codec'], 'AAC (LATM)')
 
+    def test_pmt_view_tracks_data_and_service_switch(self):
+        t = Stream()
+        def entry(kind, pid, descriptors=b''):
+            return struct.pack('>BHH', kind, 0xe000 | pid, 0xf000 | len(descriptors)) + descriptors
+        body = struct.pack('>HH', 0xe100, 0xf000)
+        body += entry(0x0f, 0x101, b'\x0a\x04nld\x00') + entry(0x0f, 0x102)
+        body += entry(0x0b, 0x150, b'\x66\x02\x00\x07') + entry(0xfe, 0x155)
+        initial, malformed, switched = self.run_streams(
+            t.pat(((1, 0x1000), (2, 0x1001))) + t.table(0x1000, section(2, 1, body, version=3)),
+            t.table(0x1000, section(2, 1, b'\xe1\x00\xf0\x02\x66\xff')),
+            '--select=2')
+        for field in ('PMT PID 0x1000', 'Version 3', 'PCR PID 0x0100', 'PID 0x0101',
+                      'nld', 'PID 0x0102', 'DSM-CC', '0x0007 (object carousel)', 'Type 0xFE'):
+            self.assertIn(field, initial['pmt_text'])
+        self.assertEqual(initial['pmt_text'].count('AAC'), 2)
+        self.assertEqual(initial['pmt_text'], malformed['pmt_text'])
+        self.assertNotIn('DSM-CC', switched['pmt_text'])
+
     def test_malformed_pmt_does_not_replace_codecs(self):
         t = Stream()
         # Valid CRC, but the last ES claims a descriptor that is not present.

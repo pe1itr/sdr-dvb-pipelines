@@ -3,7 +3,7 @@
 #include <gtk/gtk.h>
 #include "ts_info.h"
 typedef struct {
-    GtkWidget *buttons[2], *dialogs[2], *services[2], *eit, *page, *status[2];
+    GtkWidget *buttons[3], *dialogs[3], *services[3], *pmt, *eit, *page, *status[3];
     GtkWidget *reveal;
     GtkWidget *page_number, *page_controls;
     guint flash_timer;
@@ -13,7 +13,7 @@ typedef struct {
     gboolean updating;
     gint64 next_tick;
 } TsInfoView;
-void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar);
+void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWidget *pmt_item);
 void ts_info_view_tick(TsInfoView *v, TsInfoBackend *backend);
 void ts_info_view_reset(TsInfoView *v);
 void ts_info_view_destroy(TsInfoView *v);

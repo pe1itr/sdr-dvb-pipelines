@@ -21,6 +21,9 @@ static void report(const TsInfoSnapshot *s) {
     struct json_object *out=json_object_new_object(), *events=json_object_new_array(), *services=json_object_new_array();
     json_object_object_add(out,"selected",json_object_new_int(s->selected));
     json_object_object_add(out,"pmt",json_object_new_boolean(s->pmt_seen));
+    char *pmt_text=ts_info_pmt_text(s);
+    json_object_object_add(out,"pmt_text",json_object_new_string(pmt_text));
+    g_free(pmt_text);
     json_object_object_add(out,"video_codec",json_object_new_string(s->video_codec));
     json_object_object_add(out,"audio_codec",json_object_new_string(s->audio_codec));
     json_object_object_add(out,"teletext",json_object_new_boolean(s->teletext_announced));

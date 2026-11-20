@@ -17,6 +17,7 @@ typedef struct {
     unsigned count;
     guint16 selected;
     gboolean pmt_seen, teletext_announced, teletext_decoder;
+    GBytes *pmt_section; /* validated section of the selected program */
     char video_codec[32], audio_codec[32]; /* first recognized tracks in selected PMT */
     TsInfoEvent events[2];
     gint64 eit_received, teletext_received; /* wall-clock microseconds */
@@ -25,6 +26,7 @@ typedef struct {
     GBytes *page_flash_off, *page_reveal, *page_reveal_flash_off;
     int width, height;
 } TsInfoSnapshot;
+char *ts_info_pmt_text(const TsInfoSnapshot *s);
 void ts_info_snapshot_clear(TsInfoSnapshot *s);
 
 /* The synchronous parser is worker-owned; also usable with recorded TS in tests. */
