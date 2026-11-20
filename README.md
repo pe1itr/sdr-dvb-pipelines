@@ -254,6 +254,7 @@ only where applicable; hover over a control for its tooltip.
 | **Receive frequency (MHz)** | Click the displayed frequency to enter a receive frequency in MHz while reception continues; press Enter or Tune. Accepts a decimal point or comma and includes configured frequency offsets. Direct SDR input only. DAB switches to Free frequency for values outside the channel list. |
 | **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 acquisition/CPU/GPU LDPC, DVB-T bonding, DVB-T2 PLP/GPU LDPC, or DAB channel/profile. |
 | **Output → Program Map Table (PMT)** | View the streams in each program. |
+| **Output → Status endpoint…** | Configure the HTTP status endpoint. |
 | **Output → Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
 | **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
 | **Record IQ** | Start/stop raw sample recording during live reception, with metadata for replay. This is different from saving decoded MPEG-TS through Renderer. |
@@ -266,7 +267,7 @@ only where applicable; hover over a control for its tooltip.
 | **USB / FM / FM-DATA** | Toggle the parallel 3 kHz USB, 12.5 kHz FM or 20 kHz flat-audio FM-DATA monitor. Here USB means upper sideband. Only one monitor mode is active at a time. |
 | **TCI** | Configure the monitor's TCI connection, audio output and optional PCM UDP stream. |
 | **Log** beside FM-DATA | Capture the current service/ensemble in the reception editor; **Save reception** writes it to the log. |
-| **Log** in the top menu | Open **RX log**, **My Station**, **Bearing**, **Application log** or **Status endpoint…**. |
+| **Log** in the top menu | Open **RX log**, **My Station**, **Bearing** or **Application log**. |
 | **Extern op GPU / Terug in venster** | Switch DVB playback between external NVIDIA FFplay and embedded VLC while reception continues. This accelerates video playback, not radio demodulation or LDPC. |
 | **◀ / ▶** in DAB | Previous/next Band III channel, or the configured tuning step in Free frequency mode. |
 | Spectrum/waterfall arrow buttons | Adjust the displayed noise-floor level and vertical range; these do not change SDR gain. |
@@ -541,7 +542,7 @@ mode. The receiver's hardware range and DAB sample-rate requirements still apply
 
 ### Network diagnostics
 
-Open **Log → Status endpoint…** to switch the endpoint on or off immediately,
+Open **Output → Status endpoint…** to switch the endpoint on or off immediately,
 for any receiver mode. Set the listen address to `0.0.0.0` for access from other
 computers, or `127.0.0.1` for local access. The default port is `8877`. Switch the
 endpoint off before changing its address or port. Close the dialog and press

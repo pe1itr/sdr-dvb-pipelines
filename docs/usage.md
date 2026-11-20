@@ -150,6 +150,7 @@ melding; de ontvangst blijft doorlopen.
   voor DVB-S2 ook LDPC-methode, 1–8 workers en automatische acquisitie/verwerking.
 - **Output → Renderer**: ingebouwde player, UDP naar een externe player, VLC (`cvlc`),
   VLC met bediening, FFplay, een eigen programma of een MPEG-TS-bestand.
+- **Output → Status endpoint…** opent de instellingen voor het HTTP-statusendpoint.
 - **Output → Program Map Table (PMT)** toont de streams per programma.
 - **Alt+I / Alt+M / Alt+R / Alt+T / Alt+A**: open Input, Mode, Renderer, TCI en About.
   Kleine letters werken ook; houd Alt ingedrukt om een menu te openen.

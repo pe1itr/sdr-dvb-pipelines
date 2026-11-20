@@ -3463,7 +3463,6 @@ static void log_menu_selected(GtkWidget *widget, gpointer data) {
     App *a=data;
     gtk_popover_popdown(GTK_POPOVER(a->log_popover));
     if (widget==a->application_log_item) show_diagnostics(widget,a);
-    else if (widget==a->status_endpoint_item) show_status_endpoint(widget,a);
     else if (widget==a->my_station_item) show_my_station(widget,a);
     else if (widget==a->bearing_item) show_bearing(widget,a);
     else show_logbook(widget,a);
@@ -3926,6 +3925,11 @@ static void gui(App *a) {
     GtkWidget *pmt_item = gtk_model_button_new();
     g_object_set(pmt_item, "text", "Program Map Table (PMT)…", NULL);
     gtk_box_pack_start(GTK_BOX(output_options), pmt_item, FALSE, FALSE, 0);
+    a->status_endpoint_item=gtk_model_button_new();
+    g_object_set(a->status_endpoint_item,"text","Status endpoint…",NULL);
+    gtk_box_pack_start(GTK_BOX(output_options),a->status_endpoint_item,FALSE,FALSE,0);
+    gtk_widget_set_tooltip_text(a->status_endpoint_item,"Enable or disable HTTP status and logs for all receiver modes");
+    g_signal_connect(a->status_endpoint_item,"clicked",G_CALLBACK(show_status_endpoint),a);
     gtk_widget_show_all(output_options);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(output_menu), output_popover);
     GtkWidget *presets_item=gtk_button_new_with_label("Presets");
@@ -3938,7 +3942,7 @@ static void gui(App *a) {
     a->log_menu=gtk_menu_button_new();
     gtk_button_set_label(GTK_BUTTON(a->log_menu),"Log");
     gtk_box_pack_start(GTK_BOX(menu),a->log_menu,FALSE,FALSE,0);
-    gtk_widget_set_tooltip_text(a->log_menu,"Application log, status endpoint, RX log, My Station and Bearing");
+    gtk_widget_set_tooltip_text(a->log_menu,"Application log, RX log, My Station and Bearing");
     a->log_popover=gtk_popover_new(a->log_menu);
     GtkWidget *log_options=gtk_box_new(GTK_ORIENTATION_VERTICAL,0);
     gtk_container_set_border_width(GTK_CONTAINER(log_options),6);
@@ -3948,11 +3952,6 @@ static void gui(App *a) {
     gtk_box_pack_start(GTK_BOX(log_options),a->application_log_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->application_log_item,"Startup command and application messages · Alt+L");
     g_signal_connect(a->application_log_item,"clicked",G_CALLBACK(log_menu_selected),a);
-    a->status_endpoint_item=gtk_model_button_new();
-    g_object_set(a->status_endpoint_item,"text","Status endpoint…",NULL);
-    gtk_box_pack_start(GTK_BOX(log_options),a->status_endpoint_item,FALSE,FALSE,0);
-    gtk_widget_set_tooltip_text(a->status_endpoint_item,"Enable or disable HTTP status and logs for all receiver modes");
-    g_signal_connect(a->status_endpoint_item,"clicked",G_CALLBACK(log_menu_selected),a);
     a->logbook_item=gtk_model_button_new();
     g_object_set(a->logbook_item,"text","RX log",NULL);
     gtk_box_pack_start(GTK_BOX(log_options),a->logbook_item,FALSE,FALSE,0);

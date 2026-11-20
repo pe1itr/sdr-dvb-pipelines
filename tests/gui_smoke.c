@@ -885,8 +885,9 @@ static void exercise_menu_clicks(App *a) {
     g_assert_true(gtk_widget_get_visible(GTK_WIDGET(popover)));
     GtkWidget *options = gtk_bin_get_child(GTK_BIN(popover));
     GList *items = gtk_container_get_children(GTK_CONTAINER(options));
-    g_assert_cmpuint(g_list_length(items), ==, 2);
+    g_assert_cmpuint(g_list_length(items), ==, 3);
     g_assert_true(items->next->data == a->information.buttons[2]);
+    g_assert_true(g_list_last(items)->data == a->status_endpoint_item);
     gtk_button_clicked(GTK_BUTTON(items->data));
     g_assert_true(gtk_widget_get_visible(a->renderer_dialog));
     gtk_dialog_response(GTK_DIALOG(a->renderer_dialog), GTK_RESPONSE_CLOSE);
@@ -920,6 +921,7 @@ static void exercise_menu_clicks(App *a) {
         g_assert_false(gtk_widget_get_visible(dialog));
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->log_menu),FALSE);
     }
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(output), TRUE);
     exercise_status_endpoint(a);
     /* A missing station should explain where to set it, without a stale result. */
     show_bearing(NULL,a);

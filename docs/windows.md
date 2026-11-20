@@ -258,7 +258,7 @@ onder `/org/gtk/libgtk/theme/Adwaita/assets/` kan ontstaan als deze loader of
 zijn DLL's ontbreken. Pak bij een update het volledige pakket uit: alleen de
 EXE vervangen herstelt ontbrekende loaders en hun cache niet.
 
-Via **Log → Status endpoint…** schakel je het endpoint voor alle modi direct
+Via **Output → Status endpoint…** schakel je het endpoint voor alle modi direct
 aan of uit. Kies `0.0.0.0` als luisteradres voor toegang vanaf andere computers.
 Sluit het venster en druk **W** om de instelling voor volgende starts op te slaan.
 
