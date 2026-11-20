@@ -712,6 +712,15 @@ Vink **Also send video/audio via UDP** aan om tegelijk een externe player te voe
 Met **UDP stream (external player)** wordt alleen UDP verstuurd, zonder lokaal beeld
 of geluid. Het rechterkader behoudt ook dan zijn afmetingen. Stel het IPv4-adres
 van de externe player en de doelpoort in; standaard is dit `127.0.0.1:1234`.
+Voor een afzonderlijke data-uitgang vink je **Send DSM-CC from all programs via UDP** aan.
+Vul een unicast- of multicastadres en poort in (standaard `127.0.0.1:1235`).
+Deze uitgang volgt de PAT en de PMT’s van alle services op de ontvangen multiplex,
+onafhankelijk van het gekozen programma en de volledige UDP-uitgang. De datagrammen
+bevatten uitsluitend originele TS-pakketten van de aangekondigde DSM-CC-PID’s.
+PAT en PMT worden lokaal gebruikt voor detectie. Een app kan de PID uit de
+TS-header lezen. Bij multicast naar `239.255.42.2:1235` kun je de secties bekijken
+met `tsp -I ip 239.255.42.2:1235 -P tables --all-sections -O drop`.
+
 Open in de ontvangende VLC `udp://@:1234`, of in FFplay `udp://0.0.0.0:1234`.
 De externe player bepaalt zelf zijn venstergrootte. De ontvangen MPEG-TS wordt
 ongewijzigd doorgestuurd, zonder hercoderen. TSscatterFix krijgt een parallelle

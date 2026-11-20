@@ -99,6 +99,7 @@ typedef struct {
     GtkWidget *s2_controls, *ldpc_mode_box, *ldpc_workers_box, *ldpc_latency_box, *s2_acquisition_box, *s2_gpu_box;
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
+    GtkWidget *dsmcc_enabled, *dsmcc_host, *dsmcc_port;
     GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
     int renderer;
     int tune_fd;
@@ -1205,8 +1206,18 @@ static void start_pipeline(App *a) {
         /* Keep the TS relay available so recovery can be toggled live. */
         GError *error = NULL;
         scatter_view_reset(&a->scatter_view);
+        DsmccOutput *dsmcc = NULL;
+        if (g_key_file_get_boolean(a->config, "renderer", "dsmcc_enabled", NULL)) {
+            char *host = setting(a, "renderer", "dsmcc_host");
+            dsmcc = dsmcc_output_open(host, integer_setting(a, "renderer", "dsmcc_port", 1, 65535), &error);
+            g_free(host);
+            if (!dsmcc) {
+                status(a, error->message); g_clear_error(&error);
+                a->exit_code = 1; goto pipe_error;
+            }
+        }
         a->scatter_backend = scatter_backend_start(scatter_pipe[0],
-            output_fd >= 0 ? output_fd : pipes[1][1], a->scatter, &error);
+            output_fd >= 0 ? output_fd : pipes[1][1], a->scatter, dsmcc, &error);
         if (!a->scatter_backend) {
             status(a, error->message); g_clear_error(&error);
             a->exit_code = 1; goto pipe_error;
@@ -1464,7 +1475,10 @@ static gboolean tune_frequency(App *a, double next) {
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
         if (sent != length) { status(a, "Tuning command not sent; try again"); return FALSE; }
     }
-    if (a->scatter_backend) ts_info_backend_reset(a->scatter_backend->information);
+    if (a->scatter_backend) {
+        g_atomic_int_set(&a->scatter_backend->reset_dsmcc, TRUE);
+        ts_info_backend_reset(a->scatter_backend->information);
+    }
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     g_key_file_set_double(a->config, section, "frequency", next);
@@ -2818,8 +2832,8 @@ static void source_defaults(App *a) {
     for (unsigned i=0;i<G_N_ELEMENTS(usb_keys);++i)
         if (!g_key_file_has_key(a->config,"usb",usb_keys[i],NULL))
             g_key_file_set_string(a->config,"usb",usb_keys[i],usb_values[i]);
-    const char *udp_keys[] = {"udp_enabled", "udp_host", "udp_port"};
-    const char *udp_values[] = {"false", "127.0.0.1", "1234"};
+    const char *udp_keys[] = {"udp_enabled", "udp_host", "udp_port", "dsmcc_enabled", "dsmcc_host", "dsmcc_port"};
+    const char *udp_values[] = {"false", "127.0.0.1", "1234", "false", "127.0.0.1", "1235"};
     for (unsigned i = 0; i < G_N_ELEMENTS(udp_keys); ++i)
         if (!g_key_file_has_key(a->config, "renderer", udp_keys[i], NULL))
             g_key_file_set_string(a->config, "renderer", udp_keys[i], udp_values[i]);
@@ -3887,6 +3901,19 @@ static gboolean apply_renderer(App *a) {
         g_key_file_set_string(a->config, "renderer", "udp_host", host);
         g_key_file_set_integer(a->config, "renderer", "udp_port", port);
     }
+    gboolean data_enabled = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->dsmcc_enabled));
+    const char *data_host = gtk_entry_get_text(GTK_ENTRY(a->dsmcc_host));
+    struct in_addr data_address;
+    if (data_enabled && (inet_pton(AF_INET, data_host, &data_address) != 1 ||
+        data_address.s_addr == INADDR_ANY || data_address.s_addr == INADDR_BROADCAST)) {
+        gtk_label_set_text(GTK_LABEL(a->renderer_error), "Enter a DSM-CC destination IPv4 address.");
+        return FALSE;
+    }
+    gtk_spin_button_update(GTK_SPIN_BUTTON(a->dsmcc_port));
+    g_key_file_set_boolean(a->config, "renderer", "dsmcc_enabled", data_enabled);
+    g_key_file_set_string(a->config, "renderer", "dsmcc_host", data_host);
+    g_key_file_set_integer(a->config, "renderer", "dsmcc_port",
+        gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->dsmcc_port)));
     /* Only store active fields, so an unfinished inactive command cannot break a later preview. */
     if (a->renderer == RENDER_CUSTOM) {
         g_key_file_set_string(a->config, "paths", "custom_renderer", program);
@@ -4110,6 +4137,13 @@ static void create_mode_renderer(App *a) {
     gtk_widget_set_sensitive(a->udp_enabled, a->renderer == RENDER_EMBEDDED);
     gtk_widget_set_sensitive(a->udp_host, internal_player(a));
     gtk_widget_set_sensitive(a->udp_port, internal_player(a));
+    a->dsmcc_enabled = gtk_check_button_new_with_label("Send DSM-CC from all programs via UDP");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->dsmcc_enabled),
+        g_key_file_get_boolean(a->config, "renderer", "dsmcc_enabled", NULL));
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->dsmcc_enabled, 0, 7, 2, 1);
+    a->dsmcc_host = entry_field(a->renderer_panel, "DSM-CC destination IPv4", 8, a, "renderer", "dsmcc_host");
+    a->dsmcc_port = spin(a->renderer_panel, "DSM-CC destination port", 9, 1, 65535, 1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->dsmcc_port), integer_setting(a, "renderer", "dsmcc_port", 1, 65535));
     GtkWidget *hint = gtk_label_new("Embedded player: fixed panel; video scales to fit without changing its shape.\n"
         "During DVB reception, click Extern op GPU below Received video for NVIDIA CUDA/Vulkan playback.\n"
         "Terug in venster or closing FFplay returns to embedded playback; reception continues.\n"
@@ -4119,11 +4153,11 @@ static void create_mode_renderer(App *a) {
         "TSscatterFix receives a parallel copy; all outputs keep the original stream.\n"
         "Relative paths start in the INI directory. Existing files will not be overwritten.");
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(hint), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 7, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), hint, 0, 10, 2, 1);
     a->renderer_error = gtk_label_new("");
     gtk_label_set_line_wrap(GTK_LABEL(a->renderer_error), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(a->renderer_error), 64);
-    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 8, 2, 1);
+    gtk_grid_attach(GTK_GRID(a->renderer_panel), a->renderer_error, 0, 11, 2, 1);
     gtk_widget_set_sensitive(a->renderer_program, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->renderer_args, a->renderer == RENDER_CUSTOM);
     gtk_widget_set_sensitive(a->output_file, a->renderer == RENDER_FILE);

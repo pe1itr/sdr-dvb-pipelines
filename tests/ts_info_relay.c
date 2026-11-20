@@ -6,19 +6,26 @@
 #include <unistd.h>
 
 int main(int argc, char **argv) {
-    g_assert_cmpint(argc,==,3); signal(SIGPIPE,SIG_IGN);
+    g_assert_true(argc==3 || argc==4); signal(SIGPIPE,SIG_IGN);
     char *bytes; gsize size;
     g_assert_true(g_file_get_contents(argv[1],&bytes,&size,NULL));
     int input[2]; g_assert_cmpint(pipe(input),==,0);
     int output=open(argv[2],O_CREAT|O_TRUNC|O_WRONLY,0600); g_assert_cmpint(output,>=,0);
     GError *error=NULL;
-    ScatterBackend *s=scatter_backend_start(input[0],output,FALSE,&error);
+    DsmccOutput *data_out=NULL;
+    if (argc==4) {
+        data_out=dsmcc_output_open("127.0.0.1",g_ascii_strtoll(argv[3],NULL,10),&error);
+        g_assert_no_error(error); g_assert_nonnull(data_out);
+    }
+    ScatterBackend *s=scatter_backend_start(input[0],output,FALSE,data_out,&error);
     g_assert_no_error(error); g_assert_nonnull(s); close(input[0]); close(output);
-    for (int round=0;round<3;round++) {
+    int rounds=data_out ? 1 : 3;
+    for (int round=0;round<rounds;round++) {
         scatter_backend_set_enabled(s,round%2);
         for (gsize at=0;at<size;) {
             ssize_t n=write(input[1],bytes+at,MIN(size-at,137)); g_assert_cmpint(n,>,0); at+=n;
         }
+        if (data_out) continue;
         gint64 deadline=g_get_monotonic_time()+3000000;
         gboolean ready=FALSE;
         do {
@@ -40,8 +47,8 @@ int main(int argc, char **argv) {
     scatter_backend_destroy(s);
     char *result; gsize received;
     g_assert_true(g_file_get_contents(argv[2],&result,&received,NULL));
-    g_assert_cmpuint(received,==,size*3);
-    for (unsigned i=0;i<3;i++) g_assert_cmpmem(bytes,size,result+size*i,size);
+    g_assert_cmpuint(received,==,size*rounds);
+    for (int i=0;i<rounds;i++) g_assert_cmpmem(bytes,size,result+size*i,size);
     g_free(result); g_free(bytes);
 
     /* An oversized metadata chunk and a full queue are discarded, not blocked.

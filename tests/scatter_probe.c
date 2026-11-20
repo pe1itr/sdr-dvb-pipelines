@@ -34,7 +34,7 @@ int main(int argc, char **argv) {
     int output = open(argv[2], O_CREAT | O_TRUNC | O_RDWR, 0600);
     g_assert_cmpint(output, >=, 0);
     GError *error = NULL;
-    ScatterBackend *s = scatter_backend_start(input[0], output, FALSE, &error);
+    ScatterBackend *s = scatter_backend_start(input[0], output, FALSE, NULL, &error);
     g_assert_no_error(error); g_assert_nonnull(s); close(input[0]);
     Writer writer = {.fd=input[1], .data=data, .size=size};
     for (int round = 0; round < 6; ++round) {
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
         int idle[2] = {-1, -1};
         if (run == 2) g_assert_true(g_unix_open_pipe(idle, FD_CLOEXEC, NULL));
         int source = run == 2 ? idle[0] : open("/dev/zero", O_RDONLY);
-        s = scatter_backend_start(source, blocked[1], TRUE, &error);
+        s = scatter_backend_start(source, blocked[1], TRUE, NULL, &error);
         g_assert_no_error(error); g_assert_nonnull(s); close(source); close(blocked[1]);
         g_usleep(20000);
         gint64 start = g_get_monotonic_time();

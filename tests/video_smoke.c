@@ -339,7 +339,7 @@ int main(int argc, char **argv) {
          * including streams whose MPEG-2 video is unsupported by recovery. */
         if (i >= 3) {
             int branch[2]; g_assert_cmpint(pipe(branch), ==, 0);
-            scatter = scatter_backend_start(fd, branch[1], TRUE, &error);
+            scatter = scatter_backend_start(fd, branch[1], TRUE, NULL, &error);
             g_assert_no_error(error); g_assert_nonnull(scatter);
             close(fd); close(branch[1]); fd = branch[0];
         }

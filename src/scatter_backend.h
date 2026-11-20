@@ -3,10 +3,13 @@
 #include <glib.h>
 #include "recovery.h"
 #include "ts_info.h"
+#include "dsmcc_output.h"
 
 #define SCATTER_QUEUE_LIMIT (4u * 1024 * 1024)
 typedef struct {
     TsInfoBackend *information;
+    DsmccOutput *dsmcc; /* owned by relay until destruction */
+    gint reset_dsmcc;
     GMutex mutex;
     GCond wake;
     GQueue queue;
@@ -25,7 +28,7 @@ typedef struct {
 
 /* Duplicates the descriptors; caller retains ownership. Only the recovery
  * branch can drop data. The output receives every input byte unchanged. */
-ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, GError **error);
+ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, DsmccOutput *dsmcc, GError **error);
 /* Switch only recovery; the original TS relay always keeps running. */
 void scatter_backend_set_enabled(ScatterBackend *s, gboolean enabled);
 /* Discard recovery state and start again with fresh TS data. */

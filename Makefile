@@ -102,8 +102,8 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SCATTER_CFLAGS) -c $< -o $@
 
-GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
-GUI_HEADERS := src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
+GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/dsmcc_output.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
+GUI_HEADERS := src/dsmcc_output.h src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
 BOND_SOURCES := $(wildcard components/bonding/src/*.c)
 GUI_SOURCES += src/dvbt_bonding.c $(BOND_SOURCES)
@@ -180,8 +180,8 @@ $(BUILD_DIR)/gui_smoke: tests/gui_smoke.c tests/sdr_status_endpoint_test.h src/l
 $(BUILD_DIR)/dab_gui_smoke: tests/dab_gui_smoke.c src/linrad_dvb.c $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -ldl -lstdc++ $(LDLIBS)
 
-$(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GTK_CFLAGS) $(SCATTER_CFLAGS) tests/video_smoke.c src/video_view.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) -Wl,--wrap=libvlc_audio_set_volume $(GTK_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/video_smoke: tests/video_smoke.c src/video_view.c src/video_view.h src/dsmcc_output.c src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GTK_CFLAGS) $(SCATTER_CFLAGS) tests/video_smoke.c src/video_view.c src/dsmcc_output.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) -Wl,--wrap=libvlc_audio_set_volume $(GTK_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
 
 test: all $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke $(BUILD_DIR)/video_smoke
 	python3 tests/test_linrad.py
@@ -335,8 +335,8 @@ test-dvbt: $(BUILD_DIR)/test_dvbt_stream $(BUILD_DIR)/test_dvbt_stream_scalar $(
 
 test: test-dvbt
 
-$(BUILD_DIR)/scatter_probe: tests/scatter_probe.c src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(SCATTER_CFLAGS) tests/scatter_probe.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GLIB_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/scatter_probe: tests/scatter_probe.c src/dsmcc_output.c src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(SCATTER_CFLAGS) tests/scatter_probe.c src/dsmcc_output.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GLIB_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
 
 .PHONY: test-scatter
 test-scatter: $(BUILD_DIR)/scatter_probe
@@ -353,8 +353,8 @@ test-ts-info: $(BUILD_DIR)/ts_info_probe
 
 test: test-ts-info
 
-$(BUILD_DIR)/ts_info_relay: tests/ts_info_relay.c src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(SCATTER_CFLAGS) tests/ts_info_relay.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GLIB_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/ts_info_relay: tests/ts_info_relay.c src/dsmcc_output.c src/scatter_backend.c src/scatter_backend.h src/ts_info.c src/ts_info.h $(SCATTER_OBJECTS) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Isrc $(GLIB_CFLAGS) $(SCATTER_CFLAGS) tests/ts_info_relay.c src/dsmcc_output.c src/scatter_backend.c src/ts_info.c $(SCATTER_OBJECTS) -o $@ $(LDFLAGS) $(GLIB_LIBS) $(SCATTER_LIBS) -pthread -lm $(LDLIBS)
 
 test-ts-info: $(BUILD_DIR)/ts_info_relay
 

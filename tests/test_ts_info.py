@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import pathlib
+import socket
 import struct
 import subprocess
 import tempfile
@@ -152,6 +153,40 @@ class InformationTests(unittest.TestCase):
     def cell(frame, row, col, width=1, height=1):
         return b''.join(frame[((row*10+y)*480+col*12)*3:((row*10+y)*480+(col+width)*12)*3]
                         for y in range(height*10))
+
+    def test_mux_dsmcc_udp(self):
+        ts = Stream()
+        services = ((1, 0x1000), (2, 0x1000))
+        def pmt(sid, pid, version=0):
+            # Multi-packet PMT, including a private ES signalled as object carousel.
+            desc = bytes([0x80, 170]) + bytes(170)
+            body = struct.pack('>HH', 0xe100, 0xf000 | len(desc)) + desc
+            kind, info = (0x0b, b'') if sid == 1 else (0x05, bytes.fromhex('66020007'))
+            body += struct.pack('>BHH', kind, 0xe000 | pid, 0xf000 | len(info)) + info
+            return ts.table(0x1000, section(2, sid, body, version))
+        first = ts.packet(0x104, b'first')
+        other = ts.packet(0x245, b'other')
+        moved = ts.packet(0x246, b'moved')
+        shared = ts.packet(0x104, b'shared')
+        sequence = (ts.pat(services) + pmt(1, 0x104) + pmt(2, 0x245)
+                    + first + other + ts.packet(0x100, b'video') + pmt(2, 0x104, 1)
+                    + ts.packet(0x245, b'retired') + shared + pmt(1, 0x246, 1)
+                    + moved + shared + ts.pat(((1, 0x1000),), 1) + pmt(1, 0x246, 1)
+                    + ts.packet(0x104, b'removed') + moved)
+        with tempfile.TemporaryDirectory() as tmp, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rx:
+            rx.bind(('127.0.0.1', 0))
+            source, relay = pathlib.Path(tmp)/'input.ts', pathlib.Path(tmp)/'relay.ts'
+            source.write_bytes(sequence)
+            subprocess.run([ROOT/'build/ts_info_relay', source, relay, str(rx.getsockname()[1])], check=True)
+            self.assertEqual(relay.read_bytes(), sequence)
+            rx.settimeout(0.1)
+            received = bytearray()
+            while True:
+                try:
+                    received.extend(rx.recv(2048))
+                except socket.timeout:
+                    break
+            self.assertEqual(received, first + other + shared + moved + shared + moved)
 
     def test_conceal_and_flash_are_independent(self):
         on, off, reveal, reveal_off=self.frames({1:b'\x01\x08X\x09Y\x18Z', 2:b'Z'})

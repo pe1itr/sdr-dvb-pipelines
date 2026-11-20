@@ -106,6 +106,11 @@ static gpointer relay(gpointer data) {
         if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
         if (n < 0) goto failed;
         if (!n) break;
+        if (s->dsmcc) {
+            if (g_atomic_int_compare_and_exchange(&s->reset_dsmcc, TRUE, FALSE))
+                dsmcc_output_reset(s->dsmcc);
+            dsmcc_output_feed(s->dsmcc, bytes, n);
+        }
         ts_info_backend_feed(s->information, bytes, n);
         g_mutex_lock(&s->mutex);
         s->received_bytes+=n;
@@ -147,9 +152,10 @@ done:
     return NULL;
 }
 
-ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, GError **error) {
+ScatterBackend *scatter_backend_start(int input, int output, gboolean enabled, DsmccOutput *dsmcc, GError **error) {
     ScatterBackend *s = g_new0(ScatterBackend, 1);
     g_mutex_init(&s->mutex); g_cond_init(&s->wake); g_queue_init(&s->queue);
+    s->dsmcc = dsmcc;
     s->status.video_pid = -1; s->enabled = enabled; s->generation = 1;
     s->input = fcntl(input, F_DUPFD_CLOEXEC, 3);
     s->output = fcntl(output, F_DUPFD_CLOEXEC, 3);
@@ -210,6 +216,7 @@ void scatter_backend_destroy(ScatterBackend *s) {
     if (s->input >= 0) close(s->input);
     if (s->output >= 0) close(s->output);
     ts_info_backend_free(s->information);
+    dsmcc_output_free(s->dsmcc);
     clear_queue(s); g_clear_pointer(&s->image, g_bytes_unref);
     g_cond_clear(&s->wake); g_mutex_clear(&s->mutex); g_free(s);
 }
