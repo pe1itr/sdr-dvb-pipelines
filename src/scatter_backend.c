@@ -108,6 +108,8 @@ static gpointer relay(gpointer data) {
         if (!n) break;
         ts_info_backend_feed(s->information, bytes, n);
         g_mutex_lock(&s->mutex);
+        s->received_bytes+=n;
+        s->last_input=g_get_monotonic_time();
         if (s->enabled && !g_atomic_int_get(&s->worker_done) && !g_atomic_int_get(&s->recovery_failed)) {
             GBytes *chunk = g_bytes_new(bytes, n);
             if (s->queued + n > SCATTER_QUEUE_LIMIT) {
@@ -130,6 +132,9 @@ static gpointer relay(gpointer data) {
             if (written <= 0) goto failed;
             at += written;
         }
+        g_mutex_lock(&s->mutex);
+        s->written_bytes+=at;
+        g_mutex_unlock(&s->mutex);
     }
     goto done;
 failed:

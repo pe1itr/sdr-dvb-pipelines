@@ -46,11 +46,18 @@
 #include "dab_view.h"
 #include "status_http.h"
 #include "sdr_rx_status.h"
+#if defined(__linux__) && (defined(__arm__) || defined(__aarch64__) || defined(HAVE_LOCAL_KNUCKER))
+#define HAVE_KNUCKER
+#endif
+#ifdef HAVE_KNUCKER
+#include <pty.h>
+#include "../components/knucker/status.h"
+#endif
 #include "hackrf_gain.h"
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
-       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13 };
+       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13, SOURCE_KNUCKER = 14 };
 
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
@@ -61,6 +68,10 @@ typedef struct {
     char *preset_signature;
     StatusHttp *status_http;
     GString *status_log;
+    guint64 knucker_sync_bytes;
+    gboolean batc_receiver;
+    char knucker_fft[12], knucker_constellation[12];
+    GtkWidget *knucker_program;
     SdrRxStatus sdr_status;
     gint64 sdr_status_time;
     double rtlsdr_readback_hz;
@@ -73,7 +84,8 @@ typedef struct {
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *hackrf_amp_box;
-    GtkWidget *sr_label, *dashboard, *lower;
+    struct { int standard, sr, fec, gi, constellation; gboolean valid; } before_knucker;
+    GtkWidget *knucker_bw, *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
     GtkWidget *bonding_box, *bonding_button;
@@ -134,16 +146,32 @@ static const unsigned modcods[2][G_N_ELEMENTS(fecs)] = {
     {4, 6, 7, 1, 2, 3, 5, 8, 9, 10, 11},
     {0, 13, 14, 0, 0, 0, 12, 0, 15, 16, 17}
 };
+static gboolean knucker_source(const App *a) {
+#ifdef HAVE_KNUCKER
+    return a->source == SOURCE_KNUCKER;
+#else
+    (void)a;
+    return FALSE;
+#endif
+}
 static gboolean valid_fec(App *a, int fec) {
     if (fec < 0 || fec >= (int)G_N_ELEMENTS(fecs)) return FALSE;
-    if (a->standard >= 3) return fec == 0; /* automatic L1 signalling */
+    if (a->standard >= 3 || knucker_source(a)) return fec == 0; /* automatic L1 signalling */
     if (a->standard == 1) return modcods[a->constellation][fec] != 0;
     if (a->standard == 2) return fec < 3 || !strcmp(fecs[fec], "5/6") || !strcmp(fecs[fec], "7/8");
     return fec < 3;
 }
 static const char *guards[] = {"1/32", "1/16", "1/8", "auto"};
-static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "rsp1a", "rsp1b", "airspyhf", "airspyr2", "pluto", "file"};
-static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"};
+static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "rtlsdr", "fcdpp", "lime", "rsp1a", "rsp1b", "airspyhf", "airspyr2", "pluto", "file"
+#ifdef HAVE_KNUCKER
+    , "knucker"
+#endif
+};
+static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"
+#ifdef HAVE_KNUCKER
+    , "BATC Knucker"
+#endif
+};
 static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP, RENDER_SRT };
@@ -270,6 +298,18 @@ static void bonding_refresh(App *a) {
     gtk_widget_set_tooltip_text(a->bonding_button,tip);g_free(tip);
 }
 static const char *receiver_offset_problem(App *a) {
+    if (knucker_source(a)) {
+        char *program=g_key_file_get_string(a->config,"paths","knucker",NULL);
+        gboolean empty=!program || !*program;
+        g_free(program);
+        if (empty) return "Enter the path to the CombiTunerExpress binary in Input → BATC Knucker.";
+        double hz=g_key_file_get_double(a->config,"knucker","frequency",NULL);
+        if (!isfinite(hz) || hz<44000000 || hz>1002000000 || fmod(hz,1000)!=0)
+            return "Knucker tuning range is 44–1002 MHz in whole kHz.";
+        if (a->standard!=2 || a->sr<1000 || a->sr>10000000 || a->sr%1000)
+            return "Knucker requires DVB-T and a bandwidth in whole kHz (1–10000).";
+        return NULL;
+    }
     if (a->standard == 4) {
         char *name=g_key_file_get_string(a->config,"dab","channel",NULL);
         int index=dab_channel_index(name);g_free(name);
@@ -410,19 +450,7 @@ static void clear_stages(App *a) {
     a->stage_count = 0;
 }
 
-static void build_pipeline(App *a) {
-    const char *problem=receiver_offset_problem(a);
-    if (problem) fatal("%s",problem);
-    if (!valid_fec(a, a->fec)) fatal("Invalid FEC for the selected standard/constellation");
-    if (udp_output(a)) {
-        char *host = setting(a, "renderer", "udp_host");
-        struct in_addr destination;
-        if (inet_pton(AF_INET, host, &destination) != 1 || destination.s_addr == INADDR_ANY ||
-            destination.s_addr == INADDR_BROADCAST) fatal("Config [renderer] udp_host must be a destination IPv4 address");
-        g_free(host);
-        integer_setting(a, "renderer", "udp_port", 1, 65535);
-    }
-    clear_stages(a);
+static void build_iq_stages(App *a) {
     if (a->standard==4) {
         if (!a->dab.directory) {
             a->dab.directory=g_dir_make_tmp("linrad-dab-XXXXXX",NULL);
@@ -522,7 +550,6 @@ static void build_pipeline(App *a) {
         add(s,"--profile");add(s,profile);add(s,"--audio-device");add(s,device);g_free(profile);g_free(device);
         if (g_key_file_get_boolean(a->config,"dab","channel_filter",NULL)) add(s,"--channel-filter");
         g_free(format);g_free(ip);
-        for (int i=0;i<a->stage_count;++i) g_ptr_array_add(a->stages[i].args,NULL);
         return;
     }
     if (a->standard == 3) {
@@ -600,6 +627,52 @@ static void build_pipeline(App *a) {
             add(s, "--modcods"); add(s, mask); g_free(mask);
         }
     }
+    g_free(format); g_free(ip);
+}
+
+static void build_pipeline(App *a) {
+    const char *problem=receiver_offset_problem(a);
+    if (problem) fatal("%s",problem);
+    if (!valid_fec(a, a->fec)) fatal("Invalid FEC for the selected standard/constellation");
+    if (udp_output(a)) {
+        char *host = setting(a, "renderer", "udp_host");
+        struct in_addr destination;
+        if (inet_pton(AF_INET, host, &destination) != 1 || destination.s_addr == INADDR_ANY ||
+            destination.s_addr == INADDR_BROADCAST) fatal("Config [renderer] udp_host must be a destination IPv4 address");
+        g_free(host);
+        integer_setting(a, "renderer", "udp_port", 1, 65535);
+    }
+    clear_stages(a);
+    a->batc_receiver=FALSE;
+    Stage *s;
+    if (knucker_source(a)) {
+        s = new_stage(a,"knucker");
+        a->batc_receiver=TRUE;
+#ifdef HAVE_LOCAL_KNUCKER
+        char *base=g_path_get_basename(s->args->pdata[0]);
+        a->batc_receiver=strcmp(base,"knucker_rx")!=0;
+        g_free(base);
+#endif
+        if (a->batc_receiver) {
+            add(s,"-m"); add(s,"dvbt");
+            add_number(s,"-f",g_key_file_get_double(a->config,"knucker","frequency",NULL)/1000);
+            add_number(s,"-b",a->sr/1000);
+            /* fd 0 is the write end of the TS pipe for this child only. */
+            add(s,"-n"); add(s,"/proc/self/fd/0");
+        } else {
+            add(s,"--stdout-ts");
+            add_number(s,"--freq",g_key_file_get_double(a->config,"knucker","frequency",NULL)/1000);
+            add_number(s,"--bw",a->sr/1000);
+            add(s,"--tsv");
+            char *dir=g_path_get_dirname(s->args->pdata[0]);
+            g_ptr_array_add(s->args,g_build_filename(dir,"knucker-receiver.tsv",NULL));
+            g_free(dir);
+        }
+    } else build_iq_stages(a);
+    if (a->standard==4) {
+        for (int i=0;i<a->stage_count;++i) g_ptr_array_add(a->stages[i].args,NULL);
+        return;
+    }
     char *vlc_input = g_strdup("fd://0");
     if (a->renderer == RENDER_SRT) {
         char *url = setting(a, "srt", "url");
@@ -646,7 +719,7 @@ static void build_pipeline(App *a) {
         add(s, vlc_input);
     }
     for (int i = 0; i < a->stage_count; ++i) g_ptr_array_add(a->stages[i].args, NULL);
-    g_free(vlc_input); g_free(format); g_free(ip);
+    g_free(vlc_input);
 }
 
 static char *describe(App *a) {
@@ -767,7 +840,16 @@ static void record_log(App *a, const char *text, size_t length) {
         if (text[i] == '\n') {
             a->record_log_line[a->record_log_used] = 0;
             const char *line = a->record_log_line;
-            if (a->running && !a->stopping && a->standard==2) {
+#ifdef HAVE_KNUCKER
+            if (knucker_source(a) && a->running && !a->stopping) {
+                g_strchomp(a->record_log_line);
+                gboolean updated=a->batc_receiver ?
+                    batc_parse_status(line,&a->decoder_view.status,a->knucker_fft,a->knucker_constellation) :
+                    knucker_parse_status(line,&a->decoder_view.status,&a->knucker_sync_bytes);
+                if (updated) a->decoder_view.status_time=g_get_monotonic_time();
+            }
+#endif
+            if (a->running && !a->stopping && a->standard==2 && !knucker_source(a)) {
                 double offset;
                 if (sscanf(line,"[bond] detected offset=%lf",&offset)==1) {
                     a->bond_detected=TRUE;a->bond_peer_offset=offset;bonding_refresh(a);
@@ -841,7 +923,7 @@ static void scatter_refresh(App *a) {
     if (a->gi_label) gtk_widget_set_visible(a->gi_label,a->standard==2);
     if (a->t2_controls) gtk_widget_set_visible(a->t2_controls,a->standard==3);
     if (a->s2_controls) gtk_widget_set_visible(a->s2_controls,a->standard==1);
-    if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2);
+    if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
     if (a->dab.info) {
@@ -918,7 +1000,7 @@ static void finish_if_stopped(App *a) {
         gtk_widget_set_sensitive(a->controls, TRUE);
         gtk_widget_set_sensitive(a->hardware, TRUE);
         gtk_widget_set_sensitive(a->renderer_panel, TRUE);
-        gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && hardware_source(a));
+        gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || knucker_source(a)));
     }
     if (a->pending_preset && !a->closing) {
         int index=a->pending_preset; a->pending_preset=0; preset_apply(a,index);
@@ -1034,7 +1116,7 @@ static void start_pipeline(App *a) {
     a->bond_detected=a->bond_active=a->bond_pair=FALSE;
     g_clear_pointer(&a->bond_json,g_free);bonding_refresh(a);
     if (a->bond_control) {g_unlink(a->bond_control);g_clear_pointer(&a->bond_control,g_free);}
-    if (a->standard==2 && a->sr==40000) {
+    if (!knucker_source(a) && a->standard==2 && a->sr==40000) {
         int fd=g_file_open_tmp("linrad-bond-XXXXXX",&a->bond_control,NULL);
         if (fd<0) {status(a,"Cannot create bonding control path");a->exit_code=1;return;}
         close(fd);g_unlink(a->bond_control);
@@ -1060,13 +1142,13 @@ static void start_pipeline(App *a) {
     for (int i = 0; i < a->stage_count; ++i) {
         char *program = a->stages[i].args->pdata[0], *found = g_find_program_in_path(program);
         if (!found) {
-            char *message = g_strdup_printf("Program not found or not executable: %s", program);
+            char *message = g_strdup_printf(i==0 && a->batc_receiver ? "Cannot run %s. Download CombiTunerExpress from BATC, make it executable and check the path in Input." : "Program not found or not executable: %s", program);
             status(a, message); g_free(message); a->exit_code = 1; return;
         }
         g_free(found);
     }
     int dab_pipe[2]={-1,-1};
-    int pipes[2][2], scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
+    int pipes[2][2]={{-1,-1},{-1,-1}}, scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
     if (a->standard != 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory);
@@ -1078,12 +1160,12 @@ static void start_pipeline(App *a) {
         g_free(path); g_free(resolved);
     }
     a->tune_fd = -1;
-    if (a->window) {
+    if (a->window && !knucker_source(a)) {
         if (!g_unix_open_pipe(tune_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(tune_pipe[1], TRUE, NULL)) goto pipe_error;
     }
     for (; made < (a->standard == 4 || a->renderer == RENDER_FILE ? 1 : 2); ++made)
-        if (!g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
+        if (!(knucker_source(a) && made==0) && !g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
     if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (nullfd < 0) goto pipe_error;
@@ -1092,6 +1174,14 @@ static void start_pipeline(App *a) {
         if (!g_unix_set_fd_nonblocking(dab_pipe[0],TRUE,NULL)) goto pipe_error;
     }
     if (!a->headless || a->status_http) {
+#ifdef HAVE_KNUCKER
+        if (a->batc_receiver) {
+            /* CombiTunerExpress uses stdout for status. A terminal keeps its
+             * reports line-buffered with either an armhf or arm64 host libc. */
+            if (openpty(&log_pipe[0],&log_pipe[1],NULL,NULL,NULL)<0) goto pipe_error;
+            if (fcntl(log_pipe[0],F_SETFD,FD_CLOEXEC)<0 || fcntl(log_pipe[1],F_SETFD,FD_CLOEXEC)<0) goto pipe_error;
+        } else
+#endif
         if (!g_unix_open_pipe(log_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(log_pipe[0], TRUE, NULL)) goto pipe_error;
     }
@@ -1122,8 +1212,10 @@ static void start_pipeline(App *a) {
             a->exit_code = 1; goto pipe_error;
         }
     }
-    if ((a->window || a->status_http) && !decoder_view_start(&a->decoder_view))
+    if (!knucker_source(a) && (a->window || a->status_http) && !decoder_view_start(&a->decoder_view))
         log_text(a, "Decoder telemetry unavailable; reception continues.\n");
+    a->knucker_sync_bytes = 0;
+    a->knucker_fft[0]=a->knucker_constellation[0]=0;
     a->rtlsdr_readback_hz = 0;
     a->sdr_status=(SdrRxStatus){0};a->sdr_status_time=0;a->record_log_used=0;
     a->running = TRUE;
@@ -1139,6 +1231,14 @@ static void start_pipeline(App *a) {
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
         int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
         if (i == 1) out = a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
+        if (knucker_source(a)) {
+            in = i == 0 ? nullfd : pipes[1][0];
+            out = i == 0 ? scatter_pipe[1] : nullfd;
+            if (i==0 && a->batc_receiver) {
+                in=scatter_pipe[1];
+                out=log_pipe[1]>=0 ? log_pipe[1] : STDERR_FILENO;
+            }
+        }
         GError *error = NULL; Stage *s = &a->stages[i];
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
@@ -1146,13 +1246,13 @@ static void start_pipeline(App *a) {
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
         env = g_environ_unsetenv(env, "LINRAD_BOND_CONTROL");
         if (i==1 && a->bond_control) env=g_environ_setenv(env,"LINRAD_BOND_CONTROL",a->bond_control,TRUE);
-        if (i == 0 && a->usb_receiver)
+        if (!knucker_source(a) && i == 0 && a->usb_receiver)
             env = g_environ_setenv(env,"LINRAD_USB_TAP",usb_receiver_tap_path(a->usb_receiver),TRUE);
-        if (i == 1 && a->decoder_view.port) {
+        if (!knucker_source(a) && i == 1 && a->decoder_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->decoder_view.port);
             env = g_environ_setenv(env, "LINRAD_DECODER_MONITOR_PORT", port, TRUE);
         }
-        if (i == 0 && a->window && a->iq_view.port) {
+        if (!knucker_source(a) && i == 0 && a->window && a->iq_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->iq_view.port);
             env = g_environ_setenv(env, "LINRAD_IQ_MONITOR_PORT", port, TRUE);
         }
@@ -1165,7 +1265,7 @@ static void start_pipeline(App *a) {
         }
         s->group = s->pid; g_child_watch_add(s->pid, child_exit, a);
     }
-    for (int i = 0; i < made; ++i) { close(pipes[i][0]); close(pipes[i][1]); }
+    for (int i = 0; i < made; ++i) if (pipes[i][0]>=0) { close(pipes[i][0]); close(pipes[i][1]); }
     close(nullfd);
     if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
     if (output_fd >= 0) close(output_fd);
@@ -1176,7 +1276,7 @@ static void start_pipeline(App *a) {
     if (dab_pipe[0]>=0) dab_view_watch(&a->dab,dab_pipe[0]);
     if (log_pipe[1] >= 0) close(log_pipe[1]);
     if (log_pipe[0] >= 0) g_unix_fd_add(log_pipe[0], G_IO_IN | G_IO_HUP | G_IO_ERR, read_log, a);
-    if (!a->stopping) status(a, a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
+    if (!a->stopping) status(a, knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
     if (dab_pipe[0]>=0) close(dab_pipe[0]);
@@ -1186,7 +1286,7 @@ pipe_error:
     if (output_fd >= 0) close(output_fd);
     if (tune_pipe[0] >= 0) close(tune_pipe[0]);
     if (tune_pipe[1] >= 0) close(tune_pipe[1]);
-    for (int i = 0; i < made; ++i) { close(pipes[i][0]); close(pipes[i][1]); }
+    for (int i = 0; i < made; ++i) if (pipes[i][0]>=0) { close(pipes[i][0]); close(pipes[i][1]); }
     if (nullfd >= 0) close(nullfd);
     if (log_pipe[0] >= 0) { close(log_pipe[0]); close(log_pipe[1]); }
     if (!a->exit_code) status(a, "Cannot open pipeline pipes");
@@ -1197,7 +1297,7 @@ static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
     char *text = g_strdup_printf("%s · %s %d%s · FEC %s",
         standards[a->standard], a->standard >= 2 ? "BW" : "Symb/s", a->sr,
-        a->standard >= 2 ? " Hz" : "", a->standard >= 3 ? "auto" : fecs[a->fec]);
+        a->standard >= 2 ? " Hz" : "", (a->standard >= 3 || knucker_source(a)) ? "auto" : fecs[a->fec]);
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
     scatter_refresh(a);
 }
@@ -1231,7 +1331,7 @@ static void tuning_refresh(App *a) {
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
-    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0);
+    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0 && !knucker_source(a));
     gtk_widget_set_sensitive(a->step_box, (a->standard!=4 || dab_free_tuning(a)) && hardware_source(a));
     double rx_offset=receiver_offset(a);
     a->iq_view.receiver_offset=rx_offset;
@@ -1252,6 +1352,12 @@ static void tuning_refresh(App *a) {
             hardware_source(a) ? "DAB: select a channel in Mode; ← / → selects the previous / next channel." :
             "DAB: set the IQ input to the selected channel and sample rate; channel labels do not retune Linrad or files.");
         return;
+    }
+    if (knucker_source(a)) {
+        char *label=g_strdup_printf("%.3f MHz",g_key_file_get_double(a->config,"knucker","frequency",NULL)/1e6);
+        gtk_label_set_text(GTK_LABEL(a->frequency_display),label);
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Set the Knucker receive frequency in kHz.");
+        g_free(label); return;
     }
     if (a->source==SOURCE_FILE) {
         double frequency=g_key_file_get_double(a->config,"file","frequency",NULL);
@@ -1465,6 +1571,10 @@ static void gain_step(App *a, int direction) {
 static void filter_changed(GtkWidget *widget, gpointer data);
 static void filter_refresh(App *a) {
     if (!a->filter_box) return;
+    if (knucker_source(a)) {
+        gtk_widget_set_sensitive(a->filter_box,FALSE);
+        return;
+    }
     const char *section = sources[a->source];
     int rate = integer_setting(a, section, "sample_rate", 1, 100000000);
     int low = MAX(10, (rate+255)/256), high = MAX(low, (int)(rate*.95));
@@ -1486,6 +1596,7 @@ static void filter_refresh(App *a) {
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
 }
 static void filter_apply(App *a, int width, gboolean enabled) {
+    if (knucker_source(a)) return;
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
     if (enabled && a->bond_active && width<140000) {
@@ -1822,7 +1933,7 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
     if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
     if (a->standard==4) hz=dab_frequency(a);
     g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
-    const char *fec=a->standard>=3 ? "auto" : fecs[a->fec];
+    const char *fec=(a->standard>=3 || knucker_source(a)) ? "auto" : fecs[a->fec];
     if (a->decoder_view.status_time && g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
         (a->decoder_view.status.locks & (DECODER_FEC | DECODER_TS)) && a->decoder_view.status.fec[0])
         fec=a->decoder_view.status.fec;
@@ -1990,7 +2101,7 @@ static void usb_source_refresh(App *a) {
     double center=g_key_file_get_double(a->config,section,"frequency",NULL)
         +g_key_file_get_double(a->config,section,"lo_offset",NULL);
     double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
-    usb_receiver_source(a->usb_receiver,center,rate,a->running && !a->stopping);
+    usb_receiver_source(a->usb_receiver,center,rate,!knucker_source(a) && a->running && !a->stopping);
 }
 static void monitor_refresh(App *a) {
     a->iq_view.usb_enabled=usb_receiver_running(a->usb_receiver);
@@ -2152,13 +2263,78 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
     return FALSE;
 }
 
+static void input_fields_visible(App *a) {
+    gboolean iq=!knucker_source(a);
+    const int iq_rows[]={1,2,5,6,7};
+    for (unsigned i=0;i<G_N_ELEMENTS(iq_rows);++i) {
+        int row=iq_rows[i];
+        gtk_widget_set_visible(gtk_grid_get_child_at(GTK_GRID(a->hardware),0,row),iq);
+        if (row!=1) gtk_widget_set_visible(gtk_grid_get_child_at(GTK_GRID(a->hardware),1,row),iq);
+    }
+    gtk_label_set_text(GTK_LABEL(gtk_grid_get_child_at(GTK_GRID(a->hardware),0,4)),
+        iq ? "SDR / IF (kHz)" : "Receive frequency (kHz)");
+    gboolean fixed_rate=a->source==3 || a->source==SOURCE_RTLSDR || a->source==SOURCE_FCDPP || a->source==SOURCE_AIRSPYR2;
+    gtk_widget_set_visible(a->rate_box,iq && !fixed_rate);
+    gtk_widget_set_visible(a->sdriq_rate_box,fixed_rate);
+}
+
+static void populate_rates(App *a);
+static void populate_fecs(App *a);
+static void standard_changed(GtkWidget *widget, gpointer data);
+
 static void source_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     if (a->running) return;
+    int previous_source=a->source;
+    gboolean previous_knucker=knucker_source(a);
     a->source = gtk_combo_box_get_active(GTK_COMBO_BOX(a->source_box));
+    gboolean knucker=knucker_source(a);
+    gtk_widget_set_sensitive(a->standard_box,!knucker);
+    if (knucker && widget==a->source_box) {
+        if (previous_source!=SOURCE_KNUCKER) {
+            a->before_knucker.standard=a->standard;
+            a->before_knucker.sr=a->sr;
+            a->before_knucker.fec=a->fec;
+            a->before_knucker.gi=a->gi;
+            a->before_knucker.constellation=a->constellation;
+            a->before_knucker.valid=TRUE;
+        }
+        a->standard=2; a->constellation=0; a->fec=0; a->gi=3;
+        a->sr=g_key_file_get_integer(a->config,"knucker","bandwidth",NULL);
+        g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),2);
+        g_signal_handlers_unblock_by_func(a->standard_box,standard_changed,a);
+        populate_rates(a); populate_fecs(a);
+    } else if (previous_knucker && !knucker) {
+        if (a->before_knucker.valid) {
+            a->standard=a->before_knucker.standard;
+            a->sr=a->before_knucker.sr;
+            a->constellation=a->before_knucker.constellation;
+            a->fec=a->before_knucker.fec;
+            a->gi=a->before_knucker.gi;
+            g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),a->standard);
+            g_signal_handlers_unblock_by_func(a->standard_box,standard_changed,a);
+            g_signal_handlers_block_matched(a->gi_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),a->gi);
+            g_signal_handlers_unblock_matched(a->gi_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
+            a->before_knucker.valid=FALSE;
+        }
+        populate_rates(a); populate_fecs(a);
+    }
     const char *section = sources[a->source];
     if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
-    if (widget == a->source_box) {
+    if (knucker) {
+        if (widget == a->source_box) {
+            g_signal_handlers_block_by_func(a->frequency_box,source_changed,a);
+            gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box),0);
+            gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),44000,1002000);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),
+                g_key_file_get_double(a->config,section,"frequency",NULL)/1000);
+            g_signal_handlers_unblock_by_func(a->frequency_box,source_changed,a);
+        } else if (widget==a->frequency_box)
+            g_key_file_set_double(a->config,section,"frequency",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget))*1000.0);
+    } else if (widget == a->source_box) {
         g_signal_handlers_block_by_func(a->format_box, source_changed, a);
         char *fmt = setting(a, section, "format");
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->format_box), !strcmp(fmt, "u8")); g_free(fmt);
@@ -2206,10 +2382,9 @@ static void source_changed(GtkWidget *widget, gpointer data) {
             g_key_file_set_double(a->config, section, "frequency", a->standard==4 ? dab_frequency(a) : gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
-    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
-    gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && hardware_source(a));
-    gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE);
+    input_fields_visible(a);
+    gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || knucker_source(a)));
+    gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE && !knucker_source(a));
     if (a->hardware_stack) gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), section);
     if (a->file_path) file_controls_refresh(a);
     tuning_refresh(a);
@@ -2220,10 +2395,11 @@ static void source_changed(GtkWidget *widget, gpointer data) {
 
 static void selection_changed(GtkWidget *widget, gpointer data) {
     App *a = data; (void)widget;
-    if (a->running) return;
+    if (a->running || knucker_source(a)) return;
     char *sr = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->sr_box));
     if (!sr) return;
-    a->sr = atoi(sr); g_free(sr);
+    a->sr = atoi(sr);
+    g_free(sr);
     const char *fec_id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->fec_box));
     if (!fec_id) return;
     a->fec = atoi(fec_id);
@@ -2251,7 +2427,26 @@ static void scatter_changed(GtkWidget *widget, gpointer data) {
     g_free(text);
 }
 
+static void knucker_bandwidth_changed(GtkSpinButton *spin, gpointer data) {
+    App *a=data;
+    if (!knucker_source(a) || a->running) return;
+    a->sr=1000*gtk_spin_button_get_value_as_int(spin);
+    g_key_file_set_integer(a->config,"knucker","bandwidth",a->sr);
+    refresh_preview(a);
+}
+
 static void populate_rates(App *a) {
+    gtk_widget_set_visible(a->sr_box,!knucker_source(a));
+    if (a->knucker_bw) gtk_widget_set_visible(a->knucker_bw,knucker_source(a));
+    if (knucker_source(a)) {
+        gtk_label_set_text(GTK_LABEL(a->sr_label),"BW (kHz)");
+        g_signal_handlers_block_by_func(a->knucker_bw,knucker_bandwidth_changed,a);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),a->sr/1000);
+        g_signal_handlers_unblock_by_func(a->knucker_bw,knucker_bandwidth_changed,a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),3);
+        gtk_widget_set_sensitive(a->gi_box,FALSE);
+        return;
+    }
     if (a->sr_label) gtk_label_set_text(GTK_LABEL(a->sr_label), a->standard >= 2 ? "BW (Hz)" : "Symbol rate (sym/s)");
     const int *rates = a->standard == 4 ? dab_rates : a->standard == 3 ? t2_rates : a->standard == 2 ? terrestrial_rates : sat_rates;
     int count = a->standard >= 3 ? 1 : a->standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates), active = -1;
@@ -2298,14 +2493,15 @@ static void populate_fecs(App *a) {
     for (int i = 0; i < (int)G_N_ELEMENTS(fecs); ++i) {
         if (!valid_fec(a, i)) continue;
         char *id = g_strdup_printf("%d", i);
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, a->standard == 4 ? "auto (FIC)" : a->standard == 3 ? "auto (L1)" : fecs[i]);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, knucker_source(a) ? "auto" : a->standard == 4 ? "auto (FIC)" : a->standard == 3 ? "auto (L1)" : fecs[i]);
         if (i == a->fec) gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), id);
         g_free(id);
     }
-    gtk_widget_set_sensitive(a->fec_box, a->standard < 3);
+    gtk_widget_set_sensitive(a->fec_box, a->standard < 3 && !knucker_source(a));
     g_signal_handlers_block_by_func(a->constellation_box, constellation_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->constellation_box));
-    if (a->standard == 3) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto (L1)");
+    if (knucker_source(a)) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto");
+    else if (a->standard == 3) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto (L1)");
     else for (unsigned i=0;i<G_N_ELEMENTS(constellations);++i)
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),constellations[i]);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->constellation_box),a->standard == 1 ? a->constellation : 0);
@@ -2463,6 +2659,27 @@ static gboolean decoder_tick(gpointer data) {
             ts_info_snapshot_clear(&snapshot);
         }
     }
+    a->decoder_view.hardware_ts=knucker_source(a);
+    if (a->decoder_view.hardware_ts) {
+        DecoderStatus *status=&a->decoder_view.status;
+        if (a->batc_receiver && a->scatter_backend) {
+            ScatterBackend *relay=a->scatter_backend;
+            g_mutex_lock(&relay->mutex);
+            guint64 packets=relay->received_bytes/188;
+            status->written_packets=MIN(relay->written_bytes/188,G_MAXUINT32);
+            gboolean recent=relay->last_input && g_get_monotonic_time()-relay->last_input<2*G_USEC_PER_SEC;
+            g_mutex_unlock(&relay->mutex);
+            status->packets=MIN(packets,G_MAXUINT32);
+            status->lock_valid|=DECODER_TS;
+            if (recent) status->locks|=DECODER_TS; else status->locks&=~DECODER_TS;
+        }
+        gboolean service=a->decoder_view.service_valid && (status->locks & DECODER_TS) &&
+            (!a->batc_receiver || (status->locks & DECODER_OFDM));
+        status->lock_valid|=DECODER_SERVICE;
+        if (service) status->locks|=DECODER_SERVICE; else status->locks&=~DECODER_SERVICE;
+        g_strlcpy(status->service,service ? a->decoder_view.selected_service : "",sizeof(status->service));
+        g_strlcpy(status->provider,service ? a->decoder_view.selected_provider : "",sizeof(status->provider));
+    }
     decoder_view_tick(&a->decoder_view, a->running && !a->stopping, standards[a->standard]);
     return G_SOURCE_CONTINUE;
 }
@@ -2471,7 +2688,7 @@ static gboolean monitor_tick(gpointer data) {
     App *a = data;
     presets_refresh(a);
     const char *section = sources[a->source];
-    a->iq_view.active = a->running && !a->stopping;
+    a->iq_view.active = !knucker_source(a) && a->running && !a->stopping;
     a->iq_view.bandwidth = g_key_file_get_double(a->config, section, "filter_bandwidth", NULL);
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
     a->iq_view.receiver_offset = receiver_offset(a);
@@ -2526,6 +2743,28 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+#ifdef HAVE_KNUCKER
+    if (!g_key_file_has_key(a->config,"paths","knucker",NULL)) {
+#if defined(HAVE_LOCAL_KNUCKER) && !defined(__arm__) && !defined(__aarch64__)
+        char *exe=g_file_read_link("/proc/self/exe",NULL);
+        char *dir=exe ? g_path_get_dirname(exe) : g_strdup("build");
+        char *worker=g_build_filename(dir,"knucker_rx",NULL);
+        g_free(dir); g_free(exe);
+#else
+        char *worker=g_build_filename(g_get_home_dir(),"ryde-build","configs","dvbt","CombiTunerExpress",NULL);
+        if (!g_file_test(worker,G_FILE_TEST_IS_REGULAR)) {
+            g_free(worker);
+            worker=g_strdup("/home/pi/dvbt/CombiTunerExpress");
+        }
+#endif
+        g_key_file_set_string(a->config,"paths","knucker",worker);
+        g_free(worker);
+    }
+    if (!g_key_file_has_key(a->config,"knucker","frequency",NULL))
+        g_key_file_set_integer(a->config,"knucker","frequency",437000000);
+    if (!g_key_file_has_key(a->config,"knucker","bandwidth",NULL))
+        g_key_file_set_integer(a->config,"knucker","bandwidth",333000);
+#endif
     /* Old aggregate gain numbers had a different meaning. Preserve the old
      * value for reference and start the new policy at LNA32/VGA12 in memory.
      * The active INI is only updated by the existing explicit save action. */
@@ -2791,6 +3030,12 @@ static GtkWidget *entry_field(GtkWidget *grid, const char *label, int row, App *
     return entry;
 }
 
+static void knucker_program_changed(GtkEditable *entry, gpointer data) {
+    App *a=data;
+    g_key_file_set_string(a->config,"paths","knucker",gtk_entry_get_text(GTK_ENTRY(entry)));
+    if (!a->running) refresh_preview(a);
+}
+
 static void hardware_entry_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     const char *keys[] = {"args", "images", "antenna"};
@@ -2854,8 +3099,7 @@ static void show_config(GtkWidget *widget, gpointer data) {
     /* GtkStack ignores requests for pages that are still hidden during
      * construction. Select again after showing them, including while running. */
     gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), sources[a->source]);
-    gtk_widget_set_visible(a->rate_box, a->source != 3 && a->source != SOURCE_RTLSDR && a->source != SOURCE_FCDPP && a->source != SOURCE_AIRSPYR2);
-    gtk_widget_set_visible(a->sdriq_rate_box, a->source == 3 || a->source == SOURCE_RTLSDR || a->source == SOURCE_FCDPP || a->source == SOURCE_AIRSPYR2);
+    input_fields_visible(a);
     gtk_window_present(GTK_WINDOW(a->config_dialog));
 }
 
@@ -3016,6 +3260,12 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "--run starts reception without the GUI; Ctrl+C stops it. LDPC preferences live in "
         "Mode / [leandvb] in the INI file. Decoder-worker options are for direct IQ-to-TS use.","about-meta");
     about_label(box,"Acknowledgements","about-heading");
+#ifdef HAVE_KNUCKER
+    about_label(box,"BATC Knucker: Charles G4GUO developed CombiTunerExpress. "
+        "Mike G0MJW designed the receiver PCB. The British Amateur Television Club "
+        "provides the Raspberry Pi executable through its Ryde repository.",NULL);
+    about_link(box,"BATC Knucker project","https://wiki.batc.org.uk/Knucker#Software");
+#endif
     about_label(box,"LeanSDR / LeanDVB: pabr@pabr.org, DVB-S/S2 demodulation (GPL-3.0-or-later). "
         "LDPC: Ahmet Inan (xdsopl), with the external decoder adaptation by pabr@pabr.org (0BSD). "
         "DVB-S2 acquisition corrections: Ondřej OK1CDJ, LeanDVB issue #41. "
@@ -3101,6 +3351,21 @@ static void create_config(App *a) {
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->port_box), integer_setting(a, "linrad", "port", 1, 65535));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->header_box), integer_setting(a, "linrad", "header_bytes", 0, 65534));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->center_box), g_key_file_get_double(a->config, "linrad", "frequency", NULL)/1e6);
+        } else if (source==SOURCE_KNUCKER) {
+            a->knucker_program=entry_field(grid,"Path to CombiTunerExpress binary",0,a,"paths","knucker");
+            gtk_entry_set_placeholder_text(GTK_ENTRY(a->knucker_program),"/home/pi/dvbt/CombiTunerExpress");
+            gtk_widget_set_tooltip_text(a->knucker_program,
+                "Ryde installation: /home/pi/dvbt/CombiTunerExpress\nRyde clone: configs/dvbt/CombiTunerExpress inside the checkout.");
+            g_signal_connect(a->knucker_program,"changed",G_CALLBACK(knucker_program_changed),a);
+            GtkWidget *clone_hint=gtk_label_new(
+                "The official BATC binary requires 32-bit ARM Linux (armhf) support.\n"
+                "A Ryde clone is sufficient. Set the path to\nconfigs/dvbt/CombiTunerExpress inside your clone.");
+            gtk_label_set_xalign(GTK_LABEL(clone_hint),0);
+            gtk_grid_attach(GTK_GRID(grid),clone_hint,0,1,2,1);
+            GtkWidget *link=gtk_link_button_new_with_label(
+                "https://github.com/BritishAmateurTelevisionClub/ryde-build/blob/master/configs/dvbt/CombiTunerExpress",
+                "Download CombiTunerExpress for Raspberry Pi from BATC");
+            gtk_grid_attach(GTK_GRID(grid),link,0,2,2,1);
         } else if (source==SOURCE_FILE) {
             a->file_path=entry_field(grid,"IQ file",0,a,"file","path");
             gtk_editable_set_editable(GTK_EDITABLE(a->file_path),FALSE);
@@ -3705,6 +3970,13 @@ static void create_mode_renderer(App *a) {
     a->mode_dialog = settings_dialog(a, "Mode · Receiver settings", &a->controls);
     a->standard_box = combo(a->controls, "Mode", 0, standards, G_N_ELEMENTS(standards), a->standard);
     a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
+#ifdef HAVE_KNUCKER
+    a->knucker_bw=gtk_spin_button_new_with_range(1,10000,1);
+    gtk_grid_attach(GTK_GRID(a->controls),a->knucker_bw,1,1,1,1);
+    gtk_widget_set_no_show_all(a->knucker_bw,TRUE);
+    gtk_widget_set_no_show_all(a->sr_box,TRUE);
+    g_signal_connect(a->knucker_bw,"value-changed",G_CALLBACK(knucker_bandwidth_changed),a);
+#endif
     GList *rate_cells=gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(a->sr_box));
     for (GList *cell=rate_cells;cell;cell=cell->next)
         gtk_cell_layout_set_cell_data_func(GTK_CELL_LAYOUT(a->sr_box),cell->data,rate_cell_data,a,NULL);
@@ -3768,7 +4040,7 @@ static void create_mode_renderer(App *a) {
     gtk_widget_set_tooltip_text(a->bonding_box,"Off (default): a valid bonding announcement automatically starts the partner and merger. On: detect only; click the Bonding indicator to join manually. First channel stays centered for both live IQ and files; partner is normally +50 or −50 kHz. Applies at next start. 8 s recovery buffer.");
     gtk_grid_attach(GTK_GRID(a->controls),a->bonding_box,0,14,2,1);
     gtk_widget_set_no_show_all(a->bonding_box,TRUE);
-    gtk_widget_set_visible(a->bonding_box,a->standard==2);
+    gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     g_signal_connect(a->bonding_box,"toggled",G_CALLBACK(bonding_changed),a);
     a->dab_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->dab_controls),8);
@@ -4462,10 +4734,11 @@ static char *network_constellation(gpointer data) {
     DecoderView *v = &a->decoder_view;
     json_object *root = json_object_new_object();
     json_object *points = json_object_new_array();
-    gint64 stamp = a->standard == 2 ? v->points_time : 0;
+    gboolean supported=a->standard==2 && !knucker_source(a);
+    gint64 stamp = supported ? v->points_time : 0;
     json_object_object_add(root,"standard",json_object_new_string(standards[a->standard]));
-    json_object_object_add(root,"supported",json_object_new_boolean(a->standard == 2));
-    json_object_object_add(root,"configured_frequency_hz",status_number(a->standard == 2 ? configured_channel_hz(a) : NAN));
+    json_object_object_add(root,"supported",json_object_new_boolean(supported));
+    json_object_object_add(root,"configured_frequency_hz",status_number(supported ? configured_channel_hz(a) : NAN));
     add_measurement_time(root,a,stamp,v->points_received_us,2000);
     for (unsigned i=0; stamp && i<v->points.count; ++i) {
         float re=v->points.iq[2*i], im=v->points.iq[2*i+1];
@@ -4522,7 +4795,7 @@ static char *network_status(gpointer data) {
         NUM(tuning,"rf_frequency_hz",readback + lo + offset);
         json_object_object_add(root,"tuning",tuning);
     }
-    if (a->standard==2) {
+    if (a->standard==2 && !knucker_source(a)) {
         json_object *window=NULL;
         if (a->decoder_view.health_time) {
             const DecoderDvbtHealth *h=&a->decoder_view.health;
@@ -4585,12 +4858,16 @@ static char *network_status(gpointer data) {
             if (a->standard==2) NUM(d,"pilot_lock",v->pilot_lock);
             NUM(d,"rms_dbfs",v->rms_dbfs);NUM(d,"peak_dbfs",v->peak_dbfs);
             NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
-            NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
-            NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
+            if (knucker_source(a)) {
+                if (!a->batc_receiver) json_object_object_add(d,"sync_discarded_bytes",status_counter(a->knucker_sync_bytes));
+            } else {
+                NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
+                NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
+                json_object_object_add(d,"input_dropped",status_counter(v->input_dropped));
+                json_object_object_add(d,"fec_frames_dropped",status_counter(v->fec_frames_dropped));
+            }
             BOOL(d,"buffer_valid",v->buffer_valid);
             if (v->buffer_valid) NUM(d,"buffer_percent",v->buffer_percent);
-            json_object_object_add(d,"input_dropped",status_counter(v->input_dropped));
-            json_object_object_add(d,"fec_frames_dropped",status_counter(v->fec_frames_dropped));
             STR(d,"service",v->service);STR(d,"provider",v->provider);
             STR(d,"modulation",v->modulation);STR(d,"fec",v->fec);STR(d,"guard",v->guard);
             NUM(d,"plp_id",v->plp_id);
@@ -4655,7 +4932,11 @@ int main(int argc, char **argv) {
         {"rtlsdr-serial",0,0,G_OPTION_ARG_STRING,&rtlsdr_serial,"Select RTL-SDR by USB serial number (implies --source rtlsdr)","SERIAL"},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
-        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2, pluto or file", "SOURCE"},
+        {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2, pluto, file"
+#ifdef HAVE_KNUCKER
+          ", knucker"
+#endif
+          , "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 1500000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
@@ -4726,6 +5007,11 @@ int main(int argc, char **argv) {
         g_free(srt_url);
     }
     if (source) a.source = choice(source, sources, G_N_ELEMENTS(sources), "input");
+    if (knucker_source(&a)) {
+        if (standard && strcmp(standard,"DVB-T")) fatal("Knucker supports DVB-T only");
+        a.standard=2; a.constellation=0; a.fec=0; a.gi=3;
+        a.sr=g_key_file_get_integer(a.config,"knucker","bandwidth",NULL);
+    }
     if (rtlsdr_serial) {
         if (iq_file || (source && a.source != SOURCE_RTLSDR)) fatal("--rtlsdr-serial requires RTL-SDR input");
         select_rtlsdr_serial(&a, rtlsdr_serial);
@@ -4745,7 +5031,7 @@ int main(int argc, char **argv) {
     }
     g_free(constellation);
     if (a.constellation && a.standard != 1) fatal("8PSK requires DVB-S2");
-    if (a.standard >= 3) {
+    if (a.standard >= 3 || knucker_source(&a)) {
         if ((fec && strcmp(fec,"auto")) || (gi && strcmp(gi,"auto")))
             fatal("This mode detects FEC and guard interval automatically; use auto");
         a.fec = 0; a.gi = 3;
@@ -4761,7 +5047,8 @@ int main(int argc, char **argv) {
     gboolean valid = FALSE;
     for (int i = 0; i < (a.standard >= 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (!valid && !knucker_source(&a) && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (knucker_source(&a)) g_key_file_set_integer(a.config,"knucker","bandwidth",a.sr);
     if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;

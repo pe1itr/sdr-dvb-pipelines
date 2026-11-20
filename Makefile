@@ -8,7 +8,7 @@ LDLIBS ?=
 
 BUILD_DIR := build
 GTK_CFLAGS := $(shell pkg-config --cflags gtk+-3.0)
-GTK_LIBS := $(shell pkg-config --libs gtk+-3.0)
+GTK_LIBS := $(shell pkg-config --libs gtk+-3.0) -lutil
 GTK_CFLAGS += $(shell pkg-config --cflags libvlc)
 GTK_LIBS += $(shell pkg-config --libs libvlc)
 USB_CFLAGS := $(shell pkg-config --cflags alsa samplerate)
@@ -472,3 +472,15 @@ test-dvbt-bonding: test-bonding-component $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/b
 	python3 tests/test_dvbt_bonding.py
 
 test: test-dvbt-bonding
+
+# Local Linux USB receiver. The Windows build has its own source list.
+KNUCKER_PRIVATE := components/knucker/private
+ifneq ($(wildcard $(KNUCKER_PRIVATE)/main.c),)
+GTK_CFLAGS += -DHAVE_LOCAL_KNUCKER
+$(BUILD_DIR)/linrad_dvb: $(BUILD_DIR)/knucker_rx $(BUILD_DIR)/knucker-receiver.tsv
+$(BUILD_DIR)/knucker_rx: $(wildcard $(KNUCKER_PRIVATE)/*.c $(KNUCKER_PRIVATE)/*.h) | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -D_POSIX_C_SOURCE=200809L $(shell pkg-config --cflags libusb-1.0) $(filter %.c,$^) -o $@ $(LDFLAGS) -pthread $(shell pkg-config --libs libusb-1.0)
+$(BUILD_DIR)/knucker-receiver.tsv: $(KNUCKER_PRIVATE)/receiver.tsv | $(BUILD_DIR)
+	cp $< $@
+endif
+$(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke: components/knucker/status.h

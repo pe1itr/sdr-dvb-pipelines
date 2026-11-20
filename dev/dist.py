@@ -33,6 +33,8 @@ def main():
         sources.extend(
             path for path in sorted(directory.rglob("*"))
             if path.is_file()
+            and path.name != "CombiTunerExpress"
+            and not path.is_relative_to(ROOT / "components/knucker/private")
             and not SKIP_DIRS.intersection(path.relative_to(ROOT).parts)
             and path.suffix not in SKIP_SUFFIXES
             and not path.name.endswith(".iq.json")

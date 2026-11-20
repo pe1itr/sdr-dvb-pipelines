@@ -149,6 +149,7 @@ def main():
     gpu_check = (ROOT / "dev/check-dvbt2-gpu.cmd").read_text()
     (stage / "check-dvbt2-gpu.cmd").write_bytes(gpu_check.replace("\n", "\r\n").encode("ascii"))
     config = (ROOT / "linrad-dvb.example.ini").read_text()
+    config = "".join(line for line in config.splitlines(keepends=True) if not line.startswith("knucker="))
     for name in ["sdr_to_stdout", "linrad_udp_to_stdout", "iq_file_to_stdout", "dab_worker"]:
         config = config.replace("build/" + name, "./" + name + ".exe")
     config = config.replace("gpu_program=/usr/bin/ffplay", "gpu_program=ffplay.exe")

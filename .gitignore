@@ -40,3 +40,9 @@ target/
 *.jpg
 *.jpeg
 !/docs/images/linrad-dvb-dvbt2.png
+
+# Local Knucker USB implementation and captured initialization data.
+/components/knucker/private/
+
+# Raspberry Pi users obtain the BATC executable directly from its publisher.
+CombiTunerExpress

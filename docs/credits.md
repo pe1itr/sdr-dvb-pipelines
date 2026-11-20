@@ -85,6 +85,20 @@ inherited table provenance, not a separately integrated GNU Radio receiver.
 The precise gr-dvbt2 revision used by OnAir is not recorded in the snapshot;
 the exact imported OnAir revision and file hashes remain recorded.
 
+### BATC Knucker on Raspberry Pi
+
+Charles G4GUO developed the CombiTunerExpress receiver software for the
+BATC Knucker. Mike G0MJW designed the receiver PCB. Thanks to the British
+Amateur Television Club and the Ryde team for making the Raspberry Pi
+executable available. [BATC Knucker project](https://wiki.batc.org.uk/Knucker#Software)
+
+The official BATC executable requires a 32-bit ARM Linux (armhf) runtime.
+Linrad DVB's GPL-3.0-only adapter launches a separately installed copy of
+CombiTunerExpress and reads its transport stream and status. The user
+downloads the executable from BATC or clones the Ryde repository, then
+selects the local file in the input settings. Its publisher's terms apply.
+[CombiTunerExpress in the official Ryde repository](https://github.com/BritishAmateurTelevisionClub/ryde-build/blob/master/configs/dvbt/CombiTunerExpress)
+
 ### References and design influences
 
 The earlier DVB-T project's acknowledgement of

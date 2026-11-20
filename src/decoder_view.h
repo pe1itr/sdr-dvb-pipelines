@@ -11,7 +11,7 @@ typedef struct {
     GtkWidget *video_codec, *audio_codec, *country;
     int fd, port;
     gint64 status_time, points_time, buffer_time;
-    gboolean active;
+    gboolean active, hardware_ts;
     DecoderStatus status;
     char selected_service[128], selected_provider[128];
     char selected_video_codec[32], selected_audio_codec[32];

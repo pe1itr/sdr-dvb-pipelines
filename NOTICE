@@ -31,6 +31,12 @@ Bundled code retains its own copyright notices and license terms:
   GPL-3.0-only; see LICENSE and ORIGIN there. Source owner licensed it in
   commit 89100bee201e5d00022673f38d6af468ea6bf44e.
 
+The optional BATC Knucker adapter for Raspberry Pi is project-owned code
+under GPL-3.0-only. It runs a separately obtained CombiTunerExpress
+executable by Charles G4GUO. The user obtains the executable directly from
+BATC's Ryde repository and selects its local path in Linrad DVB.
+See docs/credits.md for the upstream project and download.
+
 The earlier MIT notice for project-owned code is retained in
 docs/licenses/MIT-legacy.txt. This change does not revoke permissions already
 granted for earlier MIT-licensed versions. Earlier DVB-T releases retain the

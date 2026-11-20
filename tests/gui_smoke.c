@@ -1830,11 +1830,67 @@ static void exercise_t2_mode(App *a) {
     populate_rates(a); populate_fecs(a); refresh_preview(a);
 }
 
+#ifdef HAVE_LOCAL_KNUCKER
+static void exercise_knucker(App *a) {
+    int source=a->source, standard=a->standard, rate=a->sr;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_KNUCKER);
+    g_assert_cmpint(a->standard,==,2);
+    g_assert_false(gtk_widget_get_sensitive(a->standard_box));
+    g_assert_false(gtk_widget_get_sensitive(a->fec_box));
+    g_assert_false(gtk_widget_get_sensitive(a->gi_box));
+    g_assert_false(gtk_widget_get_visible(a->format_box));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),436125);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),1500);
+    char *original=g_strdup(gtk_entry_get_text(GTK_ENTRY(a->knucker_program)));
+    gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"build/knucker_rx");
+    char *pipeline=describe(a);
+    g_assert_nonnull(strstr(pipeline,"'--freq' '436125' '--bw' '1500'"));
+    g_assert_null(strstr(pipeline,"--decoder-worker"));
+    g_free(pipeline);
+    gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"");
+    g_assert_nonnull(receiver_offset_problem(a));
+    gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"/tmp/BATC receiver/CombiTunerExpress");
+    pipeline=describe(a);
+    g_assert_nonnull(strstr(pipeline,"'/tmp/BATC receiver/CombiTunerExpress' '-m' 'dvbt' '-f' '436125' '-b' '1500' '-n'"));
+    g_free(pipeline);
+    collect_settings(a,FALSE);
+    char *saved=setting(a,"paths","knucker");
+    g_assert_cmpstr(saved,==,"/tmp/BATC receiver/CombiTunerExpress");
+    g_free(saved);
+    gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"build/knucker_rx");
+    a->running=TRUE;
+    const char *locked="[knucker] lock=1 snr=14.25 fft=2K constellation=16QAM fec=3/4 gi=1/8 packets=75 delta=5 sync_discarded_bytes=6\n";
+    record_log(a,locked,10); record_log(a,locked+10,strlen(locked)-10);
+    g_assert_cmpstr(a->decoder_view.status.modulation,==,"16QAM 2K");
+    g_assert_cmpstr(a->decoder_view.status.fec,==,"3/4");
+    g_assert_cmpstr(a->decoder_view.status.guard,==,"1/8");
+    g_assert_cmpuint(a->knucker_sync_bytes,==,6);
+    const char *lost="[knucker] lock=0 snr=555.36 fft=2K constellation=QPSK fec=1/2 gi=1/32 packets=75 delta=0 sync_discarded_bytes=6\n";
+    record_log(a,lost,strlen(lost));
+    g_assert_cmpuint(a->decoder_view.status.locks,==,0);
+    g_assert_cmpstr(a->decoder_view.status.fec,==,"");
+    g_assert_true(isnan(a->decoder_view.status.snr_db));
+    a->running=FALSE;
+    decoder_view_stop(&a->decoder_view);
+    gtk_entry_set_text(GTK_ENTRY(a->knucker_program),original);
+    g_free(original);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
+    g_assert_cmpint(a->standard,==,standard);
+    g_assert_cmpint(a->sr,==,rate);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_KNUCKER);
+    g_assert_cmpint(a->sr,==,1500000);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
+}
+#endif
+
 static gboolean exercise(gpointer data) {
     App *a = data;
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+#ifdef HAVE_LOCAL_KNUCKER
+        exercise_knucker(a);
+#endif
         exercise_t2_mode(a);
         exercise_s2_automatic(a);
         exercise_information(a);

@@ -279,7 +279,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     v->active=active;
     receive_frames(v);
     if (!v->area) return;
-    gboolean fresh=active && v->status_time && g_get_monotonic_time()-v->status_time<STATUS_AGE;
+    gboolean fresh=active && v->status_time && g_get_monotonic_time()-v->status_time<(v->hardware_ts ? 2*G_USEC_PER_SEC : STATUS_AGE);
     DecoderStatus *s=&v->status;
     gboolean satellite=!strcmp(mode,"DVB-S") || !strcmp(mode,"DVB-S2");
     gboolean dab=!strcmp(mode,"DAB");
@@ -316,7 +316,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     const char *names[]={dab ? "Sync" : satellite ? (s2 ? "PL lock" : "Sync") : "OFDM", dab ? "FIC" : "FEC", dab ? "Ensemble" : "TS", dab ? "Audio" : "Service"};
     for (int i=0;i<4;++i) {
         unsigned lock=dab && i>=2 ? (i==2 ? DECODER_SERVICE : DECODER_TS) : (1u<<i);
-        const char *color=(!fresh || ((satellite || dab) && !(s->lock_valid & lock))) ? "#888888" : (s->locks & lock) ? "#36d866" : "#e05a55";
+        const char *color=(!fresh || ((satellite || dab || v->hardware_ts) && !(s->lock_valid & lock))) ? "#888888" : (s->locks & lock) ? "#36d866" : "#e05a55";
         g_snprintf(text,sizeof(text),"<span foreground=\"%s\">●</span> %s",color,names[i]);
         gtk_label_set_markup(GTK_LABEL(v->lamps[i]),text);
     }
@@ -336,6 +336,9 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         measurement(v->packets,"%.0f",s->packets); measurement(v->written,"%.0f",s->written_packets);
         measurement(v->rs_ok,"%.0f",s->rs_ok); measurement(v->rs_errors,"%.0f",s->rs_uncorrectable);
         measurement(v->cc_errors,"%.0f",s->cc_errors);
+        if (v->hardware_ts) {
+            set_value(v->rs_ok,""); set_value(v->rs_errors,""); set_value(v->cc_errors,"");
+        }
         if (satellite) {
             measurement(v->rs_ok,"%.0f",s->fec_good); measurement(v->rs_errors,"%.0f",s->fec_bad);
             set_value(v->cc_errors,""); set_value(v->written,"");

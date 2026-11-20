@@ -19,7 +19,8 @@ typedef struct {
     SfRecoveryStatus status;
     GBytes *image;
     int width, height, stride;
-    guint64 dropped;
+    guint64 dropped, received_bytes, written_bytes;
+    gint64 last_input;
 } ScatterBackend;
 
 /* Duplicates the descriptors; caller retains ownership. Only the recovery
