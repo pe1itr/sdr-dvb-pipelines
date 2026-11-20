@@ -1839,19 +1839,41 @@ static void exercise_knucker(App *a) {
     g_assert_false(gtk_widget_get_sensitive(a->fec_box));
     g_assert_false(gtk_widget_get_sensitive(a->gi_box));
     g_assert_false(gtk_widget_get_visible(a->format_box));
+    GtkSpinButton *frequency=GTK_SPIN_BUTTON(a->frequency_box);
+    gtk_spin_button_set_value(frequency,43999);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"knucker","frequency",NULL),==,44000000);
+    g_assert_null(receiver_offset_problem(a));
+    gtk_spin_button_set_value(frequency,1002001);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"knucker","frequency",NULL),==,1002000000);
+    g_assert_null(receiver_offset_problem(a));
+    const double invalid_hz[]={43999000,1002001000,436000500};
+    for (guint i=0;i<G_N_ELEMENTS(invalid_hz);++i) {
+        g_key_file_set_double(a->config,"knucker","frequency",invalid_hz[i]);
+        g_assert_cmpstr(receiver_offset_problem(a),==,knucker_frequency_range);
+    }
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),436125);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),1500);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->knucker_band),0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),149);
+    g_assert_cmpint(a->sr,==,150000);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),501);
+    g_assert_cmpint(a->sr,==,500000);
+    g_assert_cmpint(knucker_band_index(1500000),==,-1);
+    g_assert_cmpint(knucker_band_index(333500),==,-1);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->knucker_band),7);
+    g_assert_cmpint(a->sr,==,8000000);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->knucker_band),2);
+    g_assert_false(gtk_widget_get_visible(a->knucker_bw));
     char *original=g_strdup(gtk_entry_get_text(GTK_ENTRY(a->knucker_program)));
     gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"build/knucker_rx");
     char *pipeline=describe(a);
-    g_assert_nonnull(strstr(pipeline,"'--freq' '436125' '--bw' '1500'"));
+    g_assert_nonnull(strstr(pipeline,"'--freq' '436125' '--bw' '1700'"));
     g_assert_null(strstr(pipeline,"--decoder-worker"));
     g_free(pipeline);
     gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"");
     g_assert_nonnull(receiver_offset_problem(a));
     gtk_entry_set_text(GTK_ENTRY(a->knucker_program),"/tmp/BATC receiver/CombiTunerExpress");
     pipeline=describe(a);
-    g_assert_nonnull(strstr(pipeline,"'/tmp/BATC receiver/CombiTunerExpress' '-m' 'dvbt' '-f' '436125' '-b' '1500' '-n'"));
+    g_assert_nonnull(strstr(pipeline,"'/tmp/BATC receiver/CombiTunerExpress' '-m' 'dvbt' '-f' '436125' '-b' '1700' '-n'"));
     g_free(pipeline);
     collect_settings(a,FALSE);
     char *saved=setting(a,"paths","knucker");
@@ -1878,7 +1900,7 @@ static void exercise_knucker(App *a) {
     g_assert_cmpint(a->standard,==,standard);
     g_assert_cmpint(a->sr,==,rate);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_KNUCKER);
-    g_assert_cmpint(a->sr,==,1500000);
+    g_assert_cmpint(a->sr,==,1700000);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),source);
 }
 #endif

@@ -21,6 +21,9 @@ Maak het na een losse download uitvoerbaar en vul het gekozen pad in. Voor
 een bestaande Ryde-installatie kun je `/home/pi/dvbt/CombiTunerExpress` invullen.
 [Officiële binary van BATC](https://github.com/BritishAmateurTelevisionClub/ryde-build/blob/master/configs/dvbt/CombiTunerExpress)
 
-Stel de frequentie in kHz in en kies onder **Mode** de
-DVB-T-bandbreedte in kHz. De ontvanger detecteert constellatie, FEC en GI.
+Stel de tunerfrequentie in tussen 44 000 en 1 002 000 kHz, in stappen van
+1 kHz. Kies onder **Mode** de
+DVB-T-bandbreedte. Bij **150–500** kun je een geheel aantal kHz invoeren,
+bijvoorbeeld 333. De bredere standen van CombiTunerExpress zijn 1000, 1700,
+2000, 5000, 6000, 7000 en 8000 kHz. De ontvanger detecteert constellatie, FEC en GI.
 [Knucker-project van BATC](https://wiki.batc.org.uk/Knucker#Software)

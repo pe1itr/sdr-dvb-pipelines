@@ -85,7 +85,7 @@ typedef struct {
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *hackrf_amp_box;
     struct { int standard, sr, fec, gi, constellation; gboolean valid; } before_knucker;
-    GtkWidget *knucker_bw, *sr_label, *dashboard, *lower;
+    GtkWidget *knucker_bw, *knucker_band, *knucker_bw_row, *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
     GtkWidget *bonding_box, *bonding_button;
@@ -298,6 +298,19 @@ static void bonding_refresh(App *a) {
         g_strdup("DVB-T bonding detection (40 kHz). The first channel stays centered; a valid announcement automatically starts the partner above or below it, unless automatic bonding is disabled in Mode.");
     gtk_widget_set_tooltip_text(a->bonding_button,tip);g_free(tip);
 }
+enum { KNUCKER_MIN_KHZ = 44000, KNUCKER_MAX_KHZ = 1002000 };
+static const char knucker_frequency_range[] = "Knucker tuning range is 44–1002 MHz in whole kHz.";
+
+/* CombiTunerExpress -b accepts a variable narrow band and discrete wider bands. */
+static const int knucker_wide_khz[] = {1000, 1700, 2000, 5000, 6000, 7000, 8000};
+
+static int knucker_band_index(int hz) {
+    if (hz >= 150000 && hz <= 500000 && hz % 1000 == 0) return 0;
+    for (guint i = 0; i < G_N_ELEMENTS(knucker_wide_khz); ++i)
+        if (hz == 1000 * knucker_wide_khz[i]) return (int)i + 1;
+    return -1;
+}
+
 static const char *receiver_offset_problem(App *a) {
     if (knucker_source(a)) {
         char *program=g_key_file_get_string(a->config,"paths","knucker",NULL);
@@ -305,10 +318,10 @@ static const char *receiver_offset_problem(App *a) {
         g_free(program);
         if (empty) return "Enter the path to the CombiTunerExpress binary in Input → BATC Knucker.";
         double hz=g_key_file_get_double(a->config,"knucker","frequency",NULL);
-        if (!isfinite(hz) || hz<44000000 || hz>1002000000 || fmod(hz,1000)!=0)
-            return "Knucker tuning range is 44–1002 MHz in whole kHz.";
-        if (a->standard!=2 || a->sr<1000 || a->sr>10000000 || a->sr%1000)
-            return "Knucker requires DVB-T and a bandwidth in whole kHz (1–10000).";
+        if (!isfinite(hz) || hz<KNUCKER_MIN_KHZ*1000 || hz>KNUCKER_MAX_KHZ*1000 || fmod(hz,1000)!=0)
+            return knucker_frequency_range;
+        if (a->standard!=2 || knucker_band_index(a->sr)<0)
+            return "Knucker requires DVB-T and a bandwidth of 150–500 (whole kHz), 1000, 1700, 2000, 5000, 6000, 7000 or 8000 kHz.";
         return NULL;
     }
     if (a->standard == 4) {
@@ -2338,11 +2351,13 @@ static void source_changed(GtkWidget *widget, gpointer data) {
     }
     const char *section = sources[a->source];
     if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
+    if (widget == a->source_box)
+        gtk_widget_set_tooltip_text(a->frequency_box,knucker ? knucker_frequency_range : NULL);
     if (knucker) {
         if (widget == a->source_box) {
             g_signal_handlers_block_by_func(a->frequency_box,source_changed,a);
             gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box),0);
-            gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),44000,1002000);
+            gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),KNUCKER_MIN_KHZ,KNUCKER_MAX_KHZ);
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),
                 g_key_file_get_double(a->config,section,"frequency",NULL)/1000);
             g_signal_handlers_unblock_by_func(a->frequency_box,source_changed,a);
@@ -2441,21 +2456,30 @@ static void scatter_changed(GtkWidget *widget, gpointer data) {
     g_free(text);
 }
 
-static void knucker_bandwidth_changed(GtkSpinButton *spin, gpointer data) {
+static void knucker_bandwidth_changed(GtkWidget *widget, gpointer data) {
     App *a=data;
     if (!knucker_source(a) || a->running) return;
-    a->sr=1000*gtk_spin_button_get_value_as_int(spin);
+    (void)widget;
+    int index=gtk_combo_box_get_active(GTK_COMBO_BOX(a->knucker_band));
+    if (index < 0) return;
+    gtk_widget_set_visible(a->knucker_bw,index == 0);
+    a->sr=1000*(index ? knucker_wide_khz[index-1] : gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->knucker_bw)));
     g_key_file_set_integer(a->config,"knucker","bandwidth",a->sr);
     refresh_preview(a);
 }
 
 static void populate_rates(App *a) {
     gtk_widget_set_visible(a->sr_box,!knucker_source(a));
-    if (a->knucker_bw) gtk_widget_set_visible(a->knucker_bw,knucker_source(a));
+    if (a->knucker_bw_row) gtk_widget_set_visible(a->knucker_bw_row,knucker_source(a));
     if (knucker_source(a)) {
         gtk_label_set_text(GTK_LABEL(a->sr_label),"BW (kHz)");
         g_signal_handlers_block_by_func(a->knucker_bw,knucker_bandwidth_changed,a);
-        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),a->sr/1000);
+        int index=knucker_band_index(a->sr);
+        g_signal_handlers_block_by_func(a->knucker_band,knucker_bandwidth_changed,a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->knucker_band),index);
+        g_signal_handlers_unblock_by_func(a->knucker_band,knucker_bandwidth_changed,a);
+        if (index == 0) gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),a->sr/1000);
+        gtk_widget_set_visible(a->knucker_bw,index == 0);
         g_signal_handlers_unblock_by_func(a->knucker_bw,knucker_bandwidth_changed,a);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),3);
         gtk_widget_set_sensitive(a->gi_box,FALSE);
@@ -3998,8 +4022,22 @@ static void create_mode_renderer(App *a) {
     a->standard_box = combo(a->controls, "Mode", 0, standards, G_N_ELEMENTS(standards), a->standard);
     a->sr_box = combo(a->controls, "Symbol rate (sym/s)", 1, NULL, 0, -1);
 #ifdef HAVE_KNUCKER
-    a->knucker_bw=gtk_spin_button_new_with_range(1,10000,1);
-    gtk_grid_attach(GTK_GRID(a->controls),a->knucker_bw,1,1,1,1);
+    a->knucker_bw_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);
+    a->knucker_band=gtk_combo_box_text_new();
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->knucker_band),"150–500");
+    for (guint i=0;i<G_N_ELEMENTS(knucker_wide_khz);++i) {
+        char label[12];
+        g_snprintf(label,sizeof(label),"%d",knucker_wide_khz[i]);
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->knucker_band),label);
+    }
+    a->knucker_bw=gtk_spin_button_new_with_range(150,500,1);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->knucker_bw),333);
+    gtk_box_pack_start(GTK_BOX(a->knucker_bw_row),a->knucker_band,TRUE,TRUE,0);
+    gtk_box_pack_start(GTK_BOX(a->knucker_bw_row),a->knucker_bw,FALSE,FALSE,0);
+    gtk_widget_show(a->knucker_band);
+    gtk_grid_attach(GTK_GRID(a->controls),a->knucker_bw_row,1,1,1,1);
+    gtk_widget_set_no_show_all(a->knucker_bw_row,TRUE);
+    g_signal_connect(a->knucker_band,"changed",G_CALLBACK(knucker_bandwidth_changed),a);
     gtk_widget_set_no_show_all(a->knucker_bw,TRUE);
     gtk_widget_set_no_show_all(a->sr_box,TRUE);
     g_signal_connect(a->knucker_bw,"value-changed",G_CALLBACK(knucker_bandwidth_changed),a);
