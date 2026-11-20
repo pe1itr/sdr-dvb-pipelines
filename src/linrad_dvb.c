@@ -2,9 +2,11 @@
 #include <gtk/gtk.h>
 #include "linrad_build_info.h"
 #define LINRAD_BUILD_DATE __DATE__ " " __TIME__
-#define LINRAD_VERSION_TEXT "Linrad DVB " LINRAD_APP_VERSION "\nBuild ID: " LINRAD_BUILD_ID \
+#define LINRAD_BUILD_SUMMARY "Linrad DVB " LINRAD_APP_VERSION "\nBuild ID: " LINRAD_BUILD_ID
+#define LINRAD_COMPILED_TEXT "\nCompiled: " LINRAD_BUILD_DATE " (compiler local time)\n"
+#define LINRAD_VERSION_TEXT LINRAD_BUILD_SUMMARY \
     "\nGit commit: " LINRAD_GIT_COMMIT "\nSource state: " LINRAD_SOURCE_STATE \
-    "\nCompiled: " LINRAD_BUILD_DATE " (compiler local time)\n"
+    LINRAD_COMPILED_TEXT
 #include "gui_theme.h"
 #include "sdriq.h"
 #include "funcube.h"
@@ -2891,9 +2893,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
     gtk_container_set_border_width(GTK_CONTAINER(box),12);
     gtk_container_add(GTK_CONTAINER(scroll),box);
     about_label(box,"Linrad DVB","about-title");
-    about_label(box,LINRAD_VERSION_TEXT,"about-meta");
-    if (!strcmp(LINRAD_SOURCE_STATE,"dirty"))
-        about_label(box,"Local changes are included; this build differs from the Git commit shown.","about-meta");
+    about_label(box,LINRAD_BUILD_SUMMARY LINRAD_COMPILED_TEXT,"about-meta");
     if (strcmp(LINRAD_GIT_COMMIT,"unknown"))
         about_link(box,"View source commit on GitHub",
             "https://github.com/pe1itr/sdr-dvb-pipelines/commit/" LINRAD_GIT_COMMIT);
