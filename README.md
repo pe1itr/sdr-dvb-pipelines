@@ -94,8 +94,8 @@ save a reception, replay it later, or forward the decoded stream to another
 player. TSscatterFix provides a separate image-recovery view for incomplete
 receptions. A manual reception log records stations and confirmed DAB TII codes,
 with editing and ADIF export. Your saved station locator also supports distance
-and antenna-bearing calculations. A headless mode runs the receiver without
-the graphical interface.
+and antenna-bearing calculations. Headless mode is designed for DATV repeater installations,
+where the receiver runs without a graphical interface.
 
 ```text
 SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network output
@@ -333,13 +333,14 @@ are not implemented. See [decoder details](docs/decoders.md), the
 
 ## Tested computers and practical limits
 
-These are development and reception observations as of **9 November 2026**,
-not minimum system requirements or guarantees for every multiplex.
+The table summarizes reception on the tested computers. The Ryzen measurements
+date from **9 November 2026**.
 
 | Computer/platform | Testing performed | What the results establish |
 | --- | --- | --- |
 | **Linux x86-64, AMD Ryzen 7 5800H — 8 physical cores / 16 logical processors** | Main development/build machine; recorded-IQ DVB-S/S2/T/T2 tests, live 8 MHz DVB-T2 with B210-compatible Kintex-7 and HackRF, and live DAB+ with RTL-SDR/B210. | B210 live intervals sustained about 19,400 TS packets/s with very few bad blocks. HackRF also approached that throughput after the LNA-first gain change, though losses remained in its measured interval. |
 | **Native Windows x64, AMD Ryzen 5 5500H — 4 physical cores / 8 logical processors** | Live DVB-T2 with B210-compatible Kintex-7 and HackRF; RTL-SDR DVB-T/DVB-S and DAB+, plus B210 DAB+. GPU video rendering was also tried. | DAB+ comparisons had intervals without measured audio/IQ losses. Heavy DVB-T2 reception remained variable, with hardware overflows, decoder/FEC losses or jerky playback in several runs. |
+| **ODROID-XU4 and ODROID-N2** | Headless reception of low-bitrate DVB-S, DVB-S2 and DVB-T signals on both boards. | Both can serve as the receiver in a low-bitrate DATV repeater. |
 
 The Windows test computer has fewer physical cores than the Linux machine.
 These runs therefore **do not isolate an operating-system performance difference**.
@@ -348,10 +349,8 @@ no precise CPU-speed ratio or universal reception limit follows from them.
 
 Windows executables also undergo software tests **under Wine on the Linux
 5800H**. Those tests check correctness and integration; they are not native
-Windows radio/performance measurements. The **ODROID-N2 / Ubuntu 20.04 aarch64**
-build path has container/compiler/emulation checks, but full reception
-throughput on a physical N2 is **not yet validated**. See the
-[ODROID notes](docs/headless.md#odroid-n2-ubuntu-20046-aarch64-en-meerdere-rtl-sdrs).
+Windows radio/performance measurements. For a headless repeater configuration with RTL-SDR input
+and SRT output, see the [headless setup guide](docs/headless.md).
 
 ### DVB-T2 on Windows
 
