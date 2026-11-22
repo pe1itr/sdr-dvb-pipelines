@@ -100,6 +100,7 @@ the graphical interface.
 ```text
 SDR / Linrad UDP / IQ file -> DVB decoder -> television, recording or network output
                           -> DAB decoder -> DAB+ audio, text, slideshow and ensemble/TII info
+BATC Knucker (ARM Linux) -> DVB-T transport stream -> television, recording or network output
 ```
 
 ## Videos
@@ -305,6 +306,15 @@ RTL-SDR, FUNcube Pro+, LimeSDR Mini v1.2, SDRplay RSP1A/RSP1B, Airspy R2 and
 Airspy HF+ Dual Port (VHF), and Pluto / PlutoSky RX1 via native libiio. Available receive modes depend on the device's
 frequency range and sample rate; some integrations still need live hardware
 validation. See [receiver setup and test status](docs/receivers.md).
+
+On Raspberry Pi (ARM Linux), the **BATC Knucker** demodulates DVB-T in hardware
+and supplies an MPEG transport stream. Obtain `CombiTunerExpress` separately
+from BATC's Ryde repository. It requires a 32-bit ARM (armhf) runtime, including
+on 64-bit Raspberry Pi OS. Select **Input → BATC Knucker**, enter the full path
+to the executable and press **W** to save it. Set the receive frequency in kHz
+and choose the channel bandwidth under **Mode** (for example, 333 kHz).
+The receiver detects the constellation, FEC and guard interval automatically.
+See the [Knucker setup guide for the download and supported bandwidths](components/knucker/README.md).
 
 The [native Windows package](docs/windows.md) includes DVB and DAB+ reception.
 B210-compatible Kintex-7, HackRF and RTL-SDR have been used in native Windows
