@@ -89,7 +89,8 @@ uitsluitend onbewerkte stereo-IQ op 192 kHz. Sluit bij automatische selectie
 één Pro+ aan; bij meerdere apparaten kan `hid=WINDOWS_HID_PATH` worden gekozen.
 `lna=0|1` en `mixer=0|1` werken zoals op Linux. Linux-apparaatnamen zoals
 `/dev/hidrawN` en ALSA `hw:...` zijn niet overdraagbaar naar Windows.
-LimeSuite gebruikt de native Mini-backend, inclusief RX-kalibratie; er wordt
+De SDR-helper laadt `libLimeSuite.dll` alleen bij de keuze voor LimeSDR Mini.
+De native Mini-backend verzorgt ook de RX-kalibratie; er wordt
 geen firmware bijgewerkt. B210 mixer/LO-instellingen zijn eveneens beschikbaar.
 
 Een Kintex-7-clone gebruikt andere FPGA-images dan een originele Ettus B210.

@@ -142,3 +142,10 @@ int main(void) {
     puts("Lime RX: lifecycle, selection, calibration, tuning, samples and failures passed");
     return 0;
 }
+
+#ifdef _WIN32
+/* Link the backend to this test's LMS functions, independent of installed hardware. */
+#define HAVE_LIME
+#define LIME_RX_LINKED_TEST
+#include "../src/lime_rx.c"
+#endif

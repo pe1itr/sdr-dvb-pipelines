@@ -58,7 +58,8 @@ def main():
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         return target
-    binaries = []
+    # Lime RX loads this optional runtime explicitly when selected.
+    binaries = [copy(sdk / "bin/libLimeSuite.dll", "libLimeSuite.dll")]
     for name in ["linrad_dvb", "linrad_udp_to_stdout", "iq_file_to_stdout", "sdr_to_stdout", "ldpc_tool", "dab_worker"]:
         binaries.append(copy(build / f"{name}.exe", f"{name}.exe"))
     for name in ["gspawn-win64-helper.exe", "gspawn-win64-helper-console.exe", "ffmpeg.exe", "ffplay.exe"]:

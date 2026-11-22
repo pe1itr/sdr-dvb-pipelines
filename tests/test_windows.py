@@ -147,6 +147,22 @@ class WindowsTests(unittest.TestCase):
         p = run("test_pluto_rx")
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
 
+    def test_pluto_without_limesuite(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as tmp:
+            isolated = Path(tmp)
+            for source in PACKAGE.iterdir():
+                if source.name == "sdr_to_stdout.exe" or (source.suffix.lower() == ".dll"
+                        and source.name.lower() != "liblimesuite.dll"):
+                    os.link(source, isolated / source.name)
+            with patch(__name__ + ".PACKAGE", isolated):
+                args = ["--sample-rate", 2400000, "--frequency", 437000000, "--gain", 30]
+                pluto = run("sdr_to_stdout", "--source", "pluto", "--args", "invalid:", *args)
+                self.assertEqual(pluto.returncode, 1, pluto.stderr)
+                self.assertIn(b"Pluto: cannot open AD9361", pluto.stderr)
+                lime = run("sdr_to_stdout", "--source", "lime", *args)
+                self.assertEqual(lime.returncode, 1, lime.stderr)
+                self.assertIn(b"[LimeSDR] Cannot load libLimeSuite.dll", lime.stderr)
+
     def test_lime_backend(self):
         p = run("test_lime_rx")
         self.assertEqual(p.returncode, 0, p.stderr.decode(errors="replace"))
