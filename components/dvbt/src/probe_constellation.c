@@ -8004,6 +8004,51 @@ static int scan_dvbt2k_pilot_alignment(const rbdvbt_config_t *cfg,
     return 0;
 }
 
+/* Interpolate the complex residual channel after the common phase/slope fit.
+ * Both pilot families have the same boost. Normalizing by their RMS cancels
+ * that boost and keeps the flat-channel soft decision scale. */
+static void local_pilot_channel(const complexf_t *shifted, uint32_t symbol,
+                                int shift, int conjugate, double phase, double slope,
+                                complexf_t *channel)
+{
+    const int carriers = RBDVBT_DVBT_2K_ACTIVE_CARRIERS;
+    int previous = -1;
+    complexf_t left = {0};
+    double power = 0;
+    unsigned count = 0;
+    memset(channel, 0, carriers * sizeof(*channel));
+    for (int k = 0; k < carriers; ++k) {
+        rbdvbt_dvbt_carrier_role_t role = rbdvbt_dvbt_2k_carrier_role(symbol, k);
+        if (role != RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT &&
+            role != RBDVBT_DVBT_CARRIER_SCATTERED_PILOT) continue;
+        int bin = (int)rbdvbt_dvbt_2k_logical_to_fft_bin(k) + shift;
+        if (bin < 0 || bin >= (int)RBDVBT_DVBT_2K_FFT_SIZE) continue;
+        complexf_t pilot = shifted[bin];
+        if (!isfinite(pilot.re) || !isfinite(pilot.im)) continue;
+        if (conjugate) pilot = c_conj(pilot);
+        pilot = c_rotate(pilot, -(phase + slope * (k - 852)));
+        int sign = rbdvbt_dvbt_2k_pilot_sign(k);
+        pilot.re *= sign;
+        pilot.im *= sign;
+        power += (double)pilot.re * pilot.re + (double)pilot.im * pilot.im;
+        ++count;
+        for (int j = previous + 1; j < k && previous >= 0; ++j) {
+            float t = (float)(j - previous) / (k - previous);
+            channel[j].re = left.re + t * (pilot.re - left.re);
+            channel[j].im = left.im + t * (pilot.im - left.im);
+        }
+        channel[k] = left = pilot;
+        previous = k;
+    }
+    if (power > 0) {
+        double scale = sqrt(count / power);
+        for (int k = 0; k < carriers; ++k) {
+            channel[k].re *= scale;
+            channel[k].im *= scale;
+        }
+    }
+}
+
 static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
                                            const complexf_t *samples,
                                            size_t count,
@@ -8363,6 +8408,13 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             continue;
         }
         phase_repairs += (uint32_t)phase_repaired;
+        complexf_t channel[RBDVBT_DVBT_2K_ACTIVE_CARRIERS];
+        float soft_weight[RBDVBT_DVBT_2K_DATA_CELLS];
+        if (cfg->local_pilot_correction) {
+            memset(soft_weight, 0, sizeof(soft_weight));
+            local_pilot_channel(shifted, model_symbol, best_bin_shift, best_conjugate,
+                                phase_intercept, phase_slope, channel);
+        }
 
         for (uint32_t di = 0; di < RBDVBT_DVBT_2K_DATA_CELLS; ++di) {
             uint32_t logical_k;
@@ -8419,6 +8471,17 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
                 continue;
             }
 
+            if (cfg->local_pilot_correction) {
+                complexf_t h = channel[logical_k];
+                float gain = hypotf(h.re, h.im);
+                soft_weight[di] = gain;
+                if (gain > 0) {
+                    complexf_t rotation = {h.re / gain, -h.im / gain};
+                    z = c_mul(z, rotation);
+                } else {
+                    z = (complexf_t){0};
+                }
+            }
             rx_sio[di] = qpsk_hard_decision(z);
             rx_sio_soft[di] = z;
             {
@@ -8515,6 +8578,15 @@ static int write_dvbt2k_qpsk_constellation(const rbdvbt_config_t *cfg,
             memcpy(&viterbi_symbols[viterbi_symbol_cell_count],
                    rx_sio_soft,
                    RBDVBT_DVBT_2K_DATA_CELLS * sizeof(*viterbi_symbols));
+            if (cfg->local_pilot_correction) {
+                /* For QPSK the branch cost difference is linear in I or Q.
+                 * Weight only the FEC copy, leaving displayed EVM unweighted. */
+                for (unsigned di = 0; di < RBDVBT_DVBT_2K_DATA_CELLS; ++di) {
+                    complexf_t *soft = &viterbi_symbols[viterbi_symbol_cell_count + di];
+                    soft->re *= soft_weight[di];
+                    soft->im *= soft_weight[di];
+                }
+            }
             viterbi_symbol_cell_count += RBDVBT_DVBT_2K_DATA_CELLS;
             if (viterbi_model_symbols != NULL && viterbi_model_symbol_count < max_symbols) {
                 viterbi_model_symbols[viterbi_model_symbol_count++] = model_symbol;

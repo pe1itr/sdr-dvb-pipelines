@@ -88,7 +88,7 @@ typedef struct {
     GtkWidget *knucker_bw, *knucker_band, *knucker_bw_row, *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
-    GtkWidget *bonding_box, *bonding_button;
+    GtkWidget *bonding_box, *bonding_button, *local_pilot_box;
     char *bond_control, *bond_json;
     gboolean bond_detected, bond_active, bond_pair;
     double bond_peer_offset;
@@ -595,7 +595,9 @@ static void build_iq_stages(App *a) {
             add(s,"--");
         }
         add(s, self); g_free(self); add(s, "--decoder-worker=dvbt");
-        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp --frequency-offset --channel-filter");
+        options(a, s, "rbdvbt_rx", "args", "--stdin --input-format --sample-rate --sr --gi --fec --stdout-ts --ts-out --udp-ts --udp-out --visualizer-udp --frequency-offset --channel-filter --local-pilot-correction");
+        if (g_key_file_get_boolean(a->config,"dvbt","local_pilot_correction",NULL))
+            add(s,"--local-pilot-correction");
         /* These are essential for the integrated live decode path, even when
          * an older/empty config does not supply them. */
         add(s, "--live"); add(s, "--resample-to-dvbt-rate");
@@ -944,6 +946,7 @@ static void scatter_refresh(App *a) {
     if (a->gi_label) gtk_widget_set_visible(a->gi_label,a->standard==2);
     if (a->t2_controls) gtk_widget_set_visible(a->t2_controls,a->standard==3);
     if (a->s2_controls) gtk_widget_set_visible(a->s2_controls,a->standard==1);
+    if (a->local_pilot_box) gtk_widget_set_visible(a->local_pilot_box,a->standard==2 && !knucker_source(a));
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
@@ -4052,6 +4055,12 @@ static void dab_step_clicked(GtkButton *button,gpointer data) {
     App *a=data;tune_step(a,GTK_WIDGET(button)==a->dab_previous ? -1 : 1);
 }
 
+static void local_pilot_changed(GtkToggleButton *button,gpointer data) {
+    App *a=data;
+    g_key_file_set_boolean(a->config,"dvbt","local_pilot_correction",gtk_toggle_button_get_active(button));
+    refresh_preview(a);
+}
+
 static void bonding_changed(GtkToggleButton *button,gpointer data) {
     App *a=data;if (a->running) return;
     g_key_file_set_boolean(a->config,"dvbt","disable_bonding",gtk_toggle_button_get_active(button));
@@ -4156,6 +4165,13 @@ static void create_mode_renderer(App *a) {
     /* Opening a dialog with show_all must not reveal another mode's fields. */
     gtk_widget_set_no_show_all(a->t2_controls,TRUE);
     gtk_widget_set_visible(a->t2_controls,a->standard==3);
+    a->local_pilot_box=gtk_check_button_new_with_label("Local pilot correction");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->local_pilot_box),g_key_file_get_boolean(a->config,"dvbt","local_pilot_correction",NULL));
+    gtk_widget_set_tooltip_text(a->local_pilot_box,"Estimate phase from nearby pilots and give faded carriers less weight during decoding. Applies at the next start.");
+    gtk_grid_attach(GTK_GRID(a->controls),a->local_pilot_box,0,15,2,1);
+    gtk_widget_set_no_show_all(a->local_pilot_box,TRUE);
+    gtk_widget_set_visible(a->local_pilot_box,a->standard==2 && !knucker_source(a));
+    g_signal_connect(a->local_pilot_box,"toggled",G_CALLBACK(local_pilot_changed),a);
     a->bonding_box=gtk_check_button_new_with_label("Disable automatic DVB-T bonding");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->bonding_box),g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL));
     gtk_widget_set_tooltip_text(a->bonding_box,"Off (default): a valid bonding announcement automatically starts the partner and merger. On: detect only; click the Bonding indicator to join manually. First channel stays centered for both live IQ and files; partner is normally +50 or −50 kHz. Applies at next start. 8 s recovery buffer.");

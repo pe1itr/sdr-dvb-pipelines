@@ -315,8 +315,44 @@ static void check_pilot_phase_fallback_guard(void)
     }
 }
 
+/* An affine complex channel interpolates exactly, including a deep null.
+ * Exercise all scattered-pilot phases, spectral conjugation and bin shifts. */
+static void check_local_pilot_channel(void)
+{
+    const int carriers = RBDVBT_DVBT_2K_ACTIVE_CARRIERS;
+    complexf_t spectrum[FFT] = {0}, channel[RBDVBT_DVBT_2K_ACTIVE_CARRIERS];
+    for (unsigned symbol = 0; symbol < 4; ++symbol) {
+        int shift = (int)symbol - 2;
+        for (int flat = 0; flat <= 1; ++flat) {
+            double power = 0;
+            int count = 0;
+            for (int k = 0; k < carriers; ++k) {
+                int bin = (int)rbdvbt_dvbt_2k_logical_to_fft_bin(k) + shift;
+                spectrum[bin] = (complexf_t){77,-33}; /* TPS and data are not pilots. */
+                int role = rbdvbt_dvbt_2k_carrier_role(symbol, k);
+                if (role != RBDVBT_DVBT_CARRIER_CONTINUAL_PILOT &&
+                    role != RBDVBT_DVBT_CARRIER_SCATTERED_PILOT) continue;
+                float re = flat ? 1 : (k - 852) / 852.f;
+                float im = flat ? 0 : .02f;
+                int sign = rbdvbt_dvbt_2k_pilot_sign(k);
+                complexf_t z = c_rotate((complexf_t){re * sign, im * sign}, .4 + .013 * (k - 852));
+                spectrum[bin] = symbol % 2 ? c_conj(z) : z;
+                power += re*re + im*im;
+                ++count;
+            }
+            local_pilot_channel(spectrum, symbol, shift, symbol % 2, .4, .013, channel);
+            double rms = sqrt(power / count);
+            for (int k = 0; k < carriers; ++k) {
+                assert(fabs(channel[k].re * rms - (flat ? 1 : (k - 852)/852.f)) < 1e-5);
+                assert(fabs(channel[k].im * rms - (flat ? 0 : .02f)) < 1e-5);
+            }
+        }
+    }
+}
+
 int main(void)
 {
+    check_local_pilot_channel();
     check_pilot_phase_outlier();
     check_pilot_phase_fallback_guard();
     check_iq_ring_stall_headroom();

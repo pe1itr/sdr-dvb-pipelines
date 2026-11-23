@@ -182,6 +182,16 @@ MER and a modulation/FEC reference threshold. Red is below 0 dB, orange is
 0–2 dB and green is at least 2 dB. It is an aid to tuning, not a calibrated
 guarantee of picture or audio; unsupported or unavailable values show `—`.
 
+### DVB-T local pilot correction
+
+For the built-in DVB-T 2K QPSK receiver, **Mode → Local pilot correction**
+estimates the channel between nearby continual and scattered pilots in each
+OFDM symbol. It corrects the phase of each data carrier and reduces the weight
+of deeply faded carriers in the Viterbi decoder. Try it when reflections cause
+frequency-selective fading. The option defaults to off and takes effect at
+the next start. Press **W** to save it. The worker flag is
+`--local-pilot-correction`.
+
 ### Experimental DVB-T bonding
 
 The integrated receiver merger uses PE1ITR's **dvb-channel-bonding 1.6.0**

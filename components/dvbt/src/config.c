@@ -244,6 +244,8 @@ int rbdvbt_parse_args(int argc, char **argv, rbdvbt_config_t *cfg)
                 fprintf(stderr, "invalid --loglevel value; expected quiet, error, warn, info, debug, or trace\n");
                 return -1;
             }
+        } else if (strcmp(arg, "--local-pilot-correction") == 0) {
+            cfg->local_pilot_correction = 1;
         } else if (strcmp(arg, "--channel-filter") == 0) {
             cfg->channel_filter = 1;
         } else if (strcmp(arg, "--frequency-offset") == 0 && i + 1 < argc) {
@@ -469,6 +471,7 @@ void rbdvbt_print_info(const char *argv0)
     printf("  --stdin                         Read IQ from stdin\n");
     printf("  --input-format s16|u8            Input IQ format, default s16\n");
     printf("  --sample-rate HZ                 Input IQ sample rate\n");
+    printf("  --local-pilot-correction          Correct local DVB-T phase and weight soft bits using pilots\n");
     printf("  --channel-filter                 Experimental longer live anti-alias FIR for multichannel RX\n");
     printf("  --frequency-offset HZ            Experimental channel offset from SDR center (signed)\n");
     printf("  --sr RATE                        Symbol rate: 35k, 40k, 125k, 150k, 250k, 333k, 500k, or numeric Hz\n");
