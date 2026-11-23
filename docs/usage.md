@@ -602,7 +602,8 @@ TCI is standaard bereikbaar op **`ws://127.0.0.1:40031`**. De poort is aanpasbaa
 via **TCI** (ook **Alt+T**), wanneer de monitor uitstaat.
 **W** in het hoofdvenster bewaart de instelling. Voor bijvoorbeeld MSHV kies je
 **TCI Client RX1**, host `127.0.0.1`, poort `40031`, en **TCI Client Input** als
-audio-input. Met **TCI audio output (dB)** stel je het niveau voor alle verbonden
+audio-input. De RX-audio is mono, ook als MSHV op twee TCI-kanalen staat.
+Met **TCI audio output (dB)** stel je het niveau voor alle verbonden
 TCI-clients tijdens ontvangst in, van −60 tot 0 dB. De standaard is 0 dB.
 Als MSHV te veel niveau aangeeft, probeer dan −18 dB met de MSHV-ingangsregelaar
 in het midden. Druk op **W** in het hoofdvenster om de instelling te bewaren.
@@ -639,7 +640,7 @@ verwerking kost wel CPU-tijd en geheugenbandbreedte, vooral bij hoge IQ-rates.
 De TCI-implementatie volgt de RX-audiowerking van `tci-radio-bridge` en het
 [TCI-protocol](https://github.com/ExpertSDR3/TCI). Standaard wordt mono float32
 audio op 48 kHz verstuurd na `audio_start:0;`, met een 64-byte little-endian
-TCI-header. Stereo met identieke kanalen en int16 zijn ook beschikbaar.
+TCI-header. Clients kunnen ook int16 kiezen.
 USB en spraak-FM ondersteunen daarnaast 24/12 kHz. **FM-DATA gebruikt altijd
 48 kHz** om aliasing door ongefilterde decimatie te voorkomen. Bij omschakelen
 meldt de server de nieuwe samplerate aan bestaande clients; verzoeken om

@@ -23,7 +23,7 @@ typedef struct {
     unsigned char input[INPUT_SIZE], output[OUTPUT_SIZE];
     size_t used, queued, sent, text_used;
     char text[4096];
-    unsigned rate, channels, samples, format, phase, count;
+    unsigned rate, samples, format, phase, count;
     float frame[4096];
 } Client;
 struct UsbTci {
@@ -112,9 +112,8 @@ static void command(UsbTci *s, Client *c, char *cmd) {
         c->count=c->phase=0;
         char reply[64]; g_snprintf(reply,sizeof(reply),"audio_samplerate:%u;",c->rate); text(c,reply);
     } else if (!strcmp(cmd,"audio_stream_channels")) {
-        unsigned v; if (number(arg,&v) && (v==1 || v==2)) c->channels=v;
-        c->count=0;
-        char reply[64]; g_snprintf(reply,sizeof(reply),"audio_stream_channels:%u;",c->channels); text(c,reply);
+        /* As in tci-radio-bridge, the demodulator supplies one RX channel. */
+        text(c,"audio_stream_channels:1;");
     } else if (!strcmp(cmd,"audio_stream_samples")) {
         unsigned v; if (number(arg,&v) && v>=64 && v<=4096) c->samples=v;
         c->count=0;
@@ -227,7 +226,7 @@ void usb_tci_poll(UsbTci *s) {
             setsockopt(fd,SOL_SOCKET,SO_SNDBUF,&buffer,sizeof(buffer));
             setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,&yes,sizeof(yes));
             memset(c,0,sizeof(*c)); c->fd=fd; c->connected=g_get_monotonic_time();
-            c->rate=48000; c->channels=1; c->samples=2048; c->format=3;
+            c->rate=48000; c->samples=2048; c->format=3;
         }
         if (!c->ready && g_get_monotonic_time()-c->connected>5000000) { disconnect(c); continue; }
         ssize_t n=recv(c->fd,c->input+c->used,sizeof(c->input)-1-c->used,MSG_DONTWAIT);
@@ -261,11 +260,12 @@ void usb_tci_audio(UsbTci *s, const float *audio, size_t count, float gain) {
             if (++c->phase<48000/c->rate) continue;
             c->phase=0; c->frame[c->count++]=audio[j]*gain;
             if (c->count<c->samples) continue;
-            unsigned char packet[64+4096*2*4]={0};
-            put32(packet+4,c->rate); put32(packet+8,c->format); put32(packet+20,c->samples);
-            put32(packet+24,1); put32(packet+28,c->channels);
+            unsigned char packet[64+4096*4]={0};
+            put32(packet+4,c->rate); put32(packet+8,c->format);
+            put32(packet+20,c->samples);
+            put32(packet+24,1); put32(packet+28,1);
             unsigned char *p=packet+64;
-            for (unsigned k=0;k<c->samples;++k) for (unsigned ch=0;ch<c->channels;++ch) {
+            for (unsigned k=0;k<c->samples;++k) {
                 if (c->format==3) { uint32_t bits; memcpy(&bits,&c->frame[k],4); put32(p,bits); p+=4; }
                 else { int16_t v=(int16_t)lrintf(c->frame[k]*32767); *p++=v&255; *p++=(uint16_t)v>>8; }
             }
