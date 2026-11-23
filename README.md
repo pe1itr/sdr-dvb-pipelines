@@ -275,6 +275,25 @@ only where applicable; hover over a control for its tooltip.
 | Signal-meter arrow buttons | Adjust level range, trace position and averaging/time scale. |
 | **About** | Show version/build identity, credits and the keyboard reference. |
 
+### Timed IQ playback with MSHV
+
+Select a recording under **Input → IQ file**. Playback starts immediately by default.
+For a recording aligned to a decoder time slot, enable **Start playback on the next whole minute**
+and click **Play file**. The button shows an orange countdown. Click it again to cancel,
+or wait for it to turn green when playback starts.
+
+Enable **USB** for upper-sideband audio, or launch `linrad_dvb --usb` to enable the
+monitor and TCI server when the window opens. In MSHV select **TCI Client RX1** and
+**TCI Client Input**. The default server is `127.0.0.1`, port `40031`. Linrad DVB
+sends mono receive audio even when MSHV requests two channels, so you can keep
+your two-channel, int16 setting when switching servers.
+
+Open **TCI** (**Alt+T**) to adjust **TCI audio output (dB)** during reception.
+The range is −60 to 0 dB, with 0 dB as the default. This control adjusts the
+level sent to TCI clients. Press **W** in the main window to save it.
+
+### Keyboard shortcuts
+
 With the main receiver window focused:
 
 | Key or action | Function |
