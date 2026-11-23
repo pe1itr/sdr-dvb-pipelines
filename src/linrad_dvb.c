@@ -106,6 +106,7 @@ typedef struct {
     gboolean scatter, running, stopping, closing, headless, afedri_receiving;
     guint kill_timer, drain_timer;
     gboolean replay_eof;
+    gint64 replay_wait_until;
     Stage stages[4];
     int stage_count;
     GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *gi_label, *constellation_box;
@@ -884,8 +885,11 @@ static void record_log(App *a, const char *text, size_t length) {
                 }
             }
             if (a->running && !a->stopping && !a->replay_eof && a->source == SOURCE_FILE &&
-                g_str_has_prefix(line,"[iq-file] Scheduled playback started"))
+                g_str_has_prefix(line,"[iq-file] Scheduled playback started")) {
+                a->replay_wait_until=0;
                 status(a,"Playing IQ file in real time");
+                power_refresh(a);
+            }
             if (a->running && !a->stopping && a->source == SOURCE_RTLSDR) {
                 double hz;
                 if (sscanf(line, "[SDR] RTL-SDR tuner readback: %lf", &hz) == 1)
@@ -975,26 +979,38 @@ static void scatter_refresh(App *a) {
         a->scatter ? "TSscatterFix on · click to turn off." : "TSscatterFix off · click to turn on.");
 }
 
+static void replay_countdown_refresh(App *a) {
+    gint64 remaining=MAX((gint64)0,a->replay_wait_until-g_get_real_time());
+    gint64 seconds=(remaining+G_USEC_PER_SEC-1)/G_USEC_PER_SEC;
+    char label[64];
+    g_snprintf(label,sizeof(label),"Cancel · %" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT,
+               seconds/60,seconds%60);
+    if (strcmp(gtk_label_get_text(GTK_LABEL(a->power_label)),label))
+        gtk_label_set_text(GTK_LABEL(a->power_label),label);
+}
+
 static void power_refresh(App *a) {
     scatter_refresh(a);
     record_refresh(a);
     if (a->reception_button) gtk_widget_set_sensitive(a->reception_button,a->running && !a->stopping);
     if (!a->power_button) return;
     GtkStyleContext *style = gtk_widget_get_style_context(a->power_button);
-    const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error"};
+    const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error", "receiver-waiting"};
     for (unsigned i=0; i<G_N_ELEMENTS(states); ++i) gtk_style_context_remove_class(style, states[i]);
     int state = a->stopping ? 2 : a->running ? 1 : a->exit_code ? 3 : 0;
     gboolean connecting = a->source == SOURCE_AFEDRI && a->running && !a->stopping && !a->afedri_receiving;
-    gtk_style_context_add_class(style, states[connecting ? 2 : state]);
+    gboolean waiting = a->replay_wait_until != 0;
+    gtk_style_context_add_class(style, states[waiting ? 4 : connecting ? 2 : state]);
     const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
     const char *file_labels[] = {"Play file", "Stop file", "Stopping playback…", "Play file · error"};
     const char *tips[] = {"Receiver off. Click to start.",
         "Receiver pipeline running. Click to stop.",
         "Stopping the receiver pipeline. Please wait…",
         "Reception stopped due to an error. Check the status and log; click to restart."};
-    gtk_label_set_text(GTK_LABEL(a->power_label), connecting ? "Stop SDR · connecting Afedri…" : a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
+    if (waiting) replay_countdown_refresh(a);
+    else gtk_label_set_text(GTK_LABEL(a->power_label), connecting ? "Stop SDR · connecting Afedri…" : a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
     const char *problem=a->running ? NULL : receiver_offset_problem(a);
-    gtk_widget_set_tooltip_text(a->power_button, problem ? problem : connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
+    gtk_widget_set_tooltip_text(a->power_button, problem ? problem : waiting ? "Waiting for scheduled IQ playback. Click to cancel." : connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
     gtk_widget_set_sensitive(a->power_button, !a->stopping && !problem);
 }
 
@@ -1043,6 +1059,7 @@ static gboolean force_stop(gpointer data) {
 
 static void stop_pipeline(App *a) {
     if (!a->running || a->stopping) return;
+    a->replay_wait_until=0;
     a->stopping = TRUE;bonding_refresh(a);
     if (a->standard==4) dab_view_tick(&a->dab,FALSE);
     usb_receiver_source(a->usb_receiver,a->iq_view.center,a->iq_view.rate,FALSE);
@@ -1083,6 +1100,8 @@ static void child_exit(GPid pid, gint result, gpointer data) {
              * in either order. A nonzero exit is still an error. */
             if (i<2 && !a->replay_eof) {
                 a->replay_eof=TRUE;
+                a->replay_wait_until=0;
+                power_refresh(a);
                 status(a,"End of IQ file; finishing decoder and player…");
             }
             if (a->tune_fd>=0 && !a->stages[0].pid) { close(a->tune_fd); a->tune_fd=-1; }
@@ -1314,6 +1333,7 @@ static void start_pipeline(App *a) {
     if (log_pipe[1] >= 0) close(log_pipe[1]);
     if (log_pipe[0] >= 0) g_unix_fd_add(log_pipe[0], G_IO_IN | G_IO_HUP | G_IO_ERR, read_log, a);
     if (!a->stopping && replay_start) {
+        a->replay_wait_until=replay_start;
         GDateTime *target=g_date_time_new_from_unix_local(replay_start/G_USEC_PER_SEC);
         char *message=g_date_time_format(target,"Waiting to play IQ file at %H:%M:%S");
         status(a,message);
@@ -2742,6 +2762,7 @@ static gboolean decoder_tick(gpointer data) {
 
 static gboolean monitor_tick(gpointer data) {
     App *a = data;
+    if (a->replay_wait_until) replay_countdown_refresh(a);
     presets_refresh(a);
     const char *section = sources[a->source];
     a->iq_view.active = !knucker_source(a) && a->running && !a->stopping;

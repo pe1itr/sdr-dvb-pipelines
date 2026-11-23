@@ -61,6 +61,8 @@ static void apply_receiver_theme(void) {
         "#receiver-power.receiver-off .power-lamp { color: #999999; }"
         "#receiver-power.receiver-running { background-color: #145c2e; border-color: #53ed85; }"
         "#receiver-power.receiver-running .power-lamp { color: #70ff9c; }"
+        "#receiver-power.receiver-waiting { background-color: #a74708; border-color: #ff963c; }"
+        "#receiver-power.receiver-waiting .power-lamp { color: #ffc072; }"
         "#receiver-power.receiver-stopping { background-color: #664b0a; border-color: #ffd151; }"
         "#receiver-power.receiver-stopping .power-lamp { color: #ffdb60; }"
         "#receiver-power.receiver-error { background-color: #6a2020; border-color: #ff7777; }"
