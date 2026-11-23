@@ -65,6 +65,26 @@ class FileReplayTests(unittest.TestCase):
                 self.assertNotEqual(p.returncode, 0)
                 self.assertEqual(p.stdout, b'')
 
+    def test_scheduled_start_and_cancel(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, 'samples.iq')
+            data = bytes(range(128))
+            path.write_bytes(data)
+            for cancel in (False, True):
+                target = time.time_ns() // 1000 + (5000000 if cancel else 350000)
+                with subprocess.Popen([PLAYER, '--in', path, '--sample-rate', '10000',
+                                       '--start-at-us', str(target)],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+                    self.assertFalse(select.select([p.stdout], [], [], .1)[0])
+                    if cancel:
+                        p.terminate()
+                    else:
+                        self.assertTrue(select.select([p.stdout], [], [], 2)[0])
+                        self.assertGreaterEqual(time.time_ns() // 1000, target)
+                    output, log = p.communicate(timeout=2)
+                    self.assertEqual(p.returncode, 0, log)
+                    self.assertEqual(output, b'' if cancel else data)
+
     def test_stop_with_blocked_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, 'long.iq')

@@ -39,14 +39,14 @@ static gboolean controls(Replay *r) {
     }
     return TRUE;
 }
-static gboolean wait_until(Replay *r, gint64 deadline) {
+static gboolean wait_until(Replay *r, gint64 deadline, gboolean wall_clock) {
     while (!stopping) {
         if (!controls(r)) return FALSE;
-        gint64 remaining=deadline-g_get_monotonic_time();
+        gint64 remaining=deadline-(wall_clock ? g_get_real_time() : g_get_monotonic_time());
         if (remaining<=0) break;
         struct pollfd fd={STDIN_FILENO,POLLIN,0};
         /* Short bounded waits keep Stop and filter commands responsive. */
-        int result=poll(r->control ? &fd : NULL,r->control ? 1 : 0,(int)MIN(20,(remaining+999)/1000));
+        int result=poll(r->control ? &fd : NULL,r->control ? 1 : 0,(int)((MIN(remaining,20000)+999)/1000));
         if (result<0 && errno!=EINTR) return FALSE;
         if (r->control && result>0 && (fd.revents&POLLHUP)) {
             /* A closed writer can still have a final command queued. */
@@ -76,10 +76,12 @@ int main(int argc, char **argv) {
     argv=g_win32_get_command_line();
 #endif
     char *path=NULL, *format=NULL;
+    gint64 start_at=0;
     int header=0; Replay r={0};
     double offset=0;
     GOptionEntry entries[]={
         {"in",0,0,G_OPTION_ARG_FILENAME,&path,"IQ file","FILE"},
+        {"start-at-us",0,0,G_OPTION_ARG_INT64,&start_at,"Start at this Unix timestamp in microseconds","US"},
         {"sample-rate",0,0,G_OPTION_ARG_INT,&r.rate,"Samples per second","HZ"},
         {"input-format",0,0,G_OPTION_ARG_STRING,&format,"s16, u8 or cf32 (little-endian IQ)","FORMAT"},
         {"header-bytes",0,0,G_OPTION_ARG_INT,&header,"Bytes to skip at the start","N"},
@@ -121,9 +123,13 @@ int main(int argc, char **argv) {
     uint8_t input[8192*8], converted[8192*4];
     float shifted[8192*2];
     guint64 sent=0; int result=0;
+    if (start_at) {
+        if (!wait_until(&r,start_at,TRUE)) { result=1; }
+        else if (!stopping) fprintf(stderr,"[iq-file] Scheduled playback started\n");
+    }
     gint64 start=g_get_monotonic_time(), epoch=start;
     fprintf(stderr,"[iq-file] %s: %s, %d samples/s, %.3f s, realtime\n",path,format,r.rate,(double)samples/r.rate);
-    while (!stopping && sent<samples) {
+    while (!result && !stopping && sent<samples) {
         size_t count=(size_t)MIN((guint64)chunk,samples-sent);
         if (fread(input,stride,count,file)!=count) { fprintf(stderr,"[iq-file] Unexpected end of file or read error\n"); result=1; break; }
         uint8_t *out=input;
@@ -153,7 +159,7 @@ int main(int argc, char **argv) {
         /* If downstream stalls, resume at real time instead of dumping a burst. */
         gint64 now=g_get_monotonic_time();
         if (now>deadline+100000) { epoch+=now-deadline; deadline=now; }
-        if (!wait_until(&r,deadline)) { result=1; break; }
+        if (!wait_until(&r,deadline,FALSE)) { result=1; break; }
     }
     fprintf(stderr,"[iq-file] %s: %" G_GUINT64_FORMAT " samples, %.3f s elapsed\n",
         stopping ? "stopped" : result ? "error" : "end of file",sent,(g_get_monotonic_time()-start)/1e6);

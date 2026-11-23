@@ -100,7 +100,7 @@ typedef struct {
     GtkWidget *renderer_program, *renderer_args, *output_file, *renderer_error;
     GtkWidget *udp_enabled, *udp_host, *udp_port;
     GtkWidget *dsmcc_enabled, *dsmcc_host, *dsmcc_port;
-    GtkWidget *file_path, *file_format, *file_header, *file_center, *file_details;
+    GtkWidget *file_path, *file_format, *file_header, *file_center, *file_minute, *file_details;
     int renderer;
     int tune_fd;
     gboolean scatter, running, stopping, closing, headless, afedri_receiving;
@@ -883,6 +883,9 @@ static void record_log(App *a, const char *text, size_t length) {
                     g_free(a->bond_json);a->bond_json=g_strdup(line+strlen("[bond-status] "));
                 }
             }
+            if (a->running && !a->stopping && !a->replay_eof && a->source == SOURCE_FILE &&
+                g_str_has_prefix(line,"[iq-file] Scheduled playback started"))
+                status(a,"Playing IQ file in real time");
             if (a->running && !a->stopping && a->source == SOURCE_RTLSDR) {
                 double hz;
                 if (sscanf(line, "[SDR] RTL-SDR tuner readback: %lf", &hz) == 1)
@@ -984,7 +987,7 @@ static void power_refresh(App *a) {
     gboolean connecting = a->source == SOURCE_AFEDRI && a->running && !a->stopping && !a->afedri_receiving;
     gtk_style_context_add_class(style, states[connecting ? 2 : state]);
     const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
-    const char *file_labels[] = {"Play file", "Stop file · playing", "Stopping playback…", "Play file · error"};
+    const char *file_labels[] = {"Play file", "Stop file", "Stopping playback…", "Play file · error"};
     const char *tips[] = {"Receiver off. Click to start.",
         "Receiver pipeline running. Click to stop.",
         "Stopping the receiver pipeline. Please wait…",
@@ -1123,6 +1126,11 @@ static void child_setup(gpointer unused) {
 
 static void start_pipeline(App *a) {
     if (a->running) return;
+    gint64 replay_start=0;
+    if (a->source==SOURCE_FILE && g_key_file_get_boolean(a->config,"file","start_next_minute",NULL)) {
+        const gint64 minute=60 * G_USEC_PER_SEC;
+        replay_start=(g_get_real_time()/minute+1)*minute;
+    }
     const char *problem=receiver_offset_problem(a);
     if (problem) { a->exit_code=1; status(a,problem); return; }
     a->record_log_used = 0;
@@ -1150,6 +1158,11 @@ static void start_pipeline(App *a) {
         gboolean valid=*path && iq_file_validate(resolved,fmt,integer_setting(a,"file","header_bytes",0,100000000),&samples,&error);
         g_free(path); g_free(fmt); g_free(resolved);
         if (!valid) { a->exit_code=1; status(a,error ? error->message : "Select an IQ file in Input first"); g_clear_error(&error); return; }
+    }
+    if (replay_start) {
+        GPtrArray *args=a->stages[0].args;
+        g_ptr_array_insert(args,args->len-1,g_strdup("--start-at-us"));
+        g_ptr_array_insert(args,args->len-1,g_strdup_printf("%" G_GINT64_FORMAT,replay_start));
     }
     a->iq_view.rows = 0; a->iq_view.last_frame = 0;
     signal_meter_reset(&a->iq_view.meter);
@@ -1300,7 +1313,12 @@ static void start_pipeline(App *a) {
     if (dab_pipe[0]>=0) dab_view_watch(&a->dab,dab_pipe[0]);
     if (log_pipe[1] >= 0) close(log_pipe[1]);
     if (log_pipe[0] >= 0) g_unix_fd_add(log_pipe[0], G_IO_IN | G_IO_HUP | G_IO_ERR, read_log, a);
-    if (!a->stopping) status(a, knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
+    if (!a->stopping && replay_start) {
+        GDateTime *target=g_date_time_new_from_unix_local(replay_start/G_USEC_PER_SEC);
+        char *message=g_date_time_format(target,"Waiting to play IQ file at %H:%M:%S");
+        status(a,message);
+        g_free(message); g_date_time_unref(target);
+    } else if (!a->stopping) status(a, knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
     if (dab_pipe[0]>=0) close(dab_pipe[0]);
@@ -2984,10 +3002,11 @@ static gboolean select_iq_file(App *a, const char *path, GError **error) {
 
 static void file_options_changed(GtkWidget *widget, gpointer data);
 static void file_controls_refresh(App *a) {
-    GtkWidget *widgets[]={a->file_format,a->file_header,a->file_center};
+    GtkWidget *widgets[]={a->file_format,a->file_header,a->file_center,a->file_minute};
     for (unsigned i=0; i<G_N_ELEMENTS(widgets); ++i) g_signal_handlers_block_by_func(widgets[i],file_options_changed,a);
     char *path=setting(a,"file","path"), *format=setting(a,"file","input_format"), *metadata=setting(a,"file","metadata");
     gtk_entry_set_text(GTK_ENTRY(a->file_path),path);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->file_minute),g_key_file_get_boolean(a->config,"file","start_next_minute",NULL));
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->file_format),find_choice(format,file_formats,G_N_ELEMENTS(file_formats)));
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->file_header),integer_setting(a,"file","header_bytes",0,100000000));
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->file_center),g_key_file_get_double(a->config,"file","frequency",NULL)/1e6);
@@ -3006,6 +3025,7 @@ static void file_options_changed(GtkWidget *widget, gpointer data) {
     if (a->running) return;
     int format=gtk_combo_box_get_active(GTK_COMBO_BOX(a->file_format));
     if (format<0) return;
+    g_key_file_set_boolean(a->config,"file","start_next_minute",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->file_minute)));
     g_key_file_set_string(a->config,"file","input_format",file_formats[format]);
     g_key_file_set_string(a->config,"file","format",format==1 ? "u8" : "s16");
     g_key_file_set_integer(a->config,"file","header_bytes",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->file_header)));
@@ -3419,7 +3439,10 @@ static void create_config(App *a) {
             gtk_label_set_line_wrap(GTK_LABEL(a->file_details),TRUE);
             gtk_label_set_line_wrap_mode(GTK_LABEL(a->file_details),PANGO_WRAP_WORD_CHAR);
             gtk_label_set_max_width_chars(GTK_LABEL(a->file_details),65);
-            gtk_grid_attach(GTK_GRID(grid),a->file_details,0,4,3,1);
+            a->file_minute=gtk_check_button_new_with_label("Start playback on the next whole minute");
+            gtk_grid_attach(GTK_GRID(grid),a->file_minute,0,4,3,1);
+            gtk_grid_attach(GTK_GRID(grid),a->file_details,0,5,3,1);
+            g_signal_connect(a->file_minute,"toggled",G_CALLBACK(file_options_changed),a);
             g_signal_connect(a->file_format,"changed",G_CALLBACK(file_options_changed),a);
             g_signal_connect(a->file_header,"value-changed",G_CALLBACK(file_options_changed),a);
             g_signal_connect(a->file_center,"value-changed",G_CALLBACK(file_options_changed),a);
