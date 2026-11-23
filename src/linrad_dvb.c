@@ -2220,6 +2220,12 @@ static void usb_toggled(GtkToggleButton *button, gpointer data) {
     gtk_widget_set_tooltip_text(a->fm_toggle,"FM (F) · 12.5 kHz · Page Up / Page Down: -2.5 / +2.5 kHz");
     gtk_widget_set_tooltip_text(a->fm_data_toggle,"FM-DATA (D) · 20 kHz · flat audio · Page Up / Page Down: -2.5 / +2.5 kHz");
 }
+static void tci_level_changed(GtkSpinButton *spin, gpointer data) {
+    App *a=data;
+    int db=gtk_spin_button_get_value_as_int(spin);
+    usb_receiver_set_tci_level(a->usb_receiver,db);
+    g_key_file_set_integer(a->config,"usb","tci_level_db",db);
+}
 static void usb_port_changed(GtkSpinButton *spin, gpointer data) {
     App *a=data;
     g_key_file_set_integer(a->config,"usb","tci_port",gtk_spin_button_get_value_as_int(spin));
@@ -2890,8 +2896,8 @@ static void source_defaults(App *a) {
     for (unsigned i=0;i<G_N_ELEMENTS(lean_keys);++i)
         if (!g_key_file_has_key(a->config,"leandvb",lean_keys[i],NULL))
             g_key_file_set_string(a->config,"leandvb",lean_keys[i],lean_values[i]);
-    const char *usb_keys[]={"tci_bind","tci_port","audio_device","pcm_udp_enabled","pcm_udp_host","pcm_udp_port"};
-    const char *usb_values[]={"127.0.0.1","40031","default","false","127.0.0.1","7355"};
+    const char *usb_keys[]={"tci_bind","tci_port","audio_device","pcm_udp_enabled","pcm_udp_host","pcm_udp_port","tci_level_db"};
+    const char *usb_values[]={"127.0.0.1","40031","default","false","127.0.0.1","7355","0"};
     for (unsigned i=0;i<G_N_ELEMENTS(usb_keys);++i)
         if (!g_key_file_has_key(a->config,"usb",usb_keys[i],NULL))
             g_key_file_set_string(a->config,"usb",usb_keys[i],usb_values[i]);
@@ -3879,22 +3885,28 @@ static void create_tci(App *a, const char *error) {
     a->tci_dialog=settings_dialog(a,"TCI · USB / FM / FM-DATA receiver",&grid);
     a->usb_port=spin(grid,"TCI port",0,1,65535,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->usb_port),integer_setting(a,"usb","tci_port",1,65535));
+    GtkWidget *level=spin(grid,"TCI audio output (dB)",1,-60,0,1);
+    int db=g_key_file_get_integer(a->config,"usb","tci_level_db",NULL);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(level),CLAMP(db,-60,0));
+    usb_receiver_set_tci_level(a->usb_receiver,db);
+    gtk_widget_set_tooltip_text(level,"0 dB sends the original level. Lower values reduce audio to all TCI clients.");
+    g_signal_connect(level,"value-changed",G_CALLBACK(tci_level_changed),a);
     GtkWidget *hint=gtk_label_new("Switch USB / FM / FM-DATA off to change the port. Press W in the main window to save.\n"
         "USB (U), FM (F) or FM-DATA (D) enables the speaker and TCI. Click the spectrum to tune.\n"
         "Page Up / Down: lower / higher frequency; USB 100 Hz, FM / FM-DATA 2.5 kHz.");
     gtk_label_set_line_wrap(GTK_LABEL(hint),TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(hint),60);
     gtk_label_set_xalign(GTK_LABEL(hint),0);
-    gtk_grid_attach(GTK_GRID(grid),hint,0,1,2,1);
+    gtk_grid_attach(GTK_GRID(grid),hint,0,2,2,1);
     a->usb_status=gtk_label_new(error ? error : "USB / FM / FM-DATA off");
     gtk_label_set_line_wrap(GTK_LABEL(a->usb_status),TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(a->usb_status),60);
     gtk_label_set_xalign(GTK_LABEL(a->usb_status),0);
-    gtk_grid_attach(GTK_GRID(grid),a->usb_status,0,2,2,1);
+    gtk_grid_attach(GTK_GRID(grid),a->usb_status,0,3,2,1);
     a->pcm_udp_enabled=gtk_check_button_new_with_label("Send PCM audio via UDP");
-    gtk_grid_attach(GTK_GRID(grid),a->pcm_udp_enabled,0,3,2,1);
-    a->pcm_udp_host=entry_field(grid,"PCM destination IPv4",4,a,"usb","pcm_udp_host");
-    a->pcm_udp_port=spin(grid,"PCM UDP port",5,1,65535,1);
+    gtk_grid_attach(GTK_GRID(grid),a->pcm_udp_enabled,0,4,2,1);
+    a->pcm_udp_host=entry_field(grid,"PCM destination IPv4",5,a,"usb","pcm_udp_host");
+    a->pcm_udp_port=spin(grid,"PCM UDP port",6,1,65535,1);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->pcm_udp_port),integer_setting(a,"usb","pcm_udp_port",1,65535));
     GtkWidget *pcm_hint=gtk_label_new("48 kHz · mono · signed 16-bit little-endian · raw UDP audio\n"
         "Dire Wolf: FM for 1200 AFSK; FM-DATA for 9600 G3RUH.\n"
@@ -3904,7 +3916,7 @@ static void create_tci(App *a, const char *error) {
     gtk_label_set_line_wrap(GTK_LABEL(pcm_hint),TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(pcm_hint),60);
     gtk_label_set_xalign(GTK_LABEL(pcm_hint),0);
-    gtk_grid_attach(GTK_GRID(grid),pcm_hint,0,6,2,1);
+    gtk_grid_attach(GTK_GRID(grid),pcm_hint,0,7,2,1);
     g_signal_connect(a->pcm_udp_host,"changed",G_CALLBACK(pcm_udp_destination_changed),a);
     g_signal_connect(a->pcm_udp_port,"value-changed",G_CALLBACK(pcm_udp_destination_changed),a);
     g_signal_connect(a->pcm_udp_enabled,"toggled",G_CALLBACK(pcm_udp_toggled),a);

@@ -11,6 +11,7 @@ void usb_receiver_stop(UsbReceiver *r);
 gboolean usb_receiver_running(UsbReceiver *r);
 gboolean usb_receiver_set_mode(UsbReceiver *r, MonitorMode mode);
 MonitorMode usb_receiver_mode(UsbReceiver *r);
+void usb_receiver_set_tci_level(UsbReceiver *r, int db);
 void usb_receiver_set_muted(UsbReceiver *r, gboolean muted);
 gboolean usb_receiver_muted(UsbReceiver *r);
 /* Raw mono s16le, 48 kHz, 480 samples per UDP datagram. Independent of mute.

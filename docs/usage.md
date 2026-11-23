@@ -602,7 +602,11 @@ TCI is standaard bereikbaar op **`ws://127.0.0.1:40031`**. De poort is aanpasbaa
 via **TCI** (ook **Alt+T**), wanneer de monitor uitstaat.
 **W** in het hoofdvenster bewaart de instelling. Voor bijvoorbeeld MSHV kies je
 **TCI Client RX1**, host `127.0.0.1`, poort `40031`, en **TCI Client Input** als
-audio-input. TCI geeft de frequentie, modus (**USB** of **NFM**, ook voor FM-DATA) en filtergrenzen
+audio-input. Met **TCI audio output (dB)** stel je het niveau voor alle verbonden
+TCI-clients tijdens ontvangst in, van −60 tot 0 dB. De standaard is 0 dB.
+Als MSHV te veel niveau aangeeft, probeer dan −18 dB met de MSHV-ingangsregelaar
+in het midden. Druk op **W** in het hoofdvenster om de instelling te bewaren.
+TCI geeft de frequentie, modus (**USB** of **NFM**, ook voor FM-DATA) en filtergrenzen
 door. Clients kunnen binnen het IQ-spectrum afstemmen; de modulatie kies je
 met de USB/FM/FM-DATA-knoppen. De server is uitsluitend voor ontvangst.
 
@@ -612,6 +616,7 @@ De optionele INI-sectie is:
 [usb]
 tci_bind=127.0.0.1
 tci_port=40031
+tci_level_db=0
 audio_device=default
 pcm_udp_enabled=false
 pcm_udp_host=127.0.0.1

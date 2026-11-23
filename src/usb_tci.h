@@ -9,6 +9,6 @@ void usb_tci_free(UsbTci *s);
 void usb_tci_poll(UsbTci *s);
 void usb_tci_frequency(UsbTci *s, double frequency);
 void usb_tci_mode(UsbTci *s, MonitorMode mode);
-void usb_tci_audio(UsbTci *s, const float *samples, size_t count);
+void usb_tci_audio(UsbTci *s, const float *samples, size_t count, float gain);
 unsigned usb_tci_clients(UsbTci *s);
 #endif

@@ -17,6 +17,7 @@ struct UsbReceiver {
     GMutex mutex;
     gint stop, muted;
     double center, rate, offset;
+    float tci_gain;
     gboolean source_active;
     MonitorMode mode;
     unsigned generation;
@@ -36,6 +37,7 @@ struct UsbReceiver {
 UsbReceiver *usb_receiver_new(GError **error) {
     UsbReceiver *r=g_new0(UsbReceiver,1);
     r->pcm_udp_fd=-1;
+    r->tci_gain=1.f;
     int fd=g_file_open_tmp("linrad-usb-XXXXXX",&r->path,error);
     if (fd<0) { g_free(r); return NULL; }
     if (ftruncate(fd,sizeof(UsbTap))<0) goto failed;
@@ -156,9 +158,19 @@ static void speaker_flush(UsbReceiver *r) {
         r->speaker_used-=n; memmove(r->speaker,r->speaker+n,r->speaker_used*sizeof(float));
     }
 }
+void usb_receiver_set_tci_level(UsbReceiver *r, int db) {
+    if (!r) return;
+    float gain=powf(10.f,CLAMP(db,-60,0)/20.f);
+    g_mutex_lock(&r->mutex);
+    r->tci_gain=gain;
+    g_mutex_unlock(&r->mutex);
+}
 static void audio(const float *samples, size_t count, void *user) {
     UsbReceiver *r=user;
-    usb_tci_audio(r->tci,samples,count);
+    g_mutex_lock(&r->mutex);
+    float gain=r->tci_gain;
+    g_mutex_unlock(&r->mutex);
+    usb_tci_audio(r->tci,samples,count,gain);
     pcm_udp_audio(r,samples,count);
     if (r->pcm && !usb_receiver_muted(r)) {
         speaker_flush(r);

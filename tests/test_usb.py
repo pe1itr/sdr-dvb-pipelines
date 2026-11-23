@@ -442,6 +442,24 @@ class TciTests(unittest.TestCase):
         self.assertGreater(amplitude(shifted, 500), .05)
         self.assertLess(amplitude(shifted, 1000), .005)
 
+    def test_live_tci_output_level(self):
+        self.command(b'd')  # Fixed 2.5 kHz deviation, 0.125 peak at unity.
+        self.command(b'e')
+        c = self.connect()
+        for fmt, code, scale in [('float32', 'f', 1), ('int16', 'h', 32767)]:
+            c.send(f'audio_stream_sample_type:{fmt};audio_start:0;')
+            c.until_text(b'audio_start:0;')
+            for command, db in [(b'g', 0), (b'l', -18)]:
+                self.command(command)
+                for _ in range(4):
+                    _, payload = c.audio()
+                values = struct.unpack('<2048' + code, payload)
+                self.assertAlmostEqual(max(map(abs, values)) / scale,
+                                       .125 * 10**(db/20), delta=.001)
+            c.send('audio_stop:0;')
+            c.until_text(b'audio_stop:0;')
+        self.assertAlmostEqual(amplitude(self.udp_audio(20), 1000), .125, delta=.005)
+
     def test_live_fm_switch_and_speaker_mute_keep_tci_audio(self):
         c = self.connect()
         c.send('audio_start:0;')

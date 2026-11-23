@@ -253,13 +253,13 @@ void usb_tci_frequency(UsbTci *s, double frequency) {
 static void put32(unsigned char *p, uint32_t value) {
     value=GUINT32_TO_LE(value); memcpy(p,&value,4);
 }
-void usb_tci_audio(UsbTci *s, const float *audio, size_t count) {
+void usb_tci_audio(UsbTci *s, const float *audio, size_t count, float gain) {
     for (unsigned i=0;i<CLIENTS;++i) {
         Client *c=&s->clients[i];
         if (c->fd<0 || !c->ready || !c->audio) continue;
         for (size_t j=0;j<count;++j) {
             if (++c->phase<48000/c->rate) continue;
-            c->phase=0; c->frame[c->count++]=audio[j];
+            c->phase=0; c->frame[c->count++]=audio[j]*gain;
             if (c->count<c->samples) continue;
             unsigned char packet[64+4096*2*4]={0};
             put32(packet+4,c->rate); put32(packet+8,c->format); put32(packet+20,c->samples);
