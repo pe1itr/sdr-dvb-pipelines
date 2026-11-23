@@ -4270,7 +4270,7 @@ static void connect_settings_controls(App *a) {
 static void show_presets(GtkWidget *widget, gpointer data);
 static GtkWidget *presets_create(App *a);
 
-static void gui(App *a) {
+static void gui(App *a, gboolean start_usb) {
     source_defaults(a);
     if (!g_key_file_has_key(a->config, "session", "renderer", NULL)) a->renderer = RENDER_EMBEDDED;
     /* Keep GTK's built-in dialogs and errors in the same language as the UI. */
@@ -4557,7 +4557,10 @@ static void gui(App *a) {
     g_signal_connect(a->window, "delete-event", G_CALLBACK(window_close), a);
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
     guint decoder_timer = g_timeout_add(50, decoder_tick, a);
-    monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); scatter_refresh(a); gtk_main();
+    monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); scatter_refresh(a);
+    if (start_usb && a->usb_receiver)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle), TRUE);
+    gtk_main();
     g_clear_pointer(&a->presets,g_key_file_unref);
     g_clear_pointer(&a->preset_signature,g_free);
     g_source_remove(decoder_timer);
@@ -5035,6 +5038,7 @@ int main(int argc, char **argv) {
     App a = {.standard = 0, .sr = 125000, .tune_fd = -1};
     char *source = NULL, *constellation = NULL, *renderer = NULL, *srt_url = NULL, *rtlsdr_serial = NULL;
     char *config = NULL, *standard = NULL, *fec = NULL, *gi = NULL, *iq_file = NULL;
+    gboolean start_usb = FALSE;
     gboolean print = FALSE, run = FALSE, scatter = FALSE, no_scatter = FALSE, version = FALSE;
     int sr = -1, plp = -2, status_port=-1;
     char *status_bind=NULL;
@@ -5046,6 +5050,7 @@ int main(int argc, char **argv) {
         {"renderer",0,0,G_OPTION_ARG_STRING,&renderer,"embedded, udp, srt, cvlc, vlc, ffplay, custom or mpegts","OUTPUT"},
         {"srt-output",0,0,G_OPTION_ARG_STRING,&srt_url,"Select gated 1920x1080 H.264/AAC SRT caller output","URL"},
         {"rtlsdr-serial",0,0,G_OPTION_ARG_STRING,&rtlsdr_serial,"Select RTL-SDR by USB serial number (implies --source rtlsdr)","SERIAL"},
+        {"usb",0,0,G_OPTION_ARG_NONE,&start_usb,"Enable the USB audio and TCI monitor when the window opens",NULL},
         {"iq-file",0,0,G_OPTION_ARG_FILENAME,&iq_file,"Play an IQ file in real time (with JSON metadata)","FILE"},
         {"constellation", 0, 0, G_OPTION_ARG_STRING, &constellation, "DVB-S2: QPSK or 8PSK", "MODULATION"},
         {"source", 0, 0, G_OPTION_ARG_STRING, &source, "linrad, hackrf, b210, sdriq, afedri, rtlsdr, fcdpp, lime, rsp1a, rsp1b, airspyhf, airspyr2, pluto, file"
@@ -5201,7 +5206,7 @@ int main(int argc, char **argv) {
             g_source_remove(output_timer);
             g_main_loop_unref(a.loop);
             video_view_destroy(&a.video_view);
-        } else gui(&a);
+        } else gui(&a, start_usb);
         g_source_remove(sigint); g_source_remove(sigterm);
     }
     status_http_stop(a.status_http);a.status_http=NULL;
