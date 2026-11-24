@@ -31,7 +31,7 @@ static inline int iq_shift_init(IQShift *s, double rate, double offset) {
 /* IQ components use native s16 units in float, preserving headroom until
  * after the channel filter. Phase is continuous across arbitrary read sizes. */
 static inline void iq_shift_process(IQShift *s, float *iq, size_t samples) {
-    if (s->offset == 0) return;
+    if (s->offset == 0 && s->re == 1 && s->im == 0) return;
     double re=s->re, im=s->im;
     for (size_t n=0; n<samples; ++n) {
         double i=iq[2*n], q=iq[2*n+1];

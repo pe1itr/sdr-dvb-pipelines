@@ -48,6 +48,8 @@ def main():
     cpp = {"dvbt2_backend", "leansdr_backend", "ldpc_pool"}
     gui_sources = [f"src/{name}.{'cc' if name in cpp else 'c'}" for name in gui]
     gui_sources += ["third_party/leansdr/src/apps/leandvb.cc"]
+    moon_sources = ["components/moon/moon.c", "third_party/astronomy/astronomy.c"]
+    gui_sources += moon_sources
     gui_sources += [str(p) for p in Path("components/bonding/src").glob("*.c")]
     gui_sources += [str(p) for p in Path("components/dvbt/src").glob("*.c") if p.name != "main.c"]
     gui_sources += [str(p) for p in Path("components/dvbt2/src").rglob("*.cpp") if p.name != "t2gen.cpp"]
@@ -59,6 +61,8 @@ def main():
         "sdr_to_stdout": [f"src/{s}.c" for s in ["sdr_to_stdout", "afedri", "lime_rx", "pluto_rx", "iq_output", "iq_record", "iq_bandfilter", "iq_monitor", "usb_tap"]] + ["src/win32/funcube.c"],
         "ldpc_tool": ["third_party/ldpc/ldpc_tool.cc", "third_party/ldpc/tables_handler.cc"],
     }
+    for program in ("iq_file_to_stdout", "linrad_udp_to_stdout", "sdr_to_stdout"):
+        programs[program] += moon_sources
     dab_sources = [f"components/dab/src/{name}.cpp" for name in
                    "libdxdabsdr dab_detector decoder_backend candidate_fic fic_identity_accumulator channel_filter mot_slideshow dynamic_label dx_msc dx_pad dab_plus_radio".split()]
     dab_dsp = ["components/dvbt2/src/dsp/resampler.cpp", "components/dvbt2/src/dsp/dsp_compat.cpp"]

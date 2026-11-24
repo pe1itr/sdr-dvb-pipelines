@@ -1,0 +1,28 @@
+Openstaande issues: mode-instellingen
+Vastgelegd: 2026-11-10, op verzoek van de gebruiker.
+Status van alle drie: open / uitgesteld. Alleen vastleggen; nog niet uitvoeren.
+De meldingen hieronder zijn gebruikersobservaties; oorzaken zijn niet onderzocht.
+
+ISSUE MODE-001 — Instellingen per mode opschonen
+Melding: Bij DAB staan in het mode-instellingenvenster ook zaken van DVB-T2.
+Gewenst: Alleen instellingen tonen die bij de gekozen mode horen, naast de
+gedeelde instellingen die daarvoor relevant zijn.
+Later controleren: DAB en DVB-T2 afzonderlijk en na wisselen van mode.
+
+ISSUE MODE-002 — Mode-instellingenvenster minder hoog en beter uitlijnen
+Melding: Het mode-instellingenvenster is soms te hoog.
+Gewenst: Instellingen meer in de breedte verdelen en labels en bedieningselementen
+netjes uitlijnen, zodat het venster beter op het scherm past.
+Later controleren: Bereikbaarheid van alle instellingen en knoppen bij de
+verschillende modes, schermformaten en schermschaling.
+
+ISSUE MODE-003 — Antenneweergave en layout na wisselen DVB-T2 naar DAB
+Melding: Met de B210-compatibele Kintex-7 werd van DVB-T2 naar DAB gewisseld.
+Het venster toonde de antennestand RX1/TX1, terwijl volgens de gebruiker RX1
+actief was. Later opnieuw openen toonde wel de DAB-layout. Dit was verwarrend.
+Gewenst: Direct na de modewissel de juiste layout en een antenneweergave die
+overeenkomt met de actieve instelling, zonder het venster opnieuw te openen.
+Later onderzoeken: Modewissel, verversing van het venster en samenhang tussen
+getoonde, opgeslagen en werkelijk toegepaste antennekeuze. Nog niet vastgesteld
+of alleen de weergave achterbleef of ook de toegepaste instelling afweek.
+Antennelabels hierboven zijn overgenomen uit de gebruikersmelding.

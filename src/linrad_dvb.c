@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../components/moon/moon.h"
 #include <gtk/gtk.h>
 #include "linrad_build_info.h"
 #define LINRAD_BUILD_DATE __DATE__ " " __TIME__
@@ -59,6 +60,7 @@
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
        SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13, SOURCE_KNUCKER = 14 };
 
+typedef struct { GtkWidget *locator, *azimuth, *elevation, *distance, *doppler; } MoonStationRow;
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
     GKeyFile *config;
@@ -112,6 +114,11 @@ typedef struct {
     GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *gi_label, *constellation_box;
     GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
     GtkWidget *record_button, *reception_button, *reception_dialog;
+    GtkWidget *moon_item, *moon_dialog, *moon_dx, *moon_enable, *moon_shift, *moon_time, *moon_echo, *moon_mixer, *moon_cfo, *moon_hint;
+    MoonStationRow moon_rows[2];
+    double moon_sample_utc, moon_applied_offset;
+    gint64 moon_report_time, moon_view_tick;
+    char moon_rx[9];
     GtkWidget *log_menu, *log_popover, *application_log_item;
     GtkWidget *status_endpoint_item, *status_endpoint_dialog, *status_endpoint_enabled;
     GtkWidget *status_endpoint_bind, *status_endpoint_port, *status_endpoint_message;
@@ -312,7 +319,48 @@ static int knucker_band_index(int hz) {
     return -1;
 }
 
+static gboolean moon_enabled(App *a) {
+    return a->config && a->standard<4 && !knucker_source(a) &&
+        g_key_file_get_boolean(a->config,"moon","enabled",NULL);
+}
+
+static double moon_center(App *a) {
+    const char *section=sources[a->source];
+    return g_key_file_get_double(a->config,section,"frequency",NULL) +
+        (hardware_source(a) ? g_key_file_get_double(a->config,section,"lo_offset",NULL) : 0);
+}
+
+static double configured_channel_hz(App *a) {
+    if (!a->config || !g_key_file_has_key(a->config,sources[a->source],"frequency",NULL)) return NAN;
+    return moon_center(a)+receiver_offset(a);
+}
+
+static double effective_offset(App *a) {
+    if (a->running && moon_enabled(a) && a->moon_report_time) return a->moon_applied_offset;
+    return receiver_offset(a);
+}
+
+static const char *moon_problem(App *a) {
+    char *rx=g_key_file_get_string(a->config,"logging","my_locator",NULL);
+    char *dx=g_key_file_get_string(a->config,"moon","dx_locator",NULL);
+    gboolean valid=maidenhead_center(rx,NULL,NULL) && maidenhead_center(dx,NULL,NULL);
+    g_free(rx); g_free(dx);
+    if (!valid) return "Set My Locator and the DX locator under Log before enabling moon tracking.";
+    double tx=configured_channel_hz(a);
+    double center=moon_center(a);
+    if (!(tx>0 && tx<=1e12 && center>0 && isfinite(center)))
+        return "Set the receiver RF frequency in Input or select an IQ file with a known center frequency.";
+    double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
+    if (!rx_bandwidth_fits(sources[a->source],rate,tx-center,channel_bandwidth(a)))
+        return "The EME channel is outside the IQ band. Set the input center near the DX transmit frequency.";
+    return NULL;
+}
+
 static const char *receiver_offset_problem(App *a) {
+    if (moon_enabled(a)) {
+        const char *issue=moon_problem(a);
+        if (issue) return issue;
+    }
     if (knucker_source(a)) {
         char *program=g_key_file_get_string(a->config,"paths","knucker",NULL);
         gboolean empty=!program || !*program;
@@ -486,7 +534,7 @@ static void build_iq_stages(App *a) {
         char *resolved = *path ? g_canonicalize_filename(path, a->directory) : g_strdup("");
         add(s, "--in"); add(s, resolved);
         add_number(s, "--sample-rate", sample_rate);
-        if (receiver_offset(a)!=0) {
+        if (!moon_enabled(a) && receiver_offset(a)!=0) {
             char value[G_ASCII_DTOSTR_BUF_SIZE];
             add(s,"--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
         }
@@ -496,7 +544,7 @@ static void build_iq_stages(App *a) {
         g_free(path); g_free(resolved); g_free(input_format);
     } else if (!a->source) {
     s = new_stage(a, "linrad");
-    options(a, s, "linrad", "args", "--ip --port --skip --u8 --help -h --sample-rate --filter-bandwidth --control-stdin");
+    options(a, s, "linrad", "args", "--ip --port --skip --u8 --help -h --sample-rate --filter-bandwidth --control-stdin --moon-track");
     add(s, "--ip"); add(s, ip);
     add_number(s, "--port", integer_setting(a, "linrad", "port", 1, 65535));
     add_number(s, "--skip", integer_setting(a, "linrad", "header_bytes", 0, 65534));
@@ -524,7 +572,7 @@ static void build_iq_stages(App *a) {
         add_number(s, "--sample-rate", sample_rate);
         {
             char value[G_ASCII_DTOSTR_BUF_SIZE];
-            if (receiver_offset(a) != 0) {
+            if (!moon_enabled(a) && receiver_offset(a) != 0) {
                 add(s, "--receiver-offset"); add(s,g_ascii_dtostr(value,sizeof(value),receiver_offset(a)));
             }
             add(s, "--channel-bandwidth"); add(s,g_ascii_dtostr(value,sizeof(value),channel_bandwidth(a)));
@@ -546,6 +594,13 @@ static void build_iq_stages(App *a) {
             char *value = setting(a, section, a->source == SOURCE_AFEDRI ? net_keys[i] : keys[i]);
             add(s, a->source == SOURCE_AFEDRI ? net_flags[i] : flags[i]); add(s, value); g_free(value);
         }
+    }
+    if (moon_enabled(a)) {
+        char *rx=setting(a,"logging","my_locator"), *dx=setting(a,"moon","dx_locator");
+        add(s,"--moon-track");
+        g_ptr_array_add(s->args,g_strdup_printf("%s,%s,%.0f,%.0f,%.0f",rx,dx,
+            configured_channel_hz(a),moon_center(a),ceil(channel_bandwidth(a))));
+        g_free(rx); g_free(dx);
     }
     const char *filter_section = sources[a->source];
     if (g_key_file_get_boolean(a->config, filter_section, "filter_enabled", NULL)) {
@@ -899,6 +954,26 @@ static void record_log(App *a, const char *text, size_t length) {
             }
             if (a->running && !a->stopping && sdr_rx_status_parse(line,&a->sdr_status))
                 a->sdr_status_time=g_get_monotonic_time();
+            if (a->running && !a->stopping) {
+                const char *marker="[moon] sample_utc=";
+                if (moon_enabled(a) && g_str_has_prefix(line,marker)) {
+                    char *end;
+                    double utc=g_ascii_strtod(line+strlen(marker),&end);
+                    const char *field=strstr(end," offset=");
+                    if (field) {
+                        double offset=g_ascii_strtod(field+8,&end);
+                        if (utc>0 && end!=field+8 && isfinite(offset)) {
+                            a->moon_sample_utc=utc; a->moon_applied_offset=offset;
+                            a->moon_report_time=g_get_monotonic_time();
+                            if (a->frequency_display) {
+                                char label[64]; g_snprintf(label,sizeof(label),"%.9f MHz",(moon_center(a)+offset)/1e6);
+                                gtk_label_set_text(GTK_LABEL(a->frequency_display),label);
+                            }
+                        }
+                    }
+                } else if (a->source==SOURCE_FILE && g_str_has_prefix(line,"[iq-file] sample_utc="))
+                    a->moon_sample_utc=g_ascii_strtod(line+strlen("[iq-file] sample_utc="),NULL);
+            }
             if (g_str_has_prefix(line, "[iq-record] ")) {
                 a->recording = a->running && !a->stopping && g_str_has_prefix(line, "[iq-record] started ");
                 a->record_pending = FALSE;
@@ -1020,6 +1095,7 @@ static void power_refresh(App *a) {
 static void presets_refresh(App *a);
 static void preset_apply(App *a, int index);
 static void start_pipeline(App *a);
+static void tuning_refresh(App *a);
 static void finish_if_stopped(App *a) {
     if (!a->stopping || a->kill_timer) return;
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
@@ -1028,6 +1104,7 @@ static void finish_if_stopped(App *a) {
     if (a->video_view.active) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
+    if (moon_enabled(a)) tuning_refresh(a);
     a->bond_detected=a->bond_active=a->bond_pair=FALSE;bonding_refresh(a);
     if (a->bond_control) {g_unlink(a->bond_control);g_clear_pointer(&a->bond_control,g_free);}
     a->recording = a->record_pending = FALSE;
@@ -1173,11 +1250,25 @@ static void start_pipeline(App *a) {
         return;
     }
     a->replay_eof=FALSE;
+    double first_sample_utc=0;
     if (a->source==SOURCE_FILE) {
         char *path=setting(a,"file","path"), *fmt=setting(a,"file","input_format");
         char *resolved=g_canonicalize_filename(path,a->directory);
         GError *error=NULL; guint64 samples;
         gboolean valid=*path && iq_file_validate(resolved,fmt,integer_setting(a,"file","header_bytes",0,100000000),&samples,&error);
+        if (valid) {
+            gboolean tracking=moon_enabled(a);
+            IQFileInfo info;
+            if (iq_file_read_info(resolved,&info,tracking ? &error : NULL)) {
+                first_sample_utc=info.capture_utc_us/1e6;
+                iq_file_info_clear(&info);
+            }
+            if (tracking && !first_sample_utc) {
+                valid=FALSE;
+                if (!error) g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,
+                    "Replay correction needs sample UTC. Turn off full Doppler to view predictions for current UTC.");
+            }
+        }
         g_free(path); g_free(fmt); g_free(resolved);
         if (!valid) { a->exit_code=1; status(a,error ? error->message : "Select an IQ file in Input first"); g_clear_error(&error); return; }
     }
@@ -1277,7 +1368,13 @@ static void start_pipeline(App *a) {
     a->knucker_fft[0]=a->knucker_constellation[0]=0;
     a->rtlsdr_readback_hz = 0;
     a->sdr_status=(SdrRxStatus){0};a->sdr_status_time=0;a->record_log_used=0;
+    a->moon_sample_utc=first_sample_utc; a->moon_report_time=0;
+    if (moon_enabled(a)) {
+        char *rx=setting(a,"logging","my_locator");
+        g_strlcpy(a->moon_rx,rx,sizeof(a->moon_rx)); g_free(rx);
+    }
     a->running = TRUE;
+    if (moon_enabled(a)) tuning_refresh(a);
     if (a->controls) {
         gtk_widget_set_sensitive(a->controls, FALSE);
         gtk_widget_set_sensitive(a->hardware, FALSE);
@@ -1385,7 +1482,7 @@ static void tuning_changed(GtkWidget *widget, gpointer data);
 
 static void tuning_refresh(App *a) {
     if (!a->frequency_display) return;
-    gtk_widget_set_sensitive(a->frequency_button, hardware_source(a) && !a->stopping);
+    gtk_widget_set_sensitive(a->frequency_button, hardware_source(a) && !a->stopping && !(a->running && moon_enabled(a)));
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
         char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
@@ -1403,6 +1500,13 @@ static void tuning_refresh(App *a) {
     g_signal_handlers_block_by_func(a->receiver_offset_box, tuning_changed, a);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),isfinite(rx_offset) ? rx_offset/1000.0 : 0);
     g_signal_handlers_unblock_by_func(a->receiver_offset_box, tuning_changed, a);
+    if (a->running && moon_enabled(a)) {
+        gtk_widget_set_sensitive(a->offset_box,FALSE);
+        gtk_widget_set_sensitive(a->receiver_offset_box,FALSE);
+        gtk_widget_set_sensitive(a->step_box,FALSE);
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Moon tracker selects the echo digitally. The IQ center stays fixed.");
+        return;
+    }
     if (a->standard==4) {
         int channel=dab_channel(a);
         char *label=dab_free_tuning(a) ? g_strdup_printf("%.6f MHz",dab_frequency(a)/1e6) :
@@ -1459,7 +1563,7 @@ static void tuning_refresh(App *a) {
 static void tuning_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     if (!hardware_source(a) && !(a->source==SOURCE_FILE && widget==a->receiver_offset_box)) return;
-    if (widget == a->receiver_offset_box && a->running) return;
+    if (a->running && (widget == a->receiver_offset_box || moon_enabled(a))) return;
     const char *section = sources[a->source];
     g_key_file_set_double(a->config,section,"receiver_offset",
         gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->receiver_offset_box))*1000.0);
@@ -1480,7 +1584,7 @@ static void file_controls_refresh(App *a);
 /* Shared by arrow tuning and direct frequency entry. Only publish the new
  * setting after the existing live control pipe accepted the command. */
 static gboolean tune_frequency(App *a, double next) {
-    if (!hardware_source(a) || a->stopping) return FALSE;
+    if (!hardware_source(a) || a->stopping || (a->running && moon_enabled(a))) return FALSE;
     const char *section = sources[a->source];
     next=round(next);
     if (a->standard==4) {
@@ -1759,7 +1863,7 @@ static void save_screenshot(App *a) {
     double frequency = g_key_file_get_double(a->config, section, "frequency", NULL);
     if (hardware_source(a))
         frequency += g_key_file_get_double(a->config, section, "lo_offset", NULL);
-    frequency += receiver_offset(a);
+    frequency += effective_offset(a);
     char khz[G_ASCII_DTOSTR_BUF_SIZE];
     g_ascii_formatd(khz, sizeof(khz), "%.0f", frequency / 1e3);
     char *name = g_strdup_printf("linrad-dvb-%s-%s-%s%d-%skHz.png", timestamp,
@@ -1997,7 +2101,7 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
         g_strlcpy(service,ensemble,sizeof(service));provider[0]=0;
     }
     const char *source=sources[a->source];
-    double hz=g_key_file_get_double(a->config,source,"frequency",NULL)+receiver_offset(a);
+    double hz=g_key_file_get_double(a->config,source,"frequency",NULL)+effective_offset(a);
     if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
     if (a->standard==4) hz=dab_frequency(a);
     g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
@@ -2769,15 +2873,18 @@ static gboolean decoder_tick(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static void moon_view_refresh(App *a);
 static gboolean monitor_tick(gpointer data) {
     App *a = data;
+    if (a->moon_dialog && gtk_widget_get_visible(a->moon_dialog) &&
+        g_get_monotonic_time()-a->moon_view_tick>=G_USEC_PER_SEC) moon_view_refresh(a);
     if (a->replay_wait_until) replay_countdown_refresh(a);
     presets_refresh(a);
     const char *section = sources[a->source];
     a->iq_view.active = !knucker_source(a) && a->running && !a->stopping;
     a->iq_view.bandwidth = g_key_file_get_double(a->config, section, "filter_bandwidth", NULL);
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
-    a->iq_view.receiver_offset = receiver_offset(a);
+    a->iq_view.receiver_offset = effective_offset(a);
     double center = g_key_file_get_double(a->config, section, "frequency", NULL)
         + g_key_file_get_double(a->config, section, "lo_offset", NULL);
     double rate = g_key_file_get_double(a->config, section, "sample_rate", NULL);
@@ -3822,6 +3929,158 @@ static void show_status_endpoint(GtkWidget *widget,gpointer data) {
     gtk_window_present(GTK_WINDOW(a->status_endpoint_dialog));
 }
 
+static double file_epoch(App *a) {
+    char *path=setting(a,"file","path"), *full=g_canonicalize_filename(path,a->directory);
+    IQFileInfo info; double utc=0;
+    if (*path && iq_file_read_info(full,&info,NULL)) {
+        utc=info.capture_utc_us/1e6; iq_file_info_clear(&info);
+    }
+    g_free(path); g_free(full); return utc;
+}
+
+static GtkWidget *moon_cell(GtkWidget *grid, const char *text, int col, int row, int span, float align) {
+    GtkWidget *label=gtk_label_new(text);
+    gtk_label_set_xalign(GTK_LABEL(label),align);
+    gtk_grid_attach(GTK_GRID(grid),label,col,row,span,1);
+    return label;
+}
+
+static void moon_number(GtkWidget *label, const char *format, double value) {
+    char text[64]="—";
+    if (isfinite(value)) g_snprintf(text,sizeof(text),format,value);
+    gtk_label_set_text(GTK_LABEL(label),text);
+}
+
+static void moon_station_refresh(MoonStationRow *row, const char *locator, const MoonLeg *leg, double rf) {
+    gtk_label_set_text(GTK_LABEL(row->locator),locator && *locator ? locator : "—");
+    moon_number(row->azimuth,"%.2f°",leg->azimuth);
+    moon_number(row->elevation,"%+.2f°",leg->elevation);
+    moon_number(row->distance,"%.0f km",leg->distance_km);
+    moon_number(row->doppler,"%+.1f Hz",rf>0 ? leg->doppler : NAN);
+}
+
+static void moon_view_refresh(App *a) {
+    a->moon_view_tick=g_get_monotonic_time();
+    gboolean supported=a->standard<4 && !knucker_source(a);
+    gtk_widget_set_sensitive(a->moon_enable,!a->running && supported);
+    gtk_widget_set_sensitive(a->moon_dx,!a->running);
+    char *rx=g_key_file_get_string(a->config,"logging","my_locator",NULL);
+    if (a->running && moon_enabled(a)) { g_free(rx); rx=g_strdup(a->moon_rx); }
+    const char *dx=gtk_entry_get_text(GTK_ENTRY(a->moon_dx));
+    MoonSite r,d; MoonPrediction p;
+    double tx=configured_channel_hz(a);
+    double utc=g_get_real_time()/1e6;
+    const char *clock_label="";
+    if (a->source==SOURCE_FILE) {
+        double sample_utc=a->running ? a->moon_sample_utc : file_epoch(a);
+        if (sample_utc) {
+            utc=sample_utc;
+            clock_label=" · IQ sample time";
+        } else clock_label=" · current UTC (display only)";
+    } else if (a->running && moon_enabled(a) && a->moon_sample_utc) {
+        utc=a->moon_sample_utc;
+    }
+    gboolean have_rx=maidenhead_center(rx,&r.latitude,&r.longitude);
+    gboolean have_dx=maidenhead_center(dx,&d.latitude,&d.longitude);
+    gboolean ok=moon_predict(utc,tx>0 ? tx : 0,have_rx ? &r : NULL,have_dx ? &d : NULL,&p);
+    if (!ok) {
+        p.rx=p.dx=(MoonLeg){NAN,NAN,NAN,NAN};
+        p.doppler=NAN;
+    }
+    moon_station_refresh(&a->moon_rows[0],rx,&p.rx,tx);
+    moon_station_refresh(&a->moon_rows[1],dx,&p.dx,tx);
+    moon_number(a->moon_shift,"%+.1f Hz",tx>0 ? p.doppler : NAN);
+    moon_number(a->moon_echo,"%.9f MHz",tx>0 ? (tx+p.doppler)/1e6 : NAN);
+    gboolean mixing=a->running && moon_enabled(a) && a->moon_report_time &&
+        a->moon_view_tick-a->moon_report_time<3*G_USEC_PER_SEC;
+    moon_number(a->moon_mixer,"%+.1f Hz",mixing ? -a->moon_applied_offset : NAN);
+    DecoderStatus *s=&a->decoder_view.status;
+    gboolean locked=a->running && !a->stopping && supported && (s->locks & DECODER_OFDM) &&
+        a->decoder_view.status_time && a->moon_view_tick-a->decoder_view.status_time<3*G_USEC_PER_SEC;
+    moon_number(a->moon_cfo,"%+.1f Hz",locked ? s->cfo_hz+
+        (a->standard==2 ? s->dvbt_bin_shift*round(a->sr*8.0/7.0)/2048.0 : 0) : NAN);
+    GDateTime *time=g_date_time_new_from_unix_utc((gint64)utc);
+    char *stamp=g_date_time_format(time,"%Y-%m-%d %H:%M:%S UTC");
+    char *when=g_strconcat(stamp,clock_label,NULL);
+    gtk_label_set_text(GTK_LABEL(a->moon_time),when);
+    gtk_label_set_text(GTK_LABEL(a->moon_hint),!have_rx ? "Set My Locator under Log → My Station." :
+        !have_dx ? "Enter a valid DX locator." : !(tx>0) ? "Set the receive RF frequency in Input to calculate Doppler." :
+        !ok ? "Moon prediction unavailable." : "");
+    g_free(when); g_free(stamp); g_date_time_unref(time); g_free(rx);
+}
+
+static void moon_settings_changed(GtkWidget *widget,gpointer data) {
+    (void)widget; App *a=data;
+    if (a->running) return;
+    char *dx=g_ascii_strup(gtk_entry_get_text(GTK_ENTRY(a->moon_dx)),-1);
+    g_key_file_set_string(a->config,"moon","dx_locator",g_strstrip(dx));
+    g_free(dx);
+    g_key_file_set_boolean(a->config,"moon","enabled",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->moon_enable)));
+    moon_view_refresh(a); tuning_refresh(a); refresh_preview(a);
+}
+
+static void show_moon(GtkWidget *widget,gpointer data) {
+    (void)widget; App *a=data;
+    gtk_popover_popdown(GTK_POPOVER(a->log_popover));
+    if (!a->moon_dialog) {
+        a->moon_dialog=gtk_dialog_new_with_buttons("Astronomical data",GTK_WINDOW(a->window),
+            GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);
+        GtkWidget *grid=gtk_grid_new();
+        gtk_container_set_border_width(GTK_CONTAINER(grid),14);
+        gtk_grid_set_row_spacing(GTK_GRID(grid),8); gtk_grid_set_column_spacing(GTK_GRID(grid),12);
+        gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(a->moon_dialog))),grid);
+        gtk_grid_attach(GTK_GRID(grid),gtk_label_new("DX locator (TX)"),0,0,1,1);
+        a->moon_dx=gtk_entry_new(); gtk_entry_set_max_length(GTK_ENTRY(a->moon_dx),8);
+        char *dx=g_key_file_get_string(a->config,"moon","dx_locator",NULL);
+        gtk_entry_set_text(GTK_ENTRY(a->moon_dx),dx ? dx : ""); g_free(dx);
+        gtk_grid_attach(GTK_GRID(grid),a->moon_dx,1,0,1,1);
+        a->moon_enable=gtk_check_button_new_with_label("Apply full Doppler to DX grid at reception start");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->moon_enable),g_key_file_get_boolean(a->config,"moon","enabled",NULL));
+        gtk_grid_attach(GTK_GRID(grid),a->moon_enable,0,1,2,1);
+        GtkWidget *table=gtk_grid_new();
+        gtk_grid_set_column_spacing(GTK_GRID(table),16);
+        gtk_grid_set_row_spacing(GTK_GRID(table),8);
+        const char *headers[]={"Station","Locator","Azimuth","Elevation","Moon distance","Doppler shift"};
+        for (int col=0;col<6;col++)
+            moon_cell(table,headers[col],col,0,1,col<2 ? 0 : 1);
+        for (int i=0;i<2;i++) {
+            MoonStationRow *row=&a->moon_rows[i];
+            moon_cell(table,i==0 ? "RX" : "DX",0,i+1,1,0);
+            row->locator=moon_cell(table,"—",1,i+1,1,0);
+            row->azimuth=moon_cell(table,"—",2,i+1,1,1);
+            row->elevation=moon_cell(table,"—",3,i+1,1,1);
+            row->distance=moon_cell(table,"—",4,i+1,1,1);
+            gtk_widget_set_tooltip_text(row->distance,"Distance from this station to the centre of the Moon");
+            row->doppler=moon_cell(table,"—",5,i+1,1,1);
+        }
+        gtk_grid_attach(GTK_GRID(table),gtk_separator_new(GTK_ORIENTATION_HORIZONTAL),0,3,6,1);
+        moon_cell(table,"Total Doppler shift (DX + RX)",0,4,5,0);
+        a->moon_shift=moon_cell(table,"—",5,4,1,1);
+        gtk_label_set_selectable(GTK_LABEL(a->moon_shift),TRUE);
+        a->moon_time=moon_cell(table,"",0,5,6,0);
+        moon_cell(table,"Echo RF",0,6,3,0);
+        a->moon_echo=moon_cell(table,"—",3,6,3,1);
+        moon_cell(table,"Applied mixer",0,7,3,0);
+        a->moon_mixer=moon_cell(table,"—",3,7,3,1);
+        moon_cell(table,"Measured decoder CFO",0,8,3,0);
+        a->moon_cfo=moon_cell(table,"—",3,8,3,1);
+        a->moon_hint=moon_cell(table,"",0,9,6,0);
+        GtkWidget *results=gtk_scrolled_window_new(NULL,NULL);
+        gtk_scrolled_window_set_min_content_width(GTK_SCROLLED_WINDOW(results),560);
+        gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(results),270);
+        gtk_widget_set_hexpand(results,TRUE);
+        gtk_widget_set_vexpand(results,TRUE);
+        gtk_container_add(GTK_CONTAINER(results),table);
+        gtk_grid_attach(GTK_GRID(grid),results,0,2,2,1);
+        g_signal_connect(a->moon_dx,"changed",G_CALLBACK(moon_settings_changed),a);
+        g_signal_connect(a->moon_enable,"toggled",G_CALLBACK(moon_settings_changed),a);
+        g_signal_connect(a->moon_dialog,"response",G_CALLBACK(hide_dialog),a);
+        g_signal_connect(a->moon_dialog,"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+    }
+    moon_view_refresh(a);
+    gtk_widget_show_all(a->moon_dialog); gtk_window_present(GTK_WINDOW(a->moon_dialog));
+}
+
 static void log_menu_selected(GtkWidget *widget, gpointer data) {
     App *a=data;
     gtk_popover_popdown(GTK_POPOVER(a->log_popover));
@@ -4390,6 +4649,10 @@ static void gui(App *a, gboolean start_usb) {
     gtk_box_pack_start(GTK_BOX(log_options),a->bearing_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->bearing_item,"Distance and antenna bearing from My Locator");
     g_signal_connect(a->bearing_item,"clicked",G_CALLBACK(log_menu_selected),a);
+    a->moon_item=gtk_model_button_new();
+    g_object_set(a->moon_item,"text","Astronomical data",NULL);
+    gtk_box_pack_start(GTK_BOX(log_options),a->moon_item,FALSE,FALSE,0);
+    g_signal_connect(a->moon_item,"clicked",G_CALLBACK(show_moon),a);
     gtk_widget_show_all(log_options);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(a->log_menu),a->log_popover);
     gtk_box_pack_start(GTK_BOX(menu), about_item, FALSE, FALSE, 0);
@@ -4722,6 +4985,9 @@ static void preset_apply(App *a,int index) {
         status(a,error ? error->message : "This preset is empty");
         g_clear_error(&error);g_free(data);g_key_file_unref(saved);return;
     }
+    /* Presets written before moon tracking selected the uncorrected channel. */
+    if (!g_key_file_has_group(saved,"moon"))
+        g_key_file_remove_group(a->config,"moon",NULL);
     /* Keep global settings current; replace the receiver's saved groups. */
     gsize count;char **groups=g_key_file_get_groups(saved,&count);
     for (gsize i=0;i<count;++i) {
@@ -4756,6 +5022,9 @@ static void preset_apply(App *a,int index) {
     signal_meter_reset(&a->iq_view.meter);
     char *program=setting(a,"ffplay","gpu_program"),*device=setting(a,"ffplay","gpu_device");
     video_view_set_gpu_player(&a->video_view,program,device);g_free(program);g_free(device);
+    if (a->moon_dialog) {
+        gtk_widget_destroy(a->moon_dialog); a->moon_dialog=NULL;
+    }
     a->exit_code=0;refresh_preview(a);monitor_refresh(a);
     g_free(a->preset_signature);a->preset_signature=preset_snapshot(a);a->active_preset=index;
     presets_refresh(a);
@@ -4868,14 +5137,6 @@ static void add_measurement_time(json_object *object, App *a, gint64 stamp, gint
         a->running && !a->stopping && isfinite(age) && age < max_age_ms));
 }
 
-static double configured_channel_hz(App *a) {
-    const char *section = sources[a->source];
-    if (!a->config || !g_key_file_has_key(a->config,section,"frequency",NULL)) return NAN;
-    double hz = g_key_file_get_double(a->config,section,"frequency",NULL) + receiver_offset(a);
-    if (hardware_source(a)) hz += g_key_file_get_double(a->config,section,"lo_offset",NULL);
-    return hz;
-}
-
 static char *network_constellation(gpointer data) {
     App *a = data;
     DecoderView *v = &a->decoder_view;
@@ -4927,6 +5188,14 @@ static char *network_status(gpointer data) {
     NUM(root,"telemetry_age_ms",age);
     BOOL(root,"telemetry_fresh",a->running && !a->stopping && isfinite(age) && age<2000);
     NUM(root,"configured_frequency_hz",configured_channel_hz(a));
+    if (a->config && moon_enabled(a) && a->running && a->moon_report_time) {
+        json_object *m=json_object_new_object();
+        NUM(m,"sample_utc",a->moon_sample_utc);
+        NUM(m,"echo_rf_hz",moon_center(a)+a->moon_applied_offset);
+        NUM(m,"predicted_doppler_hz",moon_center(a)+a->moon_applied_offset-configured_channel_hz(a));
+        NUM(m,"mixer_hz",-a->moon_applied_offset);
+        json_object_object_add(root,"moon",m);
+    }
     if (a->source == SOURCE_RTLSDR && a->config) {
         json_object *tuning = json_object_new_object();
         double set_hz = g_key_file_has_key(a->config,"rtlsdr","frequency",NULL)

@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../components/moon/moon.h"
 #include "iq_file.h"
 #include <glib/gstdio.h>
 #include "iq_bandfilter.h"
@@ -79,12 +80,14 @@ int main(int argc, char **argv) {
     gint64 start_at=0;
     int header=0; Replay r={0};
     double offset=0;
+    char *moon_spec=NULL; MoonTracker moon={0};
     GOptionEntry entries[]={
         {"in",0,0,G_OPTION_ARG_FILENAME,&path,"IQ file","FILE"},
         {"start-at-us",0,0,G_OPTION_ARG_INT64,&start_at,"Start at this Unix timestamp in microseconds","US"},
         {"sample-rate",0,0,G_OPTION_ARG_INT,&r.rate,"Samples per second","HZ"},
         {"input-format",0,0,G_OPTION_ARG_STRING,&format,"s16, u8 or cf32 (little-endian IQ)","FORMAT"},
         {"header-bytes",0,0,G_OPTION_ARG_INT,&header,"Bytes to skip at the start","N"},
+        {"moon-track",0,0,G_OPTION_ARG_STRING,&moon_spec,"EME RX grid,DX grid,TX Hz,IQ center Hz,width Hz","SPEC"},
         {"receiver-offset",0,0,G_OPTION_ARG_DOUBLE,&offset,"Channel offset from recording center","HZ"},
         {"filter-bandwidth",0,0,G_OPTION_ARG_DOUBLE,&r.bandwidth,"Total IQ bandwidth; 0=bypass","HZ"},
         {"control-stdin",0,0,G_OPTION_ARG_NONE,&r.control,"Live bandwidth commands on stdin",NULL}, {NULL}
@@ -105,6 +108,17 @@ int main(int argc, char **argv) {
     if (iq_shift_init(&r.shift,r.rate,offset) || (offset && !iq_shift_fits(r.rate,offset,r.bandwidth))) {
         g_set_error_literal(&error,G_OPTION_ERROR,G_OPTION_ERROR_BAD_VALUE,"Receiver offset or filter exceeds recorded band"); goto invalid;
     }
+    if (!moon_tracker_parse(&moon,moon_spec)) return 2;
+    IQFileInfo info;
+    gint64 capture_us=0;
+    if (iq_file_read_info(path,&info,moon.tx ? &error : NULL)) {
+        capture_us=info.capture_utc_us;
+        iq_file_info_clear(&info);
+    } else if (moon.tx) goto invalid;
+    if (moon.tx && !capture_us) {
+        fprintf(stderr,"[moon] IQ file requires simulation_start_utc or a capture UTC in its JSON sidecar\n");
+        return 2;
+    }
     if (!iq_file_validate(path,format,header,&samples,&error)) goto invalid;
     FILE *file=g_fopen(path,"rb");
     if (!file || fseeko(file,header,SEEK_SET)) { perror("Open IQ file"); if (file) fclose(file); return 1; }
@@ -122,6 +136,7 @@ int main(int argc, char **argv) {
     size_t stride=u8 ? 2 : cf32 ? 8 : 4, chunk=CLAMP(r.rate/100,1,8192);
     uint8_t input[8192*8], converted[8192*4];
     float shifted[8192*2];
+    gint64 reported_second=-1;
     guint64 sent=0; int result=0;
     if (start_at) {
         if (!wait_until(&r,start_at,TRUE)) { result=1; }
@@ -146,7 +161,17 @@ int main(int argc, char **argv) {
         }
         if (!controls(&r)) { result=1; break; }
         iq_monitor_feed(out,count,u8,r.rate);
-        if (offset) {
+        double utc=capture_us/1e6+(double)sent/r.rate;
+        if (moon.tx && (!moon_tracker_update(&moon,&r.shift,r.rate,utc) ||
+            !iq_shift_fits(r.rate,r.shift.offset,r.bandwidth))) {
+            fprintf(stderr,"[iq-file] Moon tracking or filter outside recorded band\n");
+            result=1; break;
+        }
+        if (!moon.tx && capture_us && reported_second!=(gint64)(sent/r.rate)) {
+            reported_second=sent/r.rate;
+            fprintf(stderr,"[iq-file] sample_utc=%.6f\n",utc);
+        }
+        if (offset || moon.tx) {
             for (size_t i=0; i<count*2; ++i)
                 shifted[i]=u8 ? ((int)out[i]-128)*256 : (int16_t)(out[2*i] | (out[2*i+1]<<8));
             iq_shift_process(&r.shift,shifted,count);

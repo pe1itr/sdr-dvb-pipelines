@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../components/moon/moon.h"
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include "iq_bandfilter.h"
@@ -87,11 +88,13 @@ int main(int argc, char **argv) {
     int port = 50000, skip = 24, bufsize = 8192, u8 = 0, offset = 128, verbose = 0, record_stdout = 0;
     double scale = 256, gain = 1, sample_rate = 0, bandwidth = 0;
     int control_stdin = 0;
+    MoonTracker moon={0}; IQShift shift={.re=1};
     IQRecord capture = {0};
     TuneControl control = {.command=iq_record_command, .command_data=&capture};
     size_t limit = 0;
-    enum { IP = 256, PORT, SKIP, BUFSIZE, U8, SCALE, OFFSET, GAIN, MEASURE, RECORD, PREFIX, STDOUT, VERBOSE, SAMPLE_RATE, FILTER, CONTROL };
+    enum { IP = 256, PORT, SKIP, BUFSIZE, U8, SCALE, OFFSET, GAIN, MEASURE, RECORD, PREFIX, STDOUT, VERBOSE, SAMPLE_RATE, FILTER, CONTROL, MOON };
     const struct option opts[] = {
+        {"moon-track",1,NULL,MOON},
         {"sample-rate", 1, NULL, SAMPLE_RATE}, {"filter-bandwidth", 1, NULL, FILTER}, {"control-stdin", 0, NULL, CONTROL},
         {"ip", 1, NULL, IP}, {"port", 1, NULL, PORT}, {"skip", 1, NULL, SKIP},
         {"bufsize", 1, NULL, BUFSIZE}, {"u8", 0, NULL, U8}, {"scale", 1, NULL, SCALE},
@@ -103,6 +106,7 @@ int main(int argc, char **argv) {
     while ((c = getopt_long(argc, argv, "h", opts, NULL)) != -1) {
         switch (c) {
         case SAMPLE_RATE: sample_rate = number(optarg, 1, 100000000, 1); break;
+        case MOON: if (!moon_tracker_parse(&moon,optarg)) return 2; break;
         case FILTER: bandwidth = number(optarg, 0, 100000000, 1); break;
         case CONTROL: control_stdin = 1; break;
         case IP: ip = optarg; break;
@@ -146,7 +150,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Invalid arguments (skip must be smaller than bufsize; prefix must be a filename).\n");
         return 2;
     }
-    if ((bandwidth || control_stdin) && !iq_bandfilter_valid(sample_rate, bandwidth)) {
+    if ((bandwidth || control_stdin || moon.tx) && !iq_bandfilter_valid(sample_rate, bandwidth)) {
         fprintf(stderr, "IQ filtering requires --sample-rate and a valid width (0, or max(10, Fs/256)..0.95*Fs)\n"); return 2;
     }
     if (control_stdin) {
@@ -199,6 +203,7 @@ int main(int argc, char **argv) {
         if (record) fclose(record);
         g_free(packet); g_free(output); close(sock); return 1;
     }
+    float *moon_iq=moon.tx ? g_new(float,bufsize) : NULL;
     capture.rate = sample_rate;
     while (!stopping) {
         if (control_stdin) {
@@ -249,7 +254,19 @@ int main(int argc, char **argv) {
             }
         }
         iq_monitor_feed(output, out_n/(u8 ? 2 : 4), u8, sample_rate);
-        if (filter) iq_bandfilter_process(filter, output, out_n/(u8 ? 2 : 4), u8);
+        if (moon.tx) {
+            size_t count=n/4;
+            if (!moon_tracker_update(&moon,&shift,sample_rate,g_get_real_time()/1e6-count/sample_rate) ||
+                !iq_shift_fits(sample_rate,shift.offset,bandwidth)) {
+                fprintf(stderr,"[linrad] Moon tracking or filter outside IQ band\n");
+                result=1; break;
+            }
+            for (size_t j=0;j<count*2;++j)
+                moon_iq[j]=u8 ? ((int)output[j]-128)*256 : s16(output+2*j);
+            iq_shift_process(&shift,moon_iq,count);
+            iq_bandfilter_process_float(filter,moon_iq,count);
+            iq_shift_pack(moon_iq,output,count,u8);
+        } else if (filter) iq_bandfilter_process(filter, output, out_n/(u8 ? 2 : 4), u8);
         if (limit && !reported) {
             size_t chunk = MIN(out_n, out_target - out_measured) & ~(size_t)(u8 ? 1 : 3);
             measure(&output_stats, output, chunk, u8);
@@ -268,6 +285,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)packets, (unsigned long long)dropped,
                     (unsigned long long)input_bytes, (unsigned long long)output_bytes);
     }
+    g_free(moon_iq);
     iq_record_stop(&capture);
     if (record && fclose(record)) { perror("close recording"); result = 1; }
     fprintf(stderr, "[stop] pkts=%llu dropped=%llu in_bytes=%llu out_bytes=%llu\n",

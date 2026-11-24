@@ -6,6 +6,7 @@ typedef struct {
     char *path, *metadata_path;
     char format[8], standard[16], constellation[16], fec[16], gi[16];
     int sample_rate, header_bytes, symbol_rate;
+    gint64 capture_utc_us; /* UTC of the first IQ sample, zero when unknown. */
     double frequency;
     gboolean has_frequency, bonding;
 } IQFileInfo;

@@ -182,6 +182,62 @@ MER and a modulation/FEC reference threshold. Red is below 0 dB, orange is
 0–2 dB and green is at least 2 dB. It is an aid to tuning, not a calibrated
 guarantee of picture or audio; unsupported or unavailable values show `—`.
 
+### Moon tracking for EME reception
+
+Open **Log → Astronomical data**. Set your receiving locator under **Log → My Station**,
+enter the DX station's locator, then select
+**Apply full Doppler to DX grid at reception start**. Press **W** to save.
+The tracker uses the nominal tuned receive frequency, including any converter LO and
+receiver offset. IQ replay takes its center frequency from the recording metadata.
+Leave the SDR on a fixed center with the whole echo channel inside its usable band.
+For Linrad UDP, enter the actual RF center in Input. Include the converter LO in
+the SDR configuration when using an external converter.
+
+The station table shows geometric azimuth, elevation, distance to the lunar centre
+in kilometres and one-way Doppler for RX and DX. The total is the signed sum
+of the two Doppler contributions. Below it are the predicted echo RF, the applied mixer and the
+decoder's measured frequency error when locked. A positive predicted shift
+places the echo above the transmitter frequency. The IQ source mixes down by
+`TX RF + predicted Doppler − IQ center RF` before channel filtering, buffering
+and demodulation. Tracking takes over digital channel selection for that run.
+The spectrum and full-band IQ recorder still see the fixed input band.
+Tracking is available for software DVB reception and defaults to off.
+Stop reception to change tracker settings. The DVB-T pilot correction has its
+own switch in **Mode**.
+
+Predictions use Astronomy Engine v2.1.19, the Moon's centre and station positions
+at sea level. Live sources use host UTC at block reception. IQ replay uses capture
+UTC plus the sample index, including after playback stalls or scheduled starts.
+New recordings store `capture_start_unix_us` for the first block. Other recordings
+can supply an ISO 8601 `recorded_at_utc` with a timezone in their JSON sidecar.
+For older Linrad recordings the UTC in the filename approximates the first sample.
+For a file without sample UTC, the astronomical window uses current UTC to show
+both Moon positions and the predicted Doppler at the nominal receive frequency.
+This is a display prediction. Applying correction to replay requires sample UTC,
+a continuous recording, a known sample rate and its RF center.
+
+For propagation simulations, PySim should write the UTC instant represented by
+the **first output IQ sample** to the top-level `simulation_start_utc` in the
+sidecar, e.g. **echo.iq.json** next to **echo.iq**. Example for 35 kHz DVB-T:
+
+```json
+{
+  "simulation_start_utc": "2027-02-17T16:09:00.000000Z",
+  "sample_rate_hz": 175000,
+  "center_frequency_hz": 1299000000,
+  "format": "cs16_le",
+  "standard": "DVB-T",
+  "bandwidth_hz": 35000
+}
+```
+
+Write the actual output format, IQ center RF and sample rate. Both the
+astronomical display and the mixer use `simulation_start_utc + n / sample_rate_hz`
+for zero-based sample index `n`. This time takes precedence over recording
+timestamps. Include a timezone (prefer `Z`), with up to six fractional digits
+for microseconds. For a cropped or split file, advance its timestamp to the
+first sample retained in that file.
+
 ### DVB-T local pilot correction
 
 For the built-in DVB-T 2K QPSK receiver, **Mode → Local pilot correction**

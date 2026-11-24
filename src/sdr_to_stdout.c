@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include "../components/moon/moon.h"
 #include <SoapySDR/Device.h>
 #include <SoapySDR/Formats.h>
 #include <SoapySDR/Errors.h>
@@ -105,6 +106,7 @@ int main(int argc, char **argv) {
     double dab_if=0;
     const char *b210_port="", *lo_port="TRX1", *dab_state_dir="";
     B210Mixer mixer={0};
+    MoonTracker moon={0};
     IQRecord capture = {0};
     TuneControl control = {.command=iq_record_command, .command_data=&capture};
     for (int i = 1; i < argc; ++i) {
@@ -132,6 +134,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(key, "--args")) args = v;
         else if (!strcmp(key, "--images")) images = v;
         else if (!strcmp(key, "--antenna")) antenna = v;
+        else if (!strcmp(key, "--moon-track")) { if (!moon_tracker_parse(&moon,v)) return 2; }
         else if (!strcmp(key, "--format")) format = v;
         else if (!strcmp(key, "--receiver-offset")) receiver_offset = number(v);
         else if (!strcmp(key, "--channel-bandwidth")) channel_bandwidth = number(v);
@@ -224,8 +227,8 @@ int main(int argc, char **argv) {
     /* About 5 ms of Afedri IQ per DSP/audio block, at most one FIR block.
      * A 16k FFT for each 256-sample datagram otherwise costs ~20x as much. */
     size_t block_samples = lime ? (size_t)fmax(256, fmin(65536, ceil(rate/100/256)*256)) : fcdpp ? 2048 : afedri ? (size_t)fmax(256, fmin(8192, ceil(rate/200/256)*256)) : float_stream ? 2048 : rtlsdr ? 8192 : 65536;
-    float *shifted=receiver_offset != 0 ? malloc(block_samples*2*sizeof(float)) : NULL;
-    if (receiver_offset != 0 && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
+    float *shifted=(receiver_offset != 0 || moon.tx) ? malloc(block_samples*2*sizeof(float)) : NULL;
+    if ((receiver_offset != 0 || moon.tx) && !shifted) { fprintf(stderr,"Cannot allocate DVB offset buffer\n"); goto done; }
     if (pluto) {
         const char *uri = !strncmp(args,"uri=",4) ? args+4 : args;
         PlutoConfig config = {.pluto_uri=uri, .ref="internal", .rate=rate,
@@ -470,6 +473,7 @@ int main(int argc, char **argv) {
                 U(uhd_usrp_set_rx_freq(usrp, &tune, channel, &tuned));
             }
             if (dab_lo && b210_mixer_tune(&mixer,usrp,requested,dab_if)) goto done;
+            if (moon.tx) { moon.center += requested-freq; moon.next_update=-INFINITY; }
             freq = requested;
             if (*dab_state_dir && control.tune_generation) {
                 dab_generation=control.tune_generation;
@@ -606,7 +610,11 @@ int main(int argc, char **argv) {
         iq_monitor_feed(out, got, u8, rate);
         rx_timing.status.monitor_max_ms=fmax(rx_timing.status.monitor_max_ms,
             (monotonic_seconds()-monitor_start)*1000);
-        if (receiver_offset != 0) {
+        if (moon.tx && (!moon_tracker_update(&moon,&shift,rate,g_get_real_time()/1e6-got/rate) ||
+            !rx_bandwidth_fits(source,rate,shift.offset,fmax(channel_bandwidth,bandwidth)))) {
+            fprintf(stderr,"[moon] Cannot track within the selected SDR bandwidth\n"); goto done;
+        }
+        if (shifted) {
             /* Raw spectrum/audio/recording are tapped above. Preserve float
              * headroom through mixing + filtering; quantize only at output. */
             for (size_t n=0;n<got*2;++n)

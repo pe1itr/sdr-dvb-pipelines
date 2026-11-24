@@ -102,7 +102,13 @@ $(BUILD_DIR)/components/tsscatterfix/%.o: $(SCATTER_DIR)/src/%.c $(wildcard $(SC
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SCATTER_CFLAGS) -c $< -o $@
 
-GUI_SOURCES := src/iq_file.c src/decoder_view.c src/video_view.c src/dsmcc_output.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
+MOON_OBJECTS := $(BUILD_DIR)/moon.o $(BUILD_DIR)/astronomy.o
+$(BUILD_DIR)/moon.o: components/moon/moon.c components/moon/moon.h src/maidenhead.h src/iq_shift.h third_party/astronomy/astronomy.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) -c $< -o $@
+$(BUILD_DIR)/astronomy.o: third_party/astronomy/astronomy.c third_party/astronomy/astronomy.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+GUI_SOURCES := $(MOON_OBJECTS) src/iq_file.c src/decoder_view.c src/video_view.c src/dsmcc_output.c src/scatter_backend.c src/scatter_view.c src/ts_info.c src/ts_info_view.c src/usb_receiver.c src/usb_demod.c src/usb_tci.c
 GUI_HEADERS := src/dsmcc_output.h src/usb_receiver.h src/usb_demod.h src/usb_tci.h src/usb_tap.h
 GUI_HEADERS += src/lime_rx.h src/rx_limits.h
 BOND_SOURCES := $(wildcard components/bonding/src/*.c)
@@ -154,18 +160,18 @@ $(BUILD_DIR):
 $(BUILD_DIR)/linrad_dvb: src/linrad_dvb.c $(BUILD_DIR)/dab_worker $(GUI_SOURCES) $(GUI_HEADERS) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) src/iq_file.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/gui_theme.h src/iq_view.h src/iq_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) $(SCATTER_CFLAGS) $(GTK_CFLAGS) $(JSON_CFLAGS) $< $(GUI_SOURCES) $(LEAN_OBJECTS) $(DVBT_OBJECTS) $(DVBT2_LINK) $(SCATTER_OBJECTS) $(SCATTER_LIBS) -o $@ $(LDFLAGS) $(GTK_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm -ldl -lstdc++ $(LDLIBS)
 
-$(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c src/iq_shift.h src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(JSON_CFLAGS) $(FILTER_CFLAGS) $< src/iq_file.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/iq_file_to_stdout: src/iq_file_to_stdout.c $(MOON_OBJECTS) src/iq_shift.h src/iq_file.c src/iq_file.h src/iq_bandfilter.c src/iq_bandfilter.h src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/tune_control.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(JSON_CFLAGS) $(FILTER_CFLAGS) $< $(MOON_OBJECTS) src/iq_file.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(JSON_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
-$(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/tune_control.h src/iq_record.c src/iq_record.h src/iq_output.c src/iq_output.h | $(BUILD_DIR)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c src/iq_record.c src/iq_output.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
+$(BUILD_DIR)/linrad_udp_to_stdout: src/linrad_udp_to_stdout.c $(MOON_OBJECTS) src/iq_monitor.c src/usb_tap.c src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.c src/iq_bandfilter.h src/tune_control.h src/iq_record.c src/iq_record.h src/iq_output.c src/iq_output.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(FILTER_CFLAGS) $< $(MOON_OBJECTS) src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c src/iq_record.c src/iq_output.c -o $@ $(LDFLAGS) $(GLIB_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
 package: all
 	cp LICENSE $(BUILD_DIR)/LICENSE
 	cp NOTICE $(BUILD_DIR)/NOTICE
 	mkdir -p $(BUILD_DIR)/docs/licenses
 	cp docs/credits.md $(BUILD_DIR)/docs/credits.md
-	cp docs/licenses/MIT-legacy.txt $(BUILD_DIR)/docs/licenses/MIT-legacy.txt
+	cp docs/licenses/MIT-legacy.txt docs/licenses/Astronomy-Engine-MIT.txt $(BUILD_DIR)/docs/licenses/
 	cp $(LEAN_DIR)/LICENSE.txt $(BUILD_DIR)/leansdr-LICENSE.txt
 	cp $(LDPC_DIR)/LICENSE $(BUILD_DIR)/ldpc-LICENSE.txt
 	cp $(DVBT_DIR)/LICENSE $(BUILD_DIR)/rbdvbt-LICENSE.txt
@@ -203,7 +209,7 @@ test: test-bearing
 clean:
 	rm -rf $(BUILD_DIR)
 
-SDR_SOURCES := src/sdr_to_stdout.c src/pluto_rx.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
+SDR_SOURCES := src/sdr_to_stdout.c $(MOON_OBJECTS) src/pluto_rx.c src/funcube.c src/afedri.c src/lime_rx.c src/iq_output.c src/iq_record.c src/iq_bandfilter.c src/iq_monitor.c src/usb_tap.c
 $(BUILD_DIR)/sdr_to_stdout: $(SDR_SOURCES) src/hackrf_gain.h src/sdr_rx_status.h src/pluto_rx.h src/snapshot_file.h src/b210_mixer.h components/dab/channels.h src/rx_limits.h src/afedri.h src/lime_rx.h src/usb_tap.h src/iq_monitor.h src/iq_bandfilter.h src/iq_output.h src/iq_convert.h src/iq_shift.h src/sdriq.h src/rtlsdr.h src/funcube.h src/tune_control.h src/iq_record.h $(BUILD_DIR)/lime-config | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(GLIB_CFLAGS) $(PLUTO_CFLAGS) $(LIME_CFLAGS) $(FILTER_CFLAGS) $(shell pkg-config --cflags SoapySDR uhd alsa) $(SDR_SOURCES) -pthread -o $@ $(LDFLAGS) $(GLIB_LIBS) $(shell pkg-config --libs SoapySDR uhd alsa) $(PLUTO_LIBS) $(LIME_LIBS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)
 
@@ -304,7 +310,11 @@ test: test-iq-monitor
 test-file-replay: all
 	python3 tests/test_file_replay.py
 
-test: test-file-replay
+test: test-file-replay test-moon
+
+.PHONY: test-moon
+test-moon: $(BUILD_DIR)/iq_file_to_stdout $(BUILD_DIR)/linrad_dvb
+	python3 tests/test_moon.py
 
 $(BUILD_DIR)/test_dvbt_stream: tests/test_dvbt_stream.c $(DVBT_DIR)/src/probe_constellation.c $(DVBT_OBJECTS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -O3 $(DVBT_CFLAGS) $< $(filter-out $(BUILD_DIR)/components/dvbt/probe_constellation.o,$(DVBT_OBJECTS)) -o $@ $(LDFLAGS) $(FILTER_LIBS) -pthread -lm $(LDLIBS)

@@ -49,3 +49,7 @@ the software license.
 The optional DAB+ AAC codec is the system FAAD2 library (GPL-2.0-or-later).
 Code from FAAD2 is copyright (c) Nero AG, www.nero.com
 FAAD2 sources and licensing: https://github.com/knik0/faad2
+
+The offline Moon tracker uses Astronomy Engine for C v2.1.19 by Don Cross.
+Upstream: https://github.com/cosinekitty/astronomy/tree/v2.1.19/source/c
+License: docs/licenses/Astronomy-Engine-MIT.txt (MIT).

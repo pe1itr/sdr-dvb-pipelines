@@ -92,6 +92,13 @@ static void filename_text(const char *name, const char *pattern, char *out, size
     }
     g_match_info_free(match); g_regex_unref(re);
 }
+static gboolean parse_capture_time(const char *text, gint64 *us) {
+    GDateTime *dt=text ? g_date_time_new_from_iso8601(text,NULL) : NULL;
+    if (!dt) return FALSE;
+    *us=g_date_time_to_unix(dt)*G_USEC_PER_SEC+g_date_time_get_microsecond(dt);
+    g_date_time_unref(dt);
+    return TRUE;
+}
 static void from_filename(const char *path, IQFileInfo *info) {
     char *name=g_path_get_basename(path), value[32]={0};
     filename_text(name,"(?:^|[-_])(dvbs2|dvbs|dvbt2|dvbt)(?=[-_.])",value,sizeof(value));
@@ -155,6 +162,11 @@ gboolean iq_file_read_info(const char *path, IQFileInfo *info, GError **error) {
         invalid(error,"Select an existing, non-empty IQ file"); goto fail;
     }
     from_filename(info->path,info);
+    char *base=g_path_get_basename(path);
+    char stamp[32]={0};
+    filename_text(base,"^linrad-dvb-([0-9]{8}T[0-9]{6}\\.[0-9]{6}Z)-",stamp,sizeof(stamp));
+    g_free(base);
+    if (*stamp) parse_capture_time(stamp,&info->capture_utc_us);
     info->metadata_path=sidecar(info->path);
     if (!info->metadata_path) return TRUE;
     json_object *obj=read_json(info->metadata_path,error);
@@ -196,6 +208,22 @@ gboolean iq_file_read_info(const char *path, IQFileInfo *info, GError **error) {
         info->frequency*=1e6; info->has_frequency=TRUE;
     }
     if (ok && member(obj,"center_frequency_hz")) { ok=number(obj,"center_frequency_hz",&info->frequency,error); info->has_frequency=TRUE; }
+    const char *utc=string(obj,"recorded_at_utc");
+    if (utc) {
+        info->capture_utc_us=0;
+        parse_capture_time(utc,&info->capture_utc_us);
+    }
+    json_object *capture=member(obj,"capture_start_unix_us");
+    if (capture) {
+        gint64 us=json_object_is_type(capture,json_type_int) ? json_object_get_int64(capture) : 0;
+        info->capture_utc_us=us>0 && us<253402300800000000LL ? us : 0;
+    }
+    /* A propagation simulation has its own time axis, independent of any
+     * recorded input, output filename or wall clock used to generate it. */
+    json_object *simulation=NULL;
+    if (ok && json_object_object_get_ex(obj,"simulation_start_utc",&simulation) &&
+        !parse_capture_time(string(obj,"simulation_start_utc"),&info->capture_utc_us))
+        ok=invalid(error,"simulation_start_utc must be an ISO 8601 timestamp with a timezone for the first output IQ sample");
     if (ok && (info->frequency<0 || info->frequency>1e12)) ok=invalid(error,"Invalid receive frequency in metadata");
     json_object_put(obj);
     if (ok) return TRUE;

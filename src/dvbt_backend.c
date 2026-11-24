@@ -49,7 +49,7 @@ void dvbt_monitor_status(const rbdvbt_status_context_t *s,
     if (monitor_fd < 0 || !s) return;
     DecoderStatus frame = {.magic=DECODER_MONITOR_MAGIC, .type=DECODER_STATUS,
         .locks=locks, .snr_db=s->snr_db, .pilot_lock=s->pilot_lock, .cfo_hz=s->cfo_hz,
-        .rms_dbfs=s->iq_rms_dbfs, .peak_dbfs=s->iq_peak_dbfs,
+        .dvbt_bin_shift=s->bin_shift, .rms_dbfs=s->iq_rms_dbfs, .peak_dbfs=s->iq_peak_dbfs,
         .buffer_valid=s->fifo1_capacity_symbols > 0,
         .packets=packets, .written_packets=written, .rs_ok=rs_ok,
         .rs_uncorrectable=rs_bad, .cc_errors=cc_errors};

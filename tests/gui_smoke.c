@@ -2553,6 +2553,74 @@ static gboolean exercise_presets(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+static gboolean exercise_moon(gpointer data) {
+    App *a=data;
+    gtk_button_clicked(GTK_BUTTON(a->moon_item));
+    g_assert_true(gtk_widget_get_visible(a->moon_dialog));
+    g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->moon_enable)));
+    g_key_file_set_string(a->config,"logging","my_locator","JO32ET");
+    GtkRequisition initial, after;
+    gtk_widget_get_preferred_size(a->moon_dialog,NULL,&initial);
+    g_key_file_set_double(a->config,sources[a->source],"frequency",1299000000);
+    const char *parts[]={"J","JN","JN4","JN47","JN47C","JN47CG"};
+    for (unsigned i=0;i<G_N_ELEMENTS(parts);i++) {
+        gtk_entry_set_text(GTK_ENTRY(a->moon_dx),parts[i]);
+        if (i==0) {
+            g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->moon_rows[0].distance)),"km"));
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_rows[1].distance)),==,"—");
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_shift)),==,"—");
+        }
+        gtk_widget_get_preferred_size(a->moon_dialog,NULL,&after);
+        g_assert_cmpint(after.width,==,initial.width);
+        g_assert_cmpint(after.height,==,initial.height);
+    }
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->moon_enable),TRUE);
+    g_assert_true(moon_enabled(a));
+    g_assert_null(moon_problem(a));
+    a->running=TRUE;
+    g_strlcpy(a->moon_rx,"JO32ET",sizeof(a->moon_rx));
+    const char report[]="[moon] sample_utc=1802880540.000000 doppler=+2300.608 offset=+2300.608\n";
+    record_log(a,report,sizeof(report)-1);
+    moon_view_refresh(a);
+    const char *label=gtk_label_get_text(GTK_LABEL(a->moon_time));
+    g_assert_nonnull(strstr(label,"2027-02-17 16:09:00 UTC"));
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_rows[0].locator)),==,"JO32ET");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_rows[1].locator)),==,"JN47CG");
+    /* DE440s geometric station ranges (km), rounded display and model tolerance. */
+    g_assert_cmpfloat_with_epsilon(g_ascii_strtod(gtk_label_get_text(GTK_LABEL(a->moon_rows[0].distance)),NULL),359631.88,20);
+    g_assert_cmpfloat_with_epsilon(g_ascii_strtod(gtk_label_get_text(GTK_LABEL(a->moon_rows[1].distance)),NULL),359533.92,20);
+    double legs=0;
+    for (unsigned i=0;i<2;i++)
+        legs+=g_ascii_strtod(gtk_label_get_text(GTK_LABEL(a->moon_rows[i].doppler)),NULL);
+    g_assert_cmpfloat_with_epsilon(legs,2300.6,.16);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_shift)),==,"+2300.6 Hz");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_mixer)),==,"-2300.6 Hz");
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_echo)),==,"1299.002300608 MHz");
+    g_assert_false(gtk_widget_get_sensitive(a->moon_enable));
+    a->running=FALSE; moon_view_refresh(a);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->moon_enable),FALSE);
+    g_assert_false(moon_enabled(a));
+    int original_source=a->source;
+    a->source=SOURCE_FILE; a->running=TRUE; a->moon_sample_utc=0;
+    g_key_file_set_double(a->config,"file","frequency",432100000);
+    g_key_file_set_double(a->config,"file","receiver_offset",1000);
+    moon_view_refresh(a);
+    label=gtk_label_get_text(GTK_LABEL(a->moon_time));
+    g_assert_nonnull(strstr(label,"current UTC (display only)"));
+    for (unsigned i=0;i<2;i++) g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->moon_rows[i].azimuth)),"°"));
+    double doppler=0,echo=0;
+    g_assert_cmpint(sscanf(gtk_label_get_text(GTK_LABEL(a->moon_shift)),"%lf",&doppler),==,1);
+    g_assert_cmpint(sscanf(gtk_label_get_text(GTK_LABEL(a->moon_echo)),"%lf",&echo),==,1);
+    g_assert_cmpfloat_with_epsilon(echo*1e6,432101000+doppler,.051);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->moon_mixer)),==,"—");
+    a->moon_sample_utc=1802880540;
+    moon_view_refresh(a);
+    g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->moon_time)),"2027-02-17 16:09:00 UTC · IQ sample time"));
+    a->source=original_source; a->running=FALSE;
+    gtk_dialog_response(GTK_DIALOG(a->moon_dialog),GTK_RESPONSE_CLOSE);
+    gtk_main_quit(); return G_SOURCE_REMOVE;
+}
+
 int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--test-bonding")) {gtk_init(&argc,&argv);exercise_bonding();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=bonding")) return dvbt_bonding_main(argc-1,argv+1);
@@ -2562,7 +2630,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
     gboolean preset_test=argc==3 && !strcmp(argv[1],"--test-presets");
-    if (preset_test) {--argc;++argv;}
+    gboolean moon_test=argc==3 && !strcmp(argv[1],"--test-moon");
+    if (preset_test || moon_test) {--argc;++argv;}
     g_assert_cmpint(argc, ==, 2);
     App a = {.sr = 125000, .tune_fd = -1};
     a.config = g_key_file_new();
@@ -2570,8 +2639,8 @@ int main(int argc, char **argv) {
     a.directory = g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS, NULL));
     signal(SIGPIPE, SIG_IGN);
-    g_timeout_add(150, preset_test ? exercise_presets : exercise, &a);
-    gui(&a);
+    g_timeout_add(150, moon_test ? exercise_moon : preset_test ? exercise_presets : exercise, &a);
+    gui(&a,FALSE);
     g_assert_false(a.running);
     g_assert_cmpint(a.exit_code, ==, 0);
     clear_stages(&a); g_key_file_unref(a.config); g_free(a.directory); g_free(a.config_path);

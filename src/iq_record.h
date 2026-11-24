@@ -1,10 +1,12 @@
 #ifndef IQ_RECORD_H
 #define IQ_RECORD_H
 #include "iq_output.h"
+#include <stdio.h>
 typedef struct {
     IQOutput *output;
     int fd;
-    double rate;
+    double rate, frequency;
+    FILE *metadata;
     char path[192];
 } IQRecord;
 /* Commands: record FREQUENCY_HZ BASENAME, record-stop. Status goes to stderr. */
