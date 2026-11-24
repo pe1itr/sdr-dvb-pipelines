@@ -109,7 +109,9 @@ Voor deze machine is er een aparte native buildhelper:
 
 ```bash
 # Vanuit de uitgepakte bronmap / checkout op de Odroid, als gewone gebruiker:
-bash tools/build_odroid_n2.sh --install-deps --build-ffmpeg
+CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --install-deps
+# Voor de SRT-repeater met lokaal gebouwde FFmpeg:
+# CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --install-deps --build-ffmpeg
 ```
 
 Het script gebruikt `sudo apt-get` voor de Ubuntu/Debian-pakketten en bouwt
@@ -165,12 +167,12 @@ H.264/AAC-encoding, de gebruikte beeldfilters en SRT. Bron en uitvoer blijven
 onder `build-odroid-n2/`; de executable wordt
 `build-odroid-n2/ffmpeg/bin/ffmpeg`. Deze optie vervangt geen systeem-FFmpeg,
 headers of bibliotheken. Zie ook de [officiële FFmpeg-releases](https://ffmpeg.org/releases/).
-Een reeds aanwezige SRT-geschikte FFmpeg kan met `--ffmpeg /pad/naar/ffmpeg`
+Een reeds aanwezige SRT-geschikte FFmpeg kan met `--srt --ffmpeg /pad/naar/ffmpeg`
 worden gekozen in plaats van `--build-ffmpeg`.
 
 Na de build wordt **pi6ehv-odroid.ini** aangemaakt, alleen als die nog niet
 bestaat. Deze configuratie verwijst naar de juiste helpers en FFmpeg en kiest
-RTL-SDR, DVB-T en SRT-caller naar `44.137.26.85:4001`. Stel voor het starten in:
+RTL-SDR, DVB-T en de ingebouwde speler. Met `--srt` of `--build-ffmpeg` kiest een nieuwe configuratie de SRT-caller naar `44.137.26.85:4001`. Stel voor het starten in:
 
 - `[rtlsdr] frequency`: de afstemfrequentie van de SDR in Hz (na de omzetter). De template
   gebruikt bewust `0`, zodat hij niet op een aangenomen frequentie begint.
@@ -230,9 +232,9 @@ ontvangst- of prestatietest op een fysieke Odroid N2.
 
 ```bash
 # Later opnieuw bouwen; lokale FFmpeg wordt automatisch hergebruikt:
-bash tools/build_odroid_n2.sh
+bash tools/build_odroid_n2.sh --srt
 # Alleen controleren, zonder installatie, build of configuratiewijzigingen:
-bash tools/build_odroid_n2.sh --check
+bash tools/build_odroid_n2.sh --check --srt
 # Opdracht controleren zonder de dongle of SRT-verbinding te openen:
 ./build-odroid-n2/linrad_dvb --config pi6ehv-odroid.ini \
   --print-pipeline --rtlsdr-serial 1002

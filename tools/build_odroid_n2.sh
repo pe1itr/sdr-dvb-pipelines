@@ -10,10 +10,11 @@ FFMPEG_COMMIT=f1e3a2bf7a2f2cde936d1ed97f09a26853d20125
 odroid_usage() {
     cat <<'HELP'
 Usage: bash tools/build_odroid_n2.sh [options]
-  --check          Check dependencies and repeater runtime only.
+  --check          Check dependencies and selected runtime only.
   --install-deps   Install Ubuntu/Debian packages with apt-get (sudo if needed).
-  --build-ffmpeg   Build a pinned local FFmpeg with SRT in build-odroid-n2/.
-  --ffmpeg PATH    Use an existing SRT-capable FFmpeg.
+  --srt            Check and configure the SRT repeater output.
+  --build-ffmpeg   Select SRT and build a pinned local FFmpeg with SRT in build-odroid-n2/.
+  --ffmpeg PATH    Use an existing FFmpeg executable.
   --config PATH    Create a configuration after building; never overwrite.
   -j, --jobs N     Parallel build jobs (default: 1).
   -h, --help       Show this help.
@@ -76,7 +77,7 @@ odroid_local_ffmpeg() (
 )
 
 odroid_check_repeater() {
-    local ffmpeg=$1 protocols encoders drivers
+    local ffmpeg=$1 protocols encoders
     protocols=$("$ffmpeg" -hide_banner -protocols 2>&1) || return
     if ! printf '%s\n' "$protocols" | awk '/^Output:/{out=1; next} out && $1=="srt"{found=1} END{exit !found}'; then
         echo 'ERROR: FFmpeg has no SRT output; use --ffmpeg PATH or --build-ffmpeg.' >&2; return 1
@@ -88,12 +89,15 @@ odroid_check_repeater() {
             echo "ERROR: FFmpeg is missing encoder $encoder" >&2; return 1
         fi
     done
+}
+
+odroid_check_rtlsdr() {
+    local drivers
     drivers=$(SoapySDRUtil --info 2>&1) || return
     drivers=$(printf '%s\n' "$drivers" | sed -n '/Available factories/p')
     [[ $drivers =~ (^|[^[:alnum:]_])rtlsdr([^[:alnum:]_]|$) ]] || {
         echo 'ERROR: SoapyRTLSDR is unavailable; install soapysdr-module-rtlsdr.' >&2; return 1;
     }
-    echo 'SRT, H.264, AAC and RTL-SDR are available (no receiver or network connection opened).'
 }
 
 odroid_write_config() (
@@ -107,7 +111,7 @@ odroid_write_config() (
     temporary=$(mktemp "${path}.XXXXXXXX")
     trap 'rm -f -- "$temporary"' EXIT
     # ENVIRON avoids awk -v escape interpretation in paths containing backslashes.
-    LINRAD_CONFIG_ROOT="$PROJECT_ROOT/$ODROID_BUILD_DIR" LINRAD_CONFIG_FFMPEG="$resolved_ffmpeg" \
+    LINRAD_CONFIG_SRT="$3" LINRAD_CONFIG_ROOT="$PROJECT_ROOT/$ODROID_BUILD_DIR" LINRAD_CONFIG_FFMPEG="$resolved_ffmpeg" \
     awk '
         BEGIN {
             print "# ODROID-N2 PI6EHV template: set [rtlsdr] frequency (Hz) before reception."
@@ -131,10 +135,10 @@ odroid_write_config() (
                 if (key=="fec") replacement="1/2"
                 if (key=="gi") replacement="auto"
                 if (key=="scatterfix") replacement="false"
-                if (key=="renderer") replacement="srt"
+                if (key=="renderer" && ENVIRON["LINRAD_CONFIG_SRT"]=="1") replacement="srt"
             }
             if (section=="[rtlsdr]" && key=="frequency") replacement="0"
-            if (section=="[srt]") {
+            if (section=="[srt]" && ENVIRON["LINRAD_CONFIG_SRT"]=="1") {
                 if (key=="url") replacement="srt://44.137.26.85:4001"
                 if (key=="x264_preset") replacement="ultrafast"
                 if (key=="video_threads") replacement="3"
@@ -150,14 +154,15 @@ odroid_write_config() (
 )
 
 odroid_main() (
-    local install=0 build_ffmpeg=0 check=0 jobs=1 ffmpeg=ffmpeg
+    local install=0 srt=0 build_ffmpeg=0 check=0 jobs=1 ffmpeg=ffmpeg
     local config="$PROJECT_ROOT/pi6ehv-odroid.ini" option
     while (($#)); do
         option=$1
         case $option in
             --check) check=1; shift ;;
             --install-deps) install=1; shift ;;
-            --build-ffmpeg) build_ffmpeg=1; shift ;;
+            --srt) srt=1; shift ;;
+            --build-ffmpeg) srt=1; build_ffmpeg=1; shift ;;
             -j|--jobs|--ffmpeg|--config)
                 (($#>=2)) || { echo "Missing value for $option" >&2; return 2; }
                 case $option in -j|--jobs) jobs=$2 ;; --ffmpeg) ffmpeg=$2 ;; --config) config=$2 ;; esac
@@ -176,8 +181,8 @@ odroid_main() (
     fi
     odroid_require_platform
     if ((install)); then odroid_install_dependencies "$build_ffmpeg"; fi
-    export CFLAGS="${CFLAGS-'-O2 -Wall -Wextra -std=c11'} -march=armv8-a -mtune=cortex-a73.cortex-a53"
-    export CXXFLAGS="${CXXFLAGS-'-O3 -Wall -Wextra -std=gnu++17'} -march=armv8-a -mtune=cortex-a73.cortex-a53"
+    export CFLAGS="${CFLAGS--O2 -Wall -Wextra -std=c11} -march=armv8-a -mtune=cortex-a73.cortex-a53"
+    export CXXFLAGS="${CXXFLAGS--O3 -Wall -Wextra -std=gnu++17} -march=armv8-a -mtune=cortex-a73.cortex-a53"
     local -a command=(bash "$PROJECT_ROOT/tools/build.sh" --build-dir "$ODROID_BUILD_DIR" -j "$jobs")
     "${command[@]}" --check
     if ((build_ffmpeg)); then
@@ -186,15 +191,16 @@ odroid_main() (
     elif [[ $ffmpeg == ffmpeg && -f $PROJECT_ROOT/$ODROID_BUILD_DIR/ffmpeg/bin/ffmpeg ]]; then
         ffmpeg="$PROJECT_ROOT/$ODROID_BUILD_DIR/ffmpeg/bin/ffmpeg"
     fi
-    odroid_check_repeater "$ffmpeg"
+    if ((srt)); then odroid_check_repeater "$ffmpeg"; fi
+    odroid_check_rtlsdr
     ((check==0)) || return 0
     "${command[@]}"
     config=$(realpath -m -- "$config")
-    odroid_write_config "$config" "$ffmpeg"
+    odroid_write_config "$config" "$ffmpeg" "$srt"
     printf '\nSet the RF frequency and DVB-T parameters, then start:\n'
-    printf '%q ' "$PROJECT_ROOT/$ODROID_BUILD_DIR/linrad_dvb" --config "$config" --headless
-    printf '\n1080p25 encoding: ultrafast / 3 video threads / 1 filter thread.\n'
-    echo 'Measure sustained reception on the N2; this build does not prove realtime encoding capacity.'
+    printf '%q ' "$PROJECT_ROOT/$ODROID_BUILD_DIR/linrad_dvb" --config "$config"
+    if ((srt)); then printf '%s' --headless; fi
+    printf '\n'
 )
 
 if [[ ${BASH_SOURCE[0]} == "$0" ]]; then

@@ -49,6 +49,7 @@ class OdroidTests(unittest.TestCase):
         self.assertFalse((self.root / 'pi6ehv-odroid.ini').exists())
 
     def test_build_and_explicit_install_create_config(self):
+        self.fixture.env['PROTOCOLS'] = 'Output:\n udp'
         result = self.run_main('--install-deps', '-j', '2')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('INSTALL', result.stdout)
@@ -56,7 +57,9 @@ class OdroidTests(unittest.TestCase):
         self.assertEqual(len(commands), 2)
         self.assertNotIn('--check', commands[1]['args'])
         self.assertIn('build-odroid-n2', commands[1]['args'])
-        self.assertTrue((self.root / 'pi6ehv-odroid.ini').is_file())
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(self.root / 'pi6ehv-odroid.ini')
+        self.assertEqual(cfg['session']['renderer'], 'embedded')
 
     def test_dependency_or_runtime_failure_blocks_build_and_config(self):
         for env in ({'MAKE_STATUS': '4'}, {'PROTOCOLS': 'Input:\n srt\nOutput:\n udp'},
@@ -64,7 +67,7 @@ class OdroidTests(unittest.TestCase):
             with self.subTest(env=env):
                 self.fixture.log.unlink(missing_ok=True)
                 self.fixture.env.update(env)
-                result = self.run_main()
+                result = self.run_main('--srt')
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(len(self.fixture.commands('make')), 1)
                 self.assertFalse((self.root / 'pi6ehv-odroid.ini').exists())
@@ -72,7 +75,7 @@ class OdroidTests(unittest.TestCase):
 
     def test_config_preserves_existing_and_sets_paths_and_tuning(self):
         path = Path(self.temp.name) / 'receiver.ini'
-        result = self.shell('odroid_write_config "$1" ffmpeg', str(path))
+        result = self.shell('odroid_write_config "$1" ffmpeg 1', str(path))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read(path)
@@ -86,7 +89,7 @@ class OdroidTests(unittest.TestCase):
         self.assertEqual(cfg['srt']['video_threads'], '3')
         self.assertEqual(cfg['srt']['filter_threads'], '1')
         path.write_text('user settings\n')
-        result = self.shell('odroid_write_config "$1" ffmpeg', str(path))
+        result = self.shell('odroid_write_config "$1" ffmpeg 1', str(path))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(path.read_text(), 'user settings\n')
         self.assertEqual(list(path.parent.glob('receiver.ini.*')), [])
