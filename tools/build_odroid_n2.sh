@@ -14,6 +14,7 @@ Usage: bash tools/build_odroid_n2.sh [options]
   --install-deps   Install Ubuntu/Debian packages with apt-get (sudo if needed).
   --srt            Check and configure the SRT repeater output.
   --build-ffmpeg   Select SRT and build a pinned local FFmpeg with SRT in build-odroid-n2/.
+  --ffmpeg-build DIR  Link against an existing static FFmpeg build tree.
   --ffmpeg PATH    Use an existing FFmpeg executable.
   --config PATH    Create a configuration after building; never overwrite.
   -j, --jobs N     Parallel build jobs (default: 1).
@@ -154,7 +155,7 @@ odroid_write_config() (
 )
 
 odroid_main() (
-    local install=0 srt=0 build_ffmpeg=0 check=0 jobs=1 ffmpeg=ffmpeg
+    local install=0 srt=0 build_ffmpeg=0 check=0 jobs=1 ffmpeg=ffmpeg ffmpeg_build=
     local config="$PROJECT_ROOT/pi6ehv-odroid.ini" option
     while (($#)); do
         option=$1
@@ -163,9 +164,9 @@ odroid_main() (
             --install-deps) install=1; shift ;;
             --srt) srt=1; shift ;;
             --build-ffmpeg) srt=1; build_ffmpeg=1; shift ;;
-            -j|--jobs|--ffmpeg|--config)
+            -j|--jobs|--ffmpeg|--ffmpeg-build|--config)
                 (($#>=2)) || { echo "Missing value for $option" >&2; return 2; }
-                case $option in -j|--jobs) jobs=$2 ;; --ffmpeg) ffmpeg=$2 ;; --config) config=$2 ;; esac
+                case $option in -j|--jobs) jobs=$2 ;; --ffmpeg) ffmpeg=$2 ;; --ffmpeg-build) ffmpeg_build=${2:?missing FFmpeg build directory} ;; --config) config=$2 ;; esac
                 shift 2 ;;
             -j[0-9]*) jobs=${option#-j}; shift ;;
             -h|--help) odroid_usage; return 0 ;;
@@ -181,6 +182,21 @@ odroid_main() (
     fi
     odroid_require_platform
     if ((install)); then odroid_install_dependencies "$build_ffmpeg"; fi
+    if [[ -n $ffmpeg_build ]]; then
+        local tree pc module selected
+        tree=$(cd -- "$ffmpeg_build" && pwd -P)
+        pc="$tree/doc/examples/pc-uninstalled"
+        export PKG_CONFIG_PATH="$pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+        unset PKG_CONFIG_DISABLE_UNINSTALLED
+        for module in libavformat libavcodec libswscale libswresample libavutil; do
+            selected=$(pkg-config --variable=pcfiledir "$module") || selected=
+            if [[ $selected != "$pc" || ! -f "$tree/$module/$module.a" ]]; then
+                echo "ERROR: missing static archive or build-tree pkg-config metadata for $module in $tree" >&2
+                return 1
+            fi
+        done
+        export FFMPEG_PKG_CONFIG_FLAGS=--static
+    fi
     export CFLAGS="${CFLAGS--O2 -Wall -Wextra -std=c11} -march=armv8-a -mtune=cortex-a73.cortex-a53"
     export CXXFLAGS="${CXXFLAGS--O3 -Wall -Wextra -std=gnu++17} -march=armv8-a -mtune=cortex-a73.cortex-a53"
     local -a command=(bash "$PROJECT_ROOT/tools/build.sh" --build-dir "$ODROID_BUILD_DIR" -j "$jobs")

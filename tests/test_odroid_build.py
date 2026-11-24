@@ -48,6 +48,30 @@ class OdroidTests(unittest.TestCase):
         self.assertIn('-march=armv8-a', commands[0]['cflags'])
         self.assertFalse((self.root / 'pi6ehv-odroid.ini').exists())
 
+    def test_existing_static_ffmpeg_tree(self):
+        tree = Path(self.temp.name) / 'ffmpeg'
+        pc = tree / 'doc/examples/pc-uninstalled'
+        pc.mkdir(parents=True)
+        pkg_config = self.fixture.bin / 'pkg-config'
+        pkg_config.unlink()
+        pkg_config.symlink_to(shutil.which('pkg-config'))
+        self.fixture.env['PATH'] += ':' + str(Path(shutil.which('pkg-config')).parent)
+        for module in ('libavformat', 'libavcodec', 'libswscale', 'libswresample', 'libavutil'):
+            (tree / module).mkdir()
+            archive = tree / module / (module + '.a')
+            archive.touch()
+            (pc / (module + '-uninstalled.pc')).write_text(
+                f'Name: {module}\nDescription: build fixture\nVersion: 1\nLibs: {archive}\n')
+        self.fixture.env['PKG_CONFIG_DISABLE_UNINSTALLED'] = '1'
+        helper = self.root / 'tools/build.sh'
+        helper.write_text('[[ $FFMPEG_PKG_CONFIG_FLAGS == --static ]] && exec make "$@"\n')
+        result = self.run_main('--check', '--ffmpeg-build', str(tree))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        archive.unlink()
+        result = self.run_main('--check', '--ffmpeg-build', str(tree))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('libavutil', result.stderr)
+
     def test_build_and_explicit_install_create_config(self):
         self.fixture.env['PROTOCOLS'] = 'Output:\n udp'
         result = self.run_main('--install-deps', '-j', '2')

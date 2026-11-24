@@ -110,6 +110,8 @@ Voor deze machine is er een aparte native buildhelper:
 ```bash
 # Vanuit de uitgepakte bronmap / checkout op de Odroid, als gewone gebruiker:
 CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --install-deps
+# Met de bestaande statische FFmpeg-build van atv-mosaic:
+# CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --ffmpeg-build "$HOME/ffmpeg"
 # Voor de SRT-repeater met lokaal gebouwde FFmpeg:
 # CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --install-deps --build-ffmpeg
 ```

@@ -148,12 +148,21 @@ uhd|uhd.h
 alsa|alsa/asoundlib.h
 samplerate|samplerate.h
 libvlc|vlc/vlc.h
-libavcodec|libavcodec/avcodec.h
-libavformat|libavformat/avformat.h
-libavutil|libavutil/avutil.h
-libswscale|libswscale/swscale.h
 zvbi-0.2|libzvbi.h
 LIBRARIES
+    local -a ffmpeg_modules=(libavformat libavcodec libswscale libavutil) ffmpeg_pkg_flags
+    split_words ffmpeg_pkg_flags "${FFMPEG_PKG_CONFIG_FLAGS-}"
+    if flags=$(pkg-config --print-errors --cflags "${ffmpeg_modules[@]}") &&
+       libraries=$(pkg-config "${ffmpeg_pkg_flags[@]}" --print-errors --libs "${ffmpeg_modules[@]}"); then
+        split_words pc_cflags "$flags"
+        split_words pc_libs "$libraries"
+        printf 'int main(void) { return 0; }\n' >"$temp/probe.c"
+        probe 'FFmpeg scatterfix API' "${cc[@]}" "${cppflags[@]}" "${cflags[@]}" "${pc_cflags[@]}" \
+            components/tsscatterfix/src/media.c "$temp/probe.c" -o "$temp/probe" \
+            "${ldflags[@]}" "${pc_libs[@]}" -lm "${ldlibs[@]}"
+    else
+        report ERROR "Missing FFmpeg build metadata: check ${ffmpeg_modules[*]} with pkg-config"
+    fi
     if pkg-config --exists faad2 alsa; then
         report OK 'DAB+: audio and MOT slideshow enabled'
     else report WARNING 'DAB+: FAAD2 or ALSA unavailable; FIC/TII decoding only'; fi
