@@ -6,7 +6,7 @@
 //! Berlekamp-Massey, Chien search over the n positions, Forney (error evaluator Omega = S * C mod x^R), then a re-check of the corrected word.
 //! The corrections are written into the word as they are found, so a failed decode can leave a partly corrected word; the DAB variant (`keep_input`)
 //! works on a copy instead, like the C++ it replaces.
-use crate::gf::GF;
+use crate::gf::{Gf, GF};
 
 /// Largest codeword (n = 255) and largest number of parity bytes handled by the fixed work buffers.
 const MAX_N: usize = 255;
@@ -19,6 +19,8 @@ pub struct RsCode<const R: usize> {
 impl<const R: usize> RsCode<R> {
     /// Builds the generator g(x) = prod_{i<R} (x + alpha^i) and the feedback rows at compile time.
     pub const fn new() -> RsCode<R> {
+        // Rust 1.70 const functions can use a const table here, but cannot read the shared static GF.
+        const FIELD: Gf = Gf::new();
         // p[0..=R]: low power first, monic
         let mut p = [0u8; 33];
         p[0] = 1;
@@ -29,7 +31,7 @@ impl<const R: usize> RsCode<R> {
             let mut j = 0;
             while j <= i {
                 n[j + 1] ^= p[j];
-                n[j] ^= GF.mul(p[j], GF.exp[i]);
+                n[j] ^= FIELD.mul(p[j], FIELD.exp[i]);
                 j += 1;
             }
             p = n;
@@ -40,7 +42,7 @@ impl<const R: usize> RsCode<R> {
         while v < 256 {
             let mut j = 0;
             while j < R {
-                rows[v][j] = GF.mul(v as u8, p[R - 1 - j]);
+                rows[v][j] = FIELD.mul(v as u8, p[R - 1 - j]);
                 j += 1;
             }
             v += 1;
