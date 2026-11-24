@@ -99,8 +99,17 @@ static gboolean exercise_dab_lifecycle(gpointer data) {
         g_assert_true(a->stages[1].pid==old_decoder);g_assert_true(a->stages[0].pid==old_source);
         g_assert_cmpfloat(dab_view_number(&a->dab,"frequency"),==,5700001250.0);
         g_assert_cmpstr(dab_view_text(&a->dab,"channel"),==,"free");
+        g_key_file_set_boolean(a->config,"status","control",TRUE);
+        const char *error=NULL;
+        g_assert_cmpstr(network_control(a,"frequency/5A",&error),==,"200 OK");
+        g_assert_false(dab_free_tuning(a));
+        ++phase;
+    } else if (phase==6 && a->dab.snapshot && dab_view_number(&a->dab,"generation")==2 && !dab_view_number(&a->dab,"tuning")) {
+        g_assert_true(a->stages[1].pid==old_decoder);g_assert_true(a->stages[0].pid==old_source);
+        g_assert_cmpstr(dab_view_text(&a->dab,"channel"),==,"5A");
+        g_assert_cmpfloat(dab_view_number(&a->dab,"frequency"),==,174928000);
         power_clicked(NULL,a);++phase;
-    } else if (phase==6 && !a->running) {
+    } else if (phase==7 && !a->running) {
         g_assert_false(a->stopping);g_assert_cmpint(a->exit_code,==,0);
         gtk_main_quit();return G_SOURCE_REMOVE;
     }

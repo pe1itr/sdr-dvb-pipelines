@@ -95,7 +95,7 @@ static void received(GObject *object,GAsyncResult *result,gpointer data) {
         }
     }
     else if (strcmp(parts[0],"GET")) respond(c,"405 Method Not Allowed","{\"error\":\"GET required\"}","Allow: GET\r\n");
-    else if (!strcmp(parts[1],"/") || !strcmp(parts[1],"/docs"))
+    else if (!strcmp(parts[1],"/docs"))
         respond_as(c,"200 OK","text/html",api_reference_html,"");
     else if (!strcmp(parts[1],"/openapi.json")) respond(c,"200 OK",api_openapi_json,"");
     else if (strcmp(parts[1],"/status") && strcmp(parts[1],"/constellation")) respond(c,"404 Not Found","{\"error\":\"unknown route\"}","");

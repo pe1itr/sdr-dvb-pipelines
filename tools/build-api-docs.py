@@ -30,11 +30,11 @@ for path, methods in spec['paths'].items():
         section = f'''<details><summary><b class="{method}">{method}</b>
 <code>{escape(path)}</code><span>{escape(op['summary'])}</span></summary>
 <div><p>{escape(op['description'])}</p>{details}{example_html}
-<h3>Antwoorden</h3><dl>{"".join(codes)}</dl></div></details>'''
+<h3>Responses</h3><dl>{"".join(codes)}</dl></div></details>'''
         groups.setdefault(op['tags'][0], []).append(section)
 
 sections = '\n'.join(f'<section><h2>{escape(tag)}</h2>{"".join(groups[tag])}</section>'
-                     for tag in ('Uitlezen', 'Bedienen', 'Documentatie'))
+                     for tag in ('Diagnostics', 'Receiver control', 'Documentation'))
 page = (root / 'docs/api/reference.html').read_text(encoding='utf-8')
 page = page.replace('{{title}}', escape(spec['info']['title'])).replace(
     '{{intro}}', escape(spec['info']['description'])).replace('{{sections}}', sections)

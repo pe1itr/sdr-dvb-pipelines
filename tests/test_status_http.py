@@ -125,17 +125,18 @@ class StatusTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(spec, json.loads((ROOT / 'docs/api/openapi.json').read_text()))
         self.assertEqual(spec['openapi'], '3.0.3')
-        for path in ('/', '/docs'):
-            raw = self.raw(f'GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n'.encode())
-            headers, body = raw.split(b'\r\n\r\n', 1)
-            self.assertIn(b'200 OK', headers)
-            self.assertIn(b'Content-Type: text/html; charset=utf-8', headers)
-            self.assertIn(f'Content-Length: {len(body)}'.encode(), headers)
-            self.assertIn(b'href="/openapi.json"', body)
-            for route in spec['paths']:
-                self.assertIn(f'<code>{route}</code>'.encode(), body)
-            self.assertIn(b'PUT /control/fec/1/2', body)
-        for path in ('/', '/docs', '/openapi.json'):
+        self.assertEqual(self.get('/')[0], 404)
+        self.assertNotIn('/', spec['paths'])
+        raw = self.raw(b'GET /docs HTTP/1.1\r\nHost: localhost\r\n\r\n')
+        headers, body = raw.split(b'\r\n\r\n', 1)
+        self.assertIn(b'200 OK', headers)
+        self.assertIn(b'Content-Type: text/html; charset=utf-8', headers)
+        self.assertIn(f'Content-Length: {len(body)}'.encode(), headers)
+        self.assertIn(b'href="/openapi.json"', body)
+        for route in spec['paths']:
+            self.assertIn(f'<code>{route}</code>'.encode(), body)
+        self.assertIn(b'PUT /control/fec/1/2', body)
+        for path in ('/docs', '/openapi.json'):
             self.assertEqual(self.get(path, 'PUT')[0], 405)
 
     def test_malformed_and_large_requests(self):
@@ -224,21 +225,80 @@ class ReceiverControlTests(unittest.TestCase):
         self.assertTrue(state['control_enabled'])
         self.assertEqual(state['presets'][1], {'slot': 2, 'label': 'Test RTL', 'saved': True})
         self.assertEqual(self.get('/control/start')[0], 405)
-        put('mode/DVB-S2')
+        for mode, bandwidth in [('DAB', 1536000), ('DVB-T2', 8000000)]:
+            put('mode/' + mode.lower())
+            state = self.get()[1]
+            self.assertEqual((state['standard'], state['rate'], state['configured_fec']),
+                             (mode, bandwidth, 'auto'))
+        put('gpu-ldpc/on')
+        self.assertTrue(self.get()[1]['configured_gpu_ldpc'])
+        put('mode/DvB-s2')
+        self.assertFalse(self.get()[1]['configured_gpu_ldpc'])
+        put('gpu-ldpc/ON')
+        put('gpu-ldpc/invalid', 400)
+        self.assertTrue(self.get()[1]['configured_gpu_ldpc'])
+        put('gpu-ldpc/off')
+        self.assertFalse(self.get()[1]['configured_gpu_ldpc'])
+        put('mode/dvb-t2')
+        self.assertTrue(self.get()[1]['configured_gpu_ldpc'])
+        put('gpu-ldpc/off')
+        self.assertFalse(self.get()[1]['configured_gpu_ldpc'])
+        put('mode/dvb-s2')
+        put('fec/1/2')
+        put('constellation/8psk')
+        state = self.get()[1]
+        self.assertEqual((state['configured_constellation'], state['configured_fec']), ('8PSK', '2/3'))
+        put('fec/1/2', 400)
         put('fec/3/5')
-        put('mode/DVB-S')
+        put('constellation/QpSk')
+        put('constellation/16apsk', 400)
+        state = self.get()[1]
+        self.assertEqual((state['configured_constellation'], state['configured_fec']), ('QPSK', '3/5'))
+        put('mode/dvb-s')
+        put('constellation/8psk', 409)
+        put('gpu-ldpc/on', 409)
         put('fec/3/5', 400)
-        put('mode/DVB-T')
+        put('mode/dvb-t')
+        put('mode/dvb-x', 400)
         put('rate/250000')
         put('rate/123456', 400)
         put('fec/7/8')
         state = self.get()[1]
         self.assertEqual((state['standard'], state['rate'], state['configured_fec']),
                          ('DVB-T', 250000, '7/8'))
+        put('teletext/off')
+        self.assertFalse(self.get()[1]['teletext_visible'])
+        put('teletext/on', 409)
+        put('program/0', 400)
+        put('program/65536', 400)
+        put('program/101', 409)
+        self.assertEqual(self.get()[1]['programs'], [])
+        self.assertIsNone(self.get()[1]['selected_program'])
+        put('teletext/101', 409)
         put('preset/1', 404)
         put('start')
         self.assertTrue(self.get()[1]['running'])
+        for page in (100, 899, 101):
+            put(f'teletext/{page}')
+            state = self.get()[1]
+            self.assertEqual(state['teletext_page'], page)
+            self.assertFalse(state['teletext_page_received'])
+        self.assertTrue(state['teletext_visible'])
+        for command, visible in [('off', False), ('off', False), ('on', True), ('on', True)]:
+            put('teletext/' + command)
+            state = self.get()[1]
+            self.assertEqual(state['teletext_visible'], visible)
+            self.assertEqual(state['teletext_page'], 101)
+            self.assertTrue(state['running'])
+        self.assertEqual(self.get()[1]['teletext_color_links'], {})
+        put('teletext/color/red', 409)
+        put('teletext/color/purple', 400)
+        for invalid in ('99', '900', '10A', '0101'):
+            put('teletext/' + invalid, 400)
+        self.assertEqual(self.get()[1]['teletext_page'], 101)
+        put('gpu-ldpc/on', 409)
         put('rate/40000', 409)
+        put('constellation/qpsk', 409)
         put('stop', 202)
         self.wait_stopped()
         put('start')
@@ -249,6 +309,16 @@ class ReceiverControlTests(unittest.TestCase):
         put('frequency/12x', 400)
         self.assertEqual(self.get()[1]['configured_frequency_hz'], 144600000)
         self.assertEqual(self.get()[1]['active_preset'], 0)
+
+        put('frequency/5A', 400)
+        put('mode/DAB')
+        put('frequency/175000000')
+        self.assertEqual(self.get()[1]['configured_frequency_hz'], 175000000)
+        put('frequency/5A')
+        self.assertEqual(self.get()[1]['configured_frequency_hz'], 174928000)
+        put('frequency/13f')
+        put('frequency/5E', 400)
+        self.assertEqual(self.get()[1]['configured_frequency_hz'], 239200000)
 
     def wait_stopped(self):
         deadline = time.monotonic() + 6

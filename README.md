@@ -649,7 +649,7 @@ Enable network diagnostics on Linux or Windows with:
 linrad_dvb --status-bind 0.0.0.0 --status-port 8877
 ```
 
-Open `http://RECEIVER-IP:8877/` (or `/docs`) for the offline API reference. Expand a route to see parameters, examples and responses. Import `/openapi.json` into Swagger UI or an API client.
+Open `http://RECEIVER-IP:8877/docs` for the offline API reference. Expand a route to see parameters, examples and responses. Import `/openapi.json` into Swagger UI or an API client.
 
 Read `http://RECEIVER-IP:8877/status` in a browser, with `curl`, or from PowerShell:
 
@@ -671,10 +671,16 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | Path | Action |
 | --- | --- |
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
-| `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. Supports live tuning on inputs that support it in the GUI. |
+| `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
+| `/control/program/101` | During DVB reception with the embedded player, watch a program using its service ID. Read `programs` (ID, name and provider) and `selected_program` from `/status`. |
+| `/control/teletext/on`, `/control/teletext/off` | Show the current Teletext page during DVB reception or close the window. Closing it preserves the page selection. Read `teletext_visible` in `/status` for the current window state. |
+| `/control/teletext/color/red` | Follow the current page’s red, green, yellow or blue Fastext link. Read `teletext_color_links` in `/status` for available colors and page numbers. |
+| `/control/teletext/101` | Open page 100–899 in the receiver’s Teletext window during DVB reception. Poll `/status` for `teletext_page` and `teletext_page_received`. |
 | `/control/preset/2` | Recall saved slot 1–6. An active receiver stops before loading the preset. Send start to resume. |
-| `/control/mode/DVB-T` | Select DVB-T, DVB-S or DVB-S2 while stopped. |
+| `/control/mode/dvb-t` | Select DVB-T, DVB-T2, DVB-S, DVB-S2 or DAB while stopped. Mode names are case-insensitive. |
 | `/control/rate/250000` | Set DVB-T bandwidth in Hz or DVB-S/S2 symbol rate in symbols/s while stopped. |
+| `/control/gpu-ldpc/on`, `/control/gpu-ldpc/off` | Set the GPU LDPC preference for the current DVB-S2 or DVB-T2 mode while stopped. It applies at the next start. DVB-S2 GPU requires the Linux embedded soft-decision decoder. Read the preference from `configured_gpu_ldpc` in `/status`. |
+| `/control/constellation/8psk` | Select QPSK or 8PSK in DVB-S2 while stopped. Names are case-insensitive. Read `configured_constellation` and `configured_fec` from `/status` after switching. |
 | `/control/fec/1/2` | Select a FEC offered by the current mode and constellation while stopped. |
 
 For example, `curl -X PUT http://RECEIVER-IP:8877/control/start` starts the
@@ -696,6 +702,29 @@ marked `telemetry_fresh=false`; HTTP 200 means the status was retrieved, not tha
 reception is healthy. The endpoint stays available when reception stops or fails
 in the GUI, until the application closes. With `--run`, it ends when the receiver
 process exits. Errors before application startup remain on stderr.
+
+#### Select a program in a DVB transport stream
+
+During DVB reception, use the **Programs** list in the GUI or select a service
+through the HTTP endpoint. For HTTP playback control, choose the embedded player
+in **Renderer** and enable **Allow remote receiver control**.
+
+On the Linux receiver, list the discovered programs and the current playback
+selection with `curl` and `jq`:
+
+```sh
+curl --noproxy '*' -s http://127.0.0.1:8877/status | jq '{programs, selected_program}'
+```
+
+Choose the `id` next to the desired program name. For example, if its ID is
+`101`, switch to it while reception continues:
+
+```sh
+curl --noproxy '*' -X PUT http://127.0.0.1:8877/control/program/101
+```
+
+Run the first command again to confirm that `selected_program` is `101`.
+Switching also selects that service for Teletext and program information.
 
 #### DVB-T reception quality
 

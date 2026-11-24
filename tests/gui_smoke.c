@@ -623,7 +623,7 @@ static void exercise_receiver_offset(App *a) {
     g_assert_cmpfloat(configured_channel_hz(a),==,2299999999.);
     g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","lo_offset",NULL),==,0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),saved_shift/1000.);
-    g_assert_true(tune_frequency(a,saved_rf));
+    g_assert_true(tune_frequency(a,saved_rf,FALSE));
     g_idle_add(edit_converter_range,&editor_step);
     gtk_button_clicked(GTK_BUTTON(a->converter_ranges_button));
     g_assert_false(converter_ranges_active(a));
@@ -2436,12 +2436,64 @@ static gboolean exercise(gpointer data) {
         g_assert_true(apply_renderer(a));
         g_assert_cmpint(a->sr, ==, 250000);
         g_assert_false(gtk_widget_get_sensitive(a->gi_box));
-        gtk_button_clicked(GTK_BUTTON(a->power_button));
+        g_key_file_set_boolean(a->config,"status","control",TRUE);
+        const char *error=NULL;
+        g_assert_cmpstr(network_control(a,"start",&error), ==, "200 OK");
+        g_assert_null(error);
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->power_button), "receiver-running"));
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->power_label)), ==, "Stop SDR · running");
         g_assert_true(a->running); ++phase;
     } else if (phase == 3) {
         g_assert_cmpint(a->exit_code, ==, 0);
         g_assert_nonnull(a->video_view.player);
         g_assert_false(a->scatter);
+        char *file=g_build_filename(a->directory,"information.ts",NULL), *bytes=NULL;
+        gsize size=0;
+        g_assert_true(g_file_get_contents(file,&bytes,&size,NULL));
+        ts_info_backend_feed(a->scatter_backend->information,(guint8 *)bytes,size);
+        g_free(file);g_free(bytes);
+        gint64 deadline=g_get_monotonic_time()+G_USEC_PER_SEC;
+        TsInfoSnapshot catalog={0};
+        do {
+            ts_info_snapshot_clear(&catalog);
+            ts_info_backend_snapshot(a->scatter_backend->information,&catalog);
+            if (catalog.count==2) break;
+            g_usleep(1000);
+        } while (g_get_monotonic_time()<deadline);
+        g_assert_cmpuint(catalog.count,==,2);
+        ts_info_snapshot_clear(&catalog);
+        const char *error=NULL;
+        const char *keys[]={"red","green","yellow","blue"};
+        const unsigned pages[]={123,145,167,189};
+        for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) {
+            g_assert_cmpstr(network_control(a,"teletext/100",&error),==,"200 OK");
+            deadline=g_get_monotonic_time()+G_USEC_PER_SEC;
+            do {
+                a->information.next_tick=0;
+                ts_info_view_tick(&a->information,a->scatter_backend->information);
+                if (a->information.snapshot.page) break;
+                g_usleep(1000);
+            } while (g_get_monotonic_time()<deadline);
+            char *encoded=network_status(a);
+            json_object *state=json_tokener_parse(encoded);
+            json_object *links=json_object_object_get(state,"teletext_color_links");
+            g_assert_cmpuint(json_object_get_int(json_object_object_get(links,keys[i])),==,pages[i]);
+            json_object_put(state);g_free(encoded);
+            char *command=g_strconcat("teletext/color/",keys[i],NULL);
+            g_assert_cmpstr(network_control(a,command,&error),==,"200 OK");
+            g_free(command);
+            g_assert_cmpuint(a->information.snapshot.page_number,==,pages[i]);
+        }
+        g_assert_cmpstr(network_control(a,"program/2",&error),==,"200 OK");
+        g_assert_cmpstr(network_control(a,"program/3",&error),==,"409 Conflict");
+        char *encoded=network_status(a);
+        json_object *state=json_tokener_parse(encoded);
+        g_free(encoded);
+        g_assert_cmpint(json_object_get_int(json_object_object_get(state,"selected_program")),==,2);
+        json_object *programs=json_object_object_get(state,"programs");
+        g_assert_cmpuint(json_object_array_length(programs),==,2);
+        g_assert_cmpint(json_object_get_int(json_object_object_get(json_object_array_get_idx(programs,1),"id")),==,2);
+        json_object_put(state);
         libvlc_media_player_t *player = a->video_view.player;
         GPid decoder_pid = a->stages[1].pid;
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box), TRUE);

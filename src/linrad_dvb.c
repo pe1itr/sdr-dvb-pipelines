@@ -145,6 +145,7 @@ typedef struct {
 } App;
 
 static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2", "DAB"};
+static const char *teletext_colors[] = {"red", "green", "yellow", "blue"};
 static const char *constellations[] = {"QPSK", "8PSK"};
 static const char *s2_latency_modes[] = {"auto", "low", "throughput"};
 static const char *s2_acquisition_modes[] = {"auto", "fast", "normal"};
@@ -1621,7 +1622,7 @@ static void file_controls_refresh(App *a);
 
 /* Shared by arrow tuning and direct frequency entry. Only publish the new
  * setting after the existing live control pipe accepted the command. */
-static gboolean tune_frequency(App *a, double next) {
+static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel) {
     if (!hardware_source(a) || a->stopping || (a->running && moon_enabled(a))) return FALSE;
     const char *section = sources[a->source];
     next=round(next);
@@ -1629,7 +1630,7 @@ static gboolean tune_frequency(App *a, double next) {
         int index=-1;
         for (unsigned i=0;i<DAB_CHANNEL_COUNT;++i)
             if (next==dab_channels[i].hz) { index=(int)i; break; }
-        gboolean free_frequency=dab_free_tuning(a) || index<0;
+        gboolean free_frequency=index<0 || (dab_free_tuning(a) && !select_dab_channel);
         double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
         double lo=converter_ranges_active(a) ? converter_lo(a,next) : 0;
         double tuner_hz=next-lo;
@@ -1706,7 +1707,7 @@ static void tune_step(App *a, int direction) {
             next=dab_channels[index].hz;
         }
     }
-    tune_frequency(a,next);
+    tune_frequency(a,next,FALSE);
 }
 
 /* Accept either decimal separator, independent of the desktop locale. */
@@ -1719,7 +1720,7 @@ static gboolean tune_frequency_text(App *a, const char *text) {
     valid=valid && !*end && isfinite(mhz);
     g_free(value);
     if (!valid) { status(a,"Enter a frequency in MHz, for example 570.000"); return FALSE; }
-    return tune_frequency(a,mhz*1e6);
+    return tune_frequency(a,mhz*1e6,FALSE);
 }
 
 static void frequency_clicked(GtkButton *button, gpointer data) {
@@ -2836,24 +2837,30 @@ static gboolean exit_signal(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
-static void select_program(guint16 service, gpointer data) {
-    App *a = data;
-    if (!a->running || a->stopping || a->renderer != RENDER_EMBEDDED || !a->scatter_backend) return;
+static const char *switch_program(App *a, guint16 service) {
+    if (!a->running || a->stopping || a->standard==4 || a->renderer!=RENDER_EMBEDDED ||
+        !a->video_view.active || !a->scatter_backend)
+        return "Program selection requires active DVB reception with the embedded player";
     TsInfoSnapshot snapshot = {0};
     ts_info_backend_snapshot(a->scatter_backend->information, &snapshot);
     gboolean found = FALSE;
     for (unsigned i = 0; i < snapshot.count; ++i) if (snapshot.services[i].id == service) found = TRUE;
     ts_info_snapshot_clear(&snapshot);
-    if (!found) return;
+    if (!found) return "Service ID is absent from the current program list";
     GError *error = NULL;
     if (!video_view_select_program(&a->video_view, service, &error)) {
         status(a, error->message); g_clear_error(&error);
         stop_pipeline(a);
-        return;
+        return "The player could not switch programs";
     }
     ts_info_backend_select(a->scatter_backend->information, service);
     a->information.next_tick = 0;
     ts_info_view_tick(&a->information, a->scatter_backend->information);
+    return NULL;
+}
+
+static void select_program(guint16 service, gpointer data) {
+    switch_program(data, service);
 }
 
 static gboolean decoder_tick(gpointer data) {
@@ -5307,9 +5314,14 @@ static const char *network_control(gpointer data,const char *command,const char 
         stop_pipeline(a);
         return a->stopping ? "202 Accepted" : "200 OK";
     }
+    if (!strcmp(command,"teletext/off")) {
+        gtk_dialog_response(GTK_DIALOG(a->information.dialogs[1]),GTK_RESPONSE_CLOSE);
+        return "200 OK";
+    }
     if (a->stopping) return control_failure(error,conflict,"Wait until the receiver has stopped");
     if (!strcmp(command,"start")) {
         start_pipeline(a);
+        power_refresh(a);
         if (!a->running || a->exit_code)
             return control_failure(error,conflict,a->status_message ? a->status_message : "Start failed");
         return "200 OK";
@@ -5318,6 +5330,34 @@ static const char *network_control(gpointer data,const char *command,const char 
     if (!slash) return control_failure(error,"404 Not Found","Unknown command");
     const char *value=slash+1;
     guint64 number;
+    if (g_str_has_prefix(command,"program/")) {
+        if (!control_number(value,G_MAXUINT16,&number))
+            return control_failure(error,bad,"Expected a decimal service ID from 1 to 65535");
+        const char *problem=switch_program(a,(guint16)number);
+        return problem ? control_failure(error,conflict,problem) : "200 OK";
+    }
+    if (g_str_has_prefix(command,"teletext/")) {
+        gboolean open_current=!strcmp(value,"on");
+        int color=-1;
+        if (g_str_has_prefix(value,"color/")) {
+            color=find_choice(value+strlen("color/"),teletext_colors,G_N_ELEMENTS(teletext_colors));
+            if (color<0) return control_failure(error,bad,"Expected red, green, yellow or blue");
+        } else if (!open_current && (strlen(value)!=3 || !control_number(value,899,&number) || number<100))
+            return control_failure(error,bad,"Expected on, off, color/{color} or a Teletext page number from 100 to 899");
+        if (!a->running || a->standard==4 || !a->scatter_backend || !a->scatter_backend->information)
+            return control_failure(error,conflict,"Teletext requires active DVB reception with transport stream information");
+        TsInfoBackend *backend=a->scatter_backend->information;
+        if (color>=0) {
+            a->information.next_tick=0;
+            ts_info_view_tick(&a->information,backend);
+            if (!a->information.snapshot.color_pages[color])
+                return control_failure(error,conflict,"This Teletext page has no link for that color");
+            gtk_button_clicked(GTK_BUTTON(a->information.color_buttons[color]));
+        } else if (!open_current) ts_info_backend_set_page(backend,(unsigned)number);
+        ts_info_view_tick(&a->information,backend);
+        gtk_button_clicked(GTK_BUTTON(a->information.buttons[1]));
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"preset/")) {
         if (!control_number(value,6,&number)) return control_failure(error,bad,"Expected preset slot 1..6");
         char group[16];g_snprintf(group,sizeof(group),"preset%u",(unsigned)number);
@@ -5327,8 +5367,17 @@ static const char *network_control(gpointer data,const char *command,const char 
         if (a->pending_preset) return "202 Accepted";
         if (a->active_preset!=(int)number) return control_failure(error,conflict,"Preset could not be loaded");
     } else if (g_str_has_prefix(command,"frequency/")) {
-        if (!control_number(value,G_GINT64_CONSTANT(9007199254740991),&number))
-            return control_failure(error,bad,"Expected a positive whole frequency in Hz");
+        int channel=-1;
+        if (!control_number(value,G_GINT64_CONSTANT(9007199254740991),&number)) {
+            if (a->standard!=4)
+                return control_failure(error,bad,"Expected a positive whole frequency in Hz");
+            char *name=g_ascii_strup(value,-1);
+            channel=dab_channel_index(name);
+            g_free(name);
+            if (channel<0)
+                return control_failure(error,bad,"Expected a DAB channel such as 5A or a positive whole frequency in Hz");
+            number=dab_channels[channel].hz;
+        }
         if (knucker_source(a)) {
             if (a->running) return control_failure(error,conflict,"Stop the Knucker before tuning");
             if (number<KNUCKER_MIN_KHZ*1000 || number>KNUCKER_MAX_KHZ*1000 || number%1000)
@@ -5337,12 +5386,14 @@ static const char *network_control(gpointer data,const char *command,const char 
         } else {
             if (!hardware_source(a) || (a->running && moon_enabled(a)))
                 return control_failure(error,conflict,"Frequency control unavailable for the current input or tracking state");
-            if (!tune_frequency(a,number)) return control_failure(error,conflict,a->status_message);
+            if (!tune_frequency(a,number,channel>=0)) return control_failure(error,conflict,a->status_message);
         }
     } else {
         if (a->running) return control_failure(error,conflict,"Stop the receiver before changing decoder settings");
         if (g_str_has_prefix(command,"mode/")) {
-            int mode=find_choice(value,standards,3);
+            char *name=g_ascii_strup(value,-1);
+            int mode=find_choice(name,standards,G_N_ELEMENTS(standards));
+            g_free(name);
             if (mode<0 || (knucker_source(a) && mode!=2))
                 return control_failure(error,bad,"Unsupported mode for this input");
             gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),mode);
@@ -5359,6 +5410,29 @@ static const char *network_control(gpointer data,const char *command,const char 
             a->sr=rate;
             if (knucker_source(a)) g_key_file_set_integer(a->config,"knucker","bandwidth",rate);
             populate_rates(a);refresh_preview(a);
+        } else if (g_str_has_prefix(command,"gpu-ldpc/")) {
+            gboolean enable=!g_ascii_strcasecmp(value,"on");
+            if (!enable && g_ascii_strcasecmp(value,"off"))
+                return control_failure(error,bad,"Expected on or off");
+            if (a->standard!=1 && a->standard!=3)
+                return control_failure(error,conflict,"Select DVB-S2 or DVB-T2 to configure GPU LDPC");
+            GtkWidget *toggle=a->standard==1 ? a->s2_gpu_box : a->t2_gpu_box;
+            if (enable && a->standard==1) {
+                char *backend=setting(a,"leandvb","backend");
+                gboolean supported=!strcmp(backend,"embedded") && gtk_widget_get_sensitive(toggle);
+                g_free(backend);
+                if (!supported)
+                    return control_failure(error,conflict,"DVB-S2 GPU LDPC requires the embedded soft-decision decoder on Linux");
+            }
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(toggle),enable);
+        } else if (g_str_has_prefix(command,"constellation/")) {
+            if (a->standard!=1)
+                return control_failure(error,conflict,"Select DVB-S2 to configure the constellation");
+            char *name=g_ascii_strup(value,-1);
+            int index=find_choice(name,constellations,G_N_ELEMENTS(constellations));
+            g_free(name);
+            if (index<0) return control_failure(error,bad,"Expected QPSK or 8PSK");
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->constellation_box),index);
         } else if (g_str_has_prefix(command,"fec/")) {
             gboolean automatic=knucker_source(a) || a->standard>=3;
             int fec=automatic ? (!strcmp(value,"auto") ? 0 : -1) : find_choice(value,fecs,G_N_ELEMENTS(fecs));
@@ -5436,8 +5510,40 @@ static char *network_status(gpointer data) {
     BOOL(root,"running",a->running);NUM(root,"exit_code",a->exit_code);
     STR(root,"message",a->status_message ? a->status_message : "Ready");
     STR(root,"standard",standards[a->standard]);STR(root,"source",sources[a->source]);NUM(root,"rate",a->sr);
+    if (a->config && (a->standard==1 || a->standard==3))
+        BOOL(root,"configured_gpu_ldpc",g_key_file_get_boolean(a->config,a->standard==1 ? "leandvb" : "dvbt2","gpu_ldpc",NULL));
+    if (a->standard==1) STR(root,"configured_constellation",constellations[a->constellation]);
     STR(root,"configured_fec",a->standard>=3 || knucker_source(a) ? "auto" : fecs[a->fec]);
     BOOL(root,"control_enabled",a->presets && g_key_file_get_boolean(a->config,"status","control",NULL));
+    BOOL(root,"teletext_visible",a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1]));
+    if (a->running && !a->stopping && a->standard!=4 && a->information.backend) {
+        const TsInfoSnapshot *info=&a->information.snapshot;
+        NUM(root,"teletext_page",info->page_number);
+        BOOL(root,"teletext_page_received",info->page!=NULL);
+        json_object *links=json_object_new_object();
+        for (unsigned i=0;i<G_N_ELEMENTS(teletext_colors);++i)
+            if (info->color_pages[i])
+                json_object_object_add(links,teletext_colors[i],json_object_new_int(info->color_pages[i]));
+        json_object_object_add(root,"teletext_color_links",links);
+    }
+    json_object *programs=json_object_new_array();
+    guint16 playing=0;
+    if (a->running && !a->stopping && a->standard!=4 && a->scatter_backend) {
+        TsInfoSnapshot snapshot={0};
+        ts_info_backend_snapshot(a->scatter_backend->information,&snapshot);
+        for (unsigned i=0;i<snapshot.count;++i) {
+            const TsInfoService *service=&snapshot.services[i];
+            json_object *entry=json_object_new_object();
+            json_object_object_add(entry,"id",json_object_new_int(service->id));
+            STR(entry,"name",service->name);STR(entry,"provider",service->provider);
+            json_object_array_add(programs,entry);
+            if (a->video_view.active && a->video_view.local_display && service->id==a->video_view.program)
+                playing=service->id;
+        }
+        ts_info_snapshot_clear(&snapshot);
+    }
+    json_object_object_add(root,"programs",programs);
+    json_object_object_add(root,"selected_program",playing ? json_object_new_int(playing) : NULL);
     NUM(root,"active_preset",a->active_preset);
     json_object *slots=json_object_new_array();
     for (int i=1;a->presets && i<=6;++i) {
