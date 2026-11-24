@@ -81,7 +81,7 @@ typedef struct {
     char *config_path, *directory;
     int standard, sr, fec, gi, exit_code, source, constellation;
     GtkWidget *source_box, *rate_box, *sdriq_rate_box, *frequency_box, *format_box;
-    GtkWidget *frequency_button, *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
+    GtkWidget *converter_ranges_button, *frequency_button, *frequency_display, *frequency_calculation, *gain_display, *offset_box, *receiver_offset_box, *step_box;
     GtkWidget *filter_box;
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
@@ -265,6 +265,41 @@ static double receiver_offset(App *a) {
     if (error) { g_error_free(error); return NAN; }
     return offset;
 }
+/* Keep frequency and lo_offset as IF and effective LO for the pipeline,
+ * recordings and older presets. Range lookup always starts from requested RF. */
+static gboolean converter_ranges_active(App *a) {
+    return hardware_source(a) &&
+        g_key_file_has_key(a->config,"converter_ranges",sources[a->source],NULL);
+}
+
+static double converter_lo(App *a, double rf) {
+    const char *source=sources[a->source];
+    if (!converter_ranges_active(a))
+        return g_key_file_get_double(a->config,source,"lo_offset",NULL);
+    if (a->standard==4 && a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL)) return 0;
+    gsize n=0;
+    double *ranges=g_key_file_get_double_list(a->config,"converter_ranges",source,&n,NULL);
+    double lo=0;
+    for (gsize i=0;i+2<n;i+=3) {
+        if (rf>=ranges[i] && rf<=ranges[i+1]) { lo=ranges[i+2]; break; }
+    }
+    g_free(ranges);
+    return lo;
+}
+
+static void store_converter_tuning(App *a,double rf) {
+    const char *source=sources[a->source];
+    double lo=converter_lo(a,rf);
+    g_key_file_set_double(a->config,source,"lo_offset",lo);
+    g_key_file_set_double(a->config,source,"frequency",rf-lo-receiver_offset(a));
+}
+
+static void store_dab_tuning(App *a) {
+    double rf=dab_frequency(a);
+    if (converter_ranges_active(a)) store_converter_tuning(a,rf);
+    else g_key_file_set_double(a->config,sources[a->source],"frequency",rf);
+}
+
 static double channel_bandwidth(App *a) { return a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
 static gboolean bonding_enabled(App *a) {
     return a->standard==2 && !g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL);
@@ -386,7 +421,7 @@ static const char *receiver_offset_problem(App *a) {
         double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
         if (!isfinite(rate) || rate<2048000 || rate>100000000 || (a->source==2 && rate<4000000))
             return "DAB: select at least 2.048 MS/s, or 4 MS/s for B210, within the selected SDR limits.";
-        if (hardware_source(a) && g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)!=0)
+        if (hardware_source(a) && !converter_ranges_active(a) && g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)!=0)
             return "DAB: set converter LO offset to zero; use the B210 fixed IF option for the external mixer.";
         if (g_key_file_get_boolean(a->config,sources[a->source],"filter_enabled",NULL) &&
             g_key_file_get_double(a->config,sources[a->source],"filter_bandwidth",NULL)<1536000)
@@ -1492,7 +1527,8 @@ static void tuning_refresh(App *a) {
         }
         gtk_label_set_text(GTK_LABEL(a->gain_display),gain); g_free(gain);
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
-    gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a));
+    gtk_widget_set_sensitive(a->converter_ranges_button,hardware_source(a));
+    gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a) && !converter_ranges_active(a));
     gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0 && !knucker_source(a));
     gtk_widget_set_sensitive(a->step_box, (a->standard!=4 || dab_free_tuning(a)) && hardware_source(a));
     double rx_offset=receiver_offset(a);
@@ -1565,10 +1601,12 @@ static void tuning_changed(GtkWidget *widget, gpointer data) {
     if (!hardware_source(a) && !(a->source==SOURCE_FILE && widget==a->receiver_offset_box)) return;
     if (a->running && (widget == a->receiver_offset_box || moon_enabled(a))) return;
     const char *section = sources[a->source];
+    double rf=configured_channel_hz(a);
     g_key_file_set_double(a->config,section,"receiver_offset",
         gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->receiver_offset_box))*1000.0);
     if (hardware_source(a)) {
-        g_key_file_set_double(a->config, section, "lo_offset",
+        if (converter_ranges_active(a)) store_converter_tuning(a,rf);
+        else g_key_file_set_double(a->config, section, "lo_offset",
             gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->offset_box))*1000.0);
         g_key_file_set_double(a->config, section, "tune_step",
             gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->step_box)));
@@ -1593,13 +1631,15 @@ static gboolean tune_frequency(App *a, double next) {
             if (next==dab_channels[i].hz) { index=(int)i; break; }
         gboolean free_frequency=dab_free_tuning(a) || index<0;
         double intermediate=g_key_file_get_double(a->config,"dab","if_hz",NULL);
-        if (!rx_tuning_valid(section,next,0) ||
+        double lo=converter_ranges_active(a) ? converter_lo(a,next) : 0;
+        double tuner_hz=next-lo;
+        if (!rx_tuning_valid(section,tuner_hz,0) ||
             (a->source==2 && g_key_file_get_boolean(a->config,"dab","mixer_enabled",NULL) &&
              next-intermediate-2500000<46000000)) {
             status(a,"DAB tuning limit reached for the selected SDR / mixer");return FALSE;
         }
         if (a->running && !dab_view_retune(&a->dab,a->tune_fd,
-                free_frequency ? "free" : dab_channels[index].name,(guint64)next)) {
+                free_frequency ? "free" : dab_channels[index].name,(guint64)next,(guint64)tuner_hz)) {
             status(a,"DAB tuning command not sent; try again");return FALSE;
         }
         g_key_file_set_boolean(a->config,"dab","free_tuning",free_frequency);
@@ -1610,7 +1650,7 @@ static gboolean tune_frequency(App *a, double next) {
         }
         if (free_frequency) g_key_file_set_double(a->config,"dab","frequency_hz",next);
         else g_key_file_set_string(a->config,"dab","channel",dab_channels[index].name);
-        g_key_file_set_double(a->config,section,"frequency",next);
+        store_dab_tuning(a);
         GtkWidget *field=free_frequency ? a->dab_frequency_box : a->dab_channel_box;
         if (field) {
             g_signal_handlers_block_matched(field,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
@@ -1622,6 +1662,9 @@ static gboolean tune_frequency(App *a, double next) {
         if (!a->running) refresh_preview(a);
         return TRUE;
     }
+    double rf=next;
+    double lo=converter_lo(a,rf);
+    next=rf-lo-receiver_offset(a);
     if (!rx_tuning_valid(section,next,receiver_offset(a))) {
         status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return FALSE;
     }
@@ -1640,8 +1683,9 @@ static gboolean tune_frequency(App *a, double next) {
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
     g_key_file_set_double(a->config, section, "frequency", next);
+    g_key_file_set_double(a->config,section,"lo_offset",lo);
     g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), next/1000.0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), (converter_ranges_active(a) ? rf : next)/1000.0);
     g_signal_handlers_unblock_by_func(a->frequency_box, source_changed, a);
     tuning_refresh(a);
     /* Never rebuild Stage objects while their child processes are alive. */
@@ -1653,7 +1697,7 @@ static void tune_step(App *a, int direction) {
     if (!hardware_source(a) || a->stopping) return;
     const char *section=sources[a->source];
     double step=g_key_file_get_double(a->config,section,"tune_step",NULL);
-    double next=g_key_file_get_double(a->config,section,"frequency",NULL)+direction*step;
+    double next=configured_channel_hz(a)+direction*step;
     if (a->standard==4) {
         if (dab_free_tuning(a)) next=dab_frequency(a)+direction*step;
         else {
@@ -1675,9 +1719,7 @@ static gboolean tune_frequency_text(App *a, const char *text) {
     valid=valid && !*end && isfinite(mhz);
     g_free(value);
     if (!valid) { status(a,"Enter a frequency in MHz, for example 570.000"); return FALSE; }
-    double offset=a->standard==4 ? 0 :
-        g_key_file_get_double(a->config,sources[a->source],"lo_offset",NULL)+receiver_offset(a);
-    return tune_frequency(a,mhz*1e6-offset);
+    return tune_frequency(a,mhz*1e6);
 }
 
 static void frequency_clicked(GtkButton *button, gpointer data) {
@@ -2501,9 +2543,13 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         populate_rates(a); populate_fecs(a);
     }
     const char *section = sources[a->source];
-    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
+    if (a->standard==4 && hardware_source(a)) store_dab_tuning(a);
+    if (widget==a->source_box && a->standard!=4 && converter_ranges_active(a)) store_converter_tuning(a,configured_channel_hz(a));
     if (widget == a->source_box)
         gtk_widget_set_tooltip_text(a->frequency_box,knucker ? knucker_frequency_range : NULL);
+    gboolean ranges=a->standard!=4 && converter_ranges_active(a);
+    gtk_label_set_text(GTK_LABEL(gtk_grid_get_child_at(GTK_GRID(a->hardware),0,4)),
+        ranges ? "Receive RF (kHz)" : "SDR / IF (kHz)");
     if (knucker) {
         if (widget == a->source_box) {
             g_signal_handlers_block_by_func(a->frequency_box,source_changed,a);
@@ -2522,7 +2568,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         g_signal_handlers_block_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
         gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),
-            rx_frequency_min(section)/1000.0, rx_frequency_max(section)/1000.0);
+            ranges ? 0 : rx_frequency_min(section)/1000.0, ranges ? 1e9 : rx_frequency_max(section)/1000.0);
         gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box), 3);
         gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->rate_box), a->source == SOURCE_PLUTO ? 2083334 : a->source == SOURCE_AIRSPYR2 ? 2500000 : a->source == SOURCE_AIRSPYHF ? 1000 : rx_rsp(sources[a->source]) ? 62500 : a->source == SOURCE_LIME ? LIME_RX_MIN_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 225001 : a->source == SOURCE_AFEDRI ? 48000 : a->source == 3 ? 8138 : hardware_source(a) ? 2000000 : 1,
                                   a->source == SOURCE_PLUTO ? 61440000 : a->source == SOURCE_AIRSPYR2 ? 10000000 : a->source == SOURCE_AIRSPYHF ? 768000 : rx_rsp(sources[a->source]) ? 10000000 : a->source == SOURCE_LIME ? LIME_RX_MAX_RATE : a->source == SOURCE_FCDPP ? FUNCUBE_RATE : a->source == SOURCE_RTLSDR ? 3200000 : a->source == SOURCE_AFEDRI ? 2400000 : a->source == 3 ? 196078 : a->source == 1 ? 20000000 : a->source == 2 ? 61440000 : 100000000);
@@ -2549,7 +2595,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
             g_signal_handlers_unblock_by_func(a->sdriq_rate_box, source_changed, a);
         }
         if (hardware_source(a)) {
-            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), g_key_file_get_double(a->config, section, "frequency", NULL) / 1000.0);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box), (ranges ? configured_channel_hz(a) : g_key_file_get_double(a->config, section, "frequency", NULL)) / 1000.0);
         }
         g_signal_handlers_unblock_by_func(a->rate_box, source_changed, a);
         g_signal_handlers_unblock_by_func(a->frequency_box, source_changed, a);
@@ -2559,7 +2605,9 @@ static void source_changed(GtkWidget *widget, gpointer data) {
             atoi(gtk_combo_box_get_active_id(GTK_COMBO_BOX(a->sdriq_rate_box))) :
             gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->rate_box)));
         if (hardware_source(a)) {
-            g_key_file_set_double(a->config, section, "frequency", a->standard==4 ? dab_frequency(a) : gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
+            if (a->standard==4) store_dab_tuning(a);
+            else if (ranges) store_converter_tuning(a,round(gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box))*1000));
+            else g_key_file_set_double(a->config, section, "frequency", gtk_spin_button_get_value(GTK_SPIN_BUTTON(a->frequency_box)) * 1000.0);
         }
     }
     input_fields_visible(a);
@@ -2736,9 +2784,9 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
     if (a->standard==4) {
         const char *section=sources[a->source];
         if (hardware_source(a)) {
-            g_key_file_set_double(a->config,section,"frequency",dab_frequency(a));
             g_key_file_set_double(a->config,section,"receiver_offset",0);
             g_key_file_set_double(a->config,section,"lo_offset",0);
+            store_dab_tuning(a);
             g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
             double minimum=a->source==2 ? 4000000 : 2048000;
             if (g_key_file_get_double(a->config,section,"sample_rate",NULL)<minimum)
@@ -2748,7 +2796,10 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
     }
     populate_rates(a); populate_fecs(a);
     if (a->standard==4 && a->source_box) source_changed(a->source_box,a);
-    else if (a->frequency_box) {
+    else if (a->frequency_box && converter_ranges_active(a)) {
+        store_converter_tuning(a,configured_channel_hz(a));
+        source_changed(a->source_box,a);
+    } else if (a->frequency_box) {
         // Leaving DAB refreshes presentation without reselecting the source
         // or changing its sample rate or hardware settings.
         gtk_widget_set_sensitive(a->frequency_box,hardware_source(a));
@@ -3510,6 +3561,102 @@ static void hackrf_amp_changed(GtkComboBox *box, gpointer data) {
     refresh_preview(a);
 }
 
+static void converter_ranges_clicked(GtkButton *button,gpointer data) {
+    (void)button;
+    App *a=data;
+    if (!hardware_source(a) || a->running) return;
+    const char *source=sources[a->source];
+    char *title=g_strdup_printf("Converter ranges · %s",source_labels[a->source]);
+    GtkWidget *dialog=gtk_dialog_new_with_buttons(title,GTK_WINDOW(a->config_dialog),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        "Cancel",GTK_RESPONSE_CANCEL,"Apply",GTK_RESPONSE_APPLY,NULL);
+    g_free(title);
+    GtkWidget *grid=gtk_grid_new();
+    gtk_container_set_border_width(GTK_CONTAINER(grid),12);
+    gtk_grid_set_row_spacing(GTK_GRID(grid),6);
+    gtk_grid_set_column_spacing(GTK_GRID(grid),10);
+    gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),grid);
+    GtkListStore *model=gtk_list_store_new(3,G_TYPE_INT64,G_TYPE_INT64,G_TYPE_INT64);
+    GtkWidget *view=gtk_tree_view_new_with_model(GTK_TREE_MODEL(model));
+    const char *labels[]={"From RF (Hz)","Through RF (Hz)","LO offset (Hz)"};
+    GtkWidget *field[3];
+    for (int i=0;i<3;i++) {
+        gtk_tree_view_insert_column_with_attributes(GTK_TREE_VIEW(view),-1,labels[i],
+            gtk_cell_renderer_text_new(),"text",i,NULL);
+        field[i]=spin(grid,labels[i],1+i,i==2 ? -1e12 : 0,1e12,1);
+    }
+    GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
+    gtk_widget_set_size_request(scroll,450,160);
+    gtk_container_add(GTK_CONTAINER(scroll),view);
+    gtk_grid_attach(GTK_GRID(grid),scroll,0,0,2,1);
+    gsize count=0;
+    double *values=g_key_file_get_double_list(a->config,"converter_ranges",source,&count,NULL);
+    GtkTreeIter iter;
+    for (gsize i=0;i+2<count;i+=3)
+        gtk_list_store_insert_with_values(model,&iter,-1,0,(gint64)values[i],1,(gint64)values[i+1],2,(gint64)values[i+2],-1);
+    g_free(values);
+    enum { ADD_RANGE=1, REMOVE_RANGE };
+    gtk_dialog_add_button(GTK_DIALOG(dialog),"Add range",ADD_RANGE);
+    gtk_dialog_add_button(GTK_DIALOG(dialog),"Remove selected",REMOVE_RANGE);
+    GtkWidget *message=gtk_label_new("Outside the listed RF ranges the converter offset is zero.");
+    gtk_grid_attach(GTK_GRID(grid),message,0,5,2,1);
+    gtk_widget_show_all(dialog);
+    for (;;) {
+        int response=gtk_dialog_run(GTK_DIALOG(dialog));
+        if (response==REMOVE_RANGE) {
+            if (gtk_tree_selection_get_selected(gtk_tree_view_get_selection(GTK_TREE_VIEW(view)),NULL,&iter))
+                gtk_list_store_remove(model,&iter);
+            continue;
+        }
+        if (response==ADD_RANGE) {
+            gint64 row[3];
+            for (int i=0;i<3;i++) {
+                gtk_spin_button_update(GTK_SPIN_BUTTON(field[i]));
+                row[i]=(gint64)gtk_spin_button_get_value(GTK_SPIN_BUTTON(field[i]));
+            }
+            gboolean overlaps=FALSE;
+            for (gboolean ok=gtk_tree_model_get_iter_first(GTK_TREE_MODEL(model),&iter);ok;
+                 ok=gtk_tree_model_iter_next(GTK_TREE_MODEL(model),&iter)) {
+                gint64 low,high;
+                gtk_tree_model_get(GTK_TREE_MODEL(model),&iter,0,&low,1,&high,-1);
+                overlaps |= row[0]<=high && row[1]>=low;
+            }
+            if (row[0]>row[1] || overlaps) {
+                gtk_label_set_text(GTK_LABEL(message),overlaps ? "This range overlaps an existing range." :
+                    "The end frequency must be at least the start frequency.");
+                continue;
+            }
+            gtk_list_store_insert_with_values(model,&iter,-1,0,row[0],1,row[1],2,row[2],-1);
+            gtk_label_set_text(GTK_LABEL(message),"");
+            continue;
+        }
+        if (response==GTK_RESPONSE_APPLY) {
+            double rf=configured_channel_hz(a);
+            GArray *rows=g_array_new(FALSE,FALSE,sizeof(double));
+            for (gboolean ok=gtk_tree_model_get_iter_first(GTK_TREE_MODEL(model),&iter);ok;
+                 ok=gtk_tree_model_iter_next(GTK_TREE_MODEL(model),&iter)) {
+                gint64 low,high,offset;
+                gtk_tree_model_get(GTK_TREE_MODEL(model),&iter,0,&low,1,&high,2,&offset,-1);
+                double row[]={low,high,offset};
+                g_array_append_vals(rows,row,3);
+            }
+            if (rows->len) {
+                g_key_file_set_double_list(a->config,"converter_ranges",source,(double *)rows->data,rows->len);
+                store_converter_tuning(a,rf);
+            } else if (converter_ranges_active(a)) {
+                g_key_file_remove_key(a->config,"converter_ranges",source,NULL);
+                g_key_file_set_double(a->config,source,"lo_offset",0);
+                store_converter_tuning(a,rf);
+            }
+            g_array_unref(rows);
+            source_changed(a->source_box,a);
+        }
+        break;
+    }
+    gtk_widget_destroy(dialog);
+    g_object_unref(model);
+}
+
 static void create_config(App *a) {
     a->config_dialog = gtk_dialog_new_with_buttons("SDR · input and hardware", GTK_WINDOW(a->window),
         GTK_DIALOG_DESTROY_WITH_PARENT | GTK_DIALOG_MODAL, "Close", GTK_RESPONSE_CLOSE, NULL);
@@ -3626,10 +3773,13 @@ static void create_config(App *a) {
         }
     }
     a->frequency_box = spin(a->hardware, "SDR / IF (kHz)", 4, 1000, 6000000.0, 1);
-    a->offset_box = spin(a->hardware, "LO offset (kHz)", 5, -100000000, 100000000, 1);
+    a->offset_box = spin(a->hardware, "LO offset (kHz)", 5, -1e9, 1e9, 1);
     gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->offset_box), 3);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box), 0);
     gtk_widget_set_tooltip_text(a->offset_box, "Display = SDR frequency + LO offset. For 436 MHz via 28 MHz: 408000 kHz.");
+    a->converter_ranges_button=gtk_button_new_with_label("Converter ranges…");
+    gtk_grid_attach(GTK_GRID(a->hardware),a->converter_ranges_button,2,5,1,1);
+    g_signal_connect(a->converter_ranges_button,"clicked",G_CALLBACK(converter_ranges_clicked),a);
     a->receiver_offset_box=spin(a->hardware,"DVB receiver offset (kHz)",6,-50000,50000,1);
     gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->receiver_offset_box),3);
     gtk_widget_set_tooltip_text(a->receiver_offset_box,"Receive = SDR + converter LO + receiver offset. Positive selects above the spectrum center; 0 bypasses digital mixing. Change while stopped.");
@@ -4307,7 +4457,7 @@ static void dab_settings_changed(GtkWidget *widget,gpointer data) {
     char *port=gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->dab_lo_port_box));
     g_key_file_set_string(a->config,"dab","rx_input",input);g_key_file_set_string(a->config,"dab","lo_port",port);
     g_free(input);g_free(port);
-    if (a->standard==4 && hardware_source(a)) g_key_file_set_double(a->config,sources[a->source],"frequency",dab_frequency(a));
+    if (a->standard==4 && hardware_source(a)) store_dab_tuning(a);
     tuning_refresh(a);refresh_preview(a);
 }
 static void dab_step_clicked(GtkButton *button,gpointer data) {
@@ -4912,6 +5062,16 @@ static char *preset_snapshot(App *a) {
     g_key_file_load_from_data(copy,data,-1,G_KEY_FILE_NONE,NULL);g_free(data);
     g_key_file_remove_group(copy,"logging",NULL);
     g_key_file_remove_group(copy,"status",NULL);
+    /* Save RF center for managed inputs so recalling after editing or deleting
+     * a global range resolves the preset against the current table. */
+    for (int i=1;i<SOURCE_FILE;i++) {
+        if (!g_key_file_has_key(copy,"converter_ranges",sources[i],NULL)) continue;
+        double center=g_key_file_get_double(copy,sources[i],"frequency",NULL)
+            +g_key_file_get_double(copy,sources[i],"lo_offset",NULL);
+        g_key_file_set_double(copy,sources[i],"frequency",center);
+        g_key_file_set_double(copy,sources[i],"lo_offset",0);
+    }
+    g_key_file_remove_group(copy,"converter_ranges",NULL);
     data=g_key_file_to_data(copy,NULL,NULL);g_key_file_unref(copy);
     return data;
 }
@@ -4991,7 +5151,7 @@ static void preset_apply(App *a,int index) {
     /* Keep global settings current; replace the receiver's saved groups. */
     gsize count;char **groups=g_key_file_get_groups(saved,&count);
     for (gsize i=0;i<count;++i) {
-        if (!strcmp(groups[i],"logging") || !strcmp(groups[i],"status")) continue;
+        if (!strcmp(groups[i],"logging") || !strcmp(groups[i],"status") || !strcmp(groups[i],"converter_ranges")) continue;
         g_key_file_remove_group(a->config,groups[i],NULL);
         char **keys=g_key_file_get_keys(saved,groups[i],NULL,NULL);
         for (int j=0;keys[j];++j) {
@@ -5471,8 +5631,9 @@ int main(int argc, char **argv) {
     if (scatter) a.scatter = TRUE;
     if (no_scatter) a.scatter = FALSE;
     if (a.standard==4 && hardware_source(&a)) {
-        g_key_file_set_double(a.config,sources[a.source],"frequency",dab_frequency(&a));
+        store_dab_tuning(&a);
     }
+    if (a.standard!=4 && converter_ranges_active(&a)) store_converter_tuning(&a,configured_channel_hz(&a));
     a.headless = run;
     g_free(source); g_free(iq_file);
     const char *offset_problem=receiver_offset_problem(&a);

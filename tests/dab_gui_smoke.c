@@ -316,7 +316,7 @@ int main(int argc,char **argv) {
     g_assert_true(g_key_file_load_from_file(a.config,a.config_path,0,NULL));
     a.status_http=status_http_start("127.0.0.1",0,network_status,network_constellation,&a,NULL);
     g_assert_nonnull(a.status_http);
-    g_timeout_add(200,exercise_dab,&a);gui(&a);
+    g_timeout_add(200,exercise_dab,&a);gui(&a,FALSE);
     status_http_stop(a.status_http);
     g_string_free(a.status_log,TRUE);g_free(a.status_message);
     clear_stages(&a);g_key_file_unref(a.config);g_free(a.config_path);g_free(a.directory);

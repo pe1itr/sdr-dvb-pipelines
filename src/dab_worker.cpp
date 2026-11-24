@@ -246,7 +246,7 @@ int main(int argc,char **argv) {
         std::vector<unsigned char> raw(65536*4+4); size_t used=0;
         IQ capture, scope_capture, samples, filtered; const size_t capture_size=2048000*8;
         capture.reserve(capture_size+65536);scope_capture.reserve(196608*3+65536);
-        uint64_t generation=0, total_bytes=0, boundary=0, input_samples=0;
+        uint64_t expected_tuner_hz=0, generation=0, total_bytes=0, boundary=0, input_samples=0;
         bool tuning=false;
         double rms=NAN,peak=NAN;
 #ifdef HAVE_DAB_RADIO
@@ -388,6 +388,10 @@ int main(int argc,char **argv) {
                     if (request>>value) dab_parse_frequency(value.c_str(),&requested_hz);
                 }
                 if (requested_generation>generation && requested_hz) {
+                    // The optional fourth field carries the physical tuner frequency.
+                    if (requested_index>=0) { std::string rf; request>>rf; }
+                    uint64_t tuner_hz=0;
+                    expected_tuner_hz=(request>>tuner_hz) ? tuner_hz : requested_hz;
                     generation=requested_generation;channel=requested_channel;hz=requested_hz;
                     {
                         std::lock_guard<std::mutex> lock(diagnostics.mutex);
@@ -414,7 +418,7 @@ int main(int argc,char **argv) {
                 if (tuning) {
                     uint64_t ack_generation=0,ack_boundary=0,ack_hz=0;
                     auto ack=read_command(directory+"/tuned");
-                    if (ack>>ack_generation>>ack_hz>>ack_boundary && ack_generation==generation && ack_hz==hz) {
+                    if (ack>>ack_generation>>ack_hz>>ack_boundary && ack_generation==generation && ack_hz==expected_tuner_hz) {
                         boundary=ack_boundary;tuning=false;
                     }
                 }

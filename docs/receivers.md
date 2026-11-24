@@ -339,6 +339,15 @@ and the decoder may need to reacquire. Successful device tuning is logged as
 `[SDR] Tuned to ... Hz`; the large readout shows the requested setting, not a
 measured RF frequency. Linrad UDP tuning remains in Linrad and the readout says so.
 
+With reception stopped, select the SDR under **Input** and open **Converter ranges…**.
+Enter the first and last receive RF and the signed converter LO in whole Hz, click
+**Add range**, then **Apply**. To delete a row, select it and click **Remove selected**.
+For example, a B210 range of 2300000000 through 2450000000 Hz with LO 90000000 Hz
+tunes the hardware to 2310000000 Hz for reception at 2400000000 Hz with zero digital
+receiver offset. Both endpoints are included. The offset is zero in gaps between ranges
+and outside them. SDRs without ranges use their manual LO. DAB's B210 fixed-IF mixer
+takes precedence when enabled. **W** saves the table with the current settings.
+
 `lo_offset` and `tune_step` in each SDR section of `linrad-dvb.ini` are in **Hz**.
 Both default to 0 and 1000 respectively for older configs.
 Press **W** (or **w**) in the active launcher window to save the current settings,

@@ -498,6 +498,49 @@ static void exercise_funcube(App *a) {
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), source);
 }
 
+/* Drive the actual modal editor through Add, duplicate rejection and Apply,
+ * then reopen it and remove the selected row. */
+static gboolean edit_converter_range(gpointer data) {
+    int *step=data;
+    GList *windows=gtk_window_list_toplevels();
+    GtkDialog *dialog=NULL;
+    for (GList *item=windows;item;item=item->next) {
+        const char *title=gtk_window_get_title(GTK_WINDOW(item->data));
+        if (title && g_str_has_prefix(title,"Converter ranges")) dialog=GTK_DIALOG(item->data);
+    }
+    g_list_free(windows);
+    g_assert_nonnull(dialog);
+    GList *children=gtk_container_get_children(GTK_CONTAINER(gtk_dialog_get_content_area(dialog)));
+    GtkGrid *grid=NULL;
+    for (GList *item=children;item;item=item->next)
+        if (GTK_IS_GRID(item->data)) grid=GTK_GRID(item->data);
+    g_list_free(children);
+    g_assert_nonnull(grid);
+    GtkTreeView *view=GTK_TREE_VIEW(gtk_bin_get_child(GTK_BIN(gtk_grid_get_child_at(grid,0,0))));
+    GtkTreeModel *model=gtk_tree_view_get_model(view);
+    int n=gtk_tree_model_iter_n_children(model,NULL);
+    switch ((*step)++) {
+    case 0:
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,1)),2300000000.);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,2)),2450000000.);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,3)),90000000.);
+        gtk_dialog_response(dialog,1);break;
+    case 1:
+        g_assert_cmpint(n,==,1);gtk_dialog_response(dialog,1);break;
+    case 2:
+        g_assert_cmpint(n,==,1);gtk_dialog_response(dialog,GTK_RESPONSE_APPLY);return G_SOURCE_REMOVE;
+    case 3: {
+        GtkTreeIter iter;
+        g_assert_true(gtk_tree_model_get_iter_first(model,&iter));
+        gtk_tree_selection_select_iter(gtk_tree_view_get_selection(view),&iter);
+        gtk_dialog_response(dialog,2);break;
+    }
+    default:
+        g_assert_cmpint(n,==,0);gtk_dialog_response(dialog,GTK_RESPONSE_APPLY);return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
 static void exercise_receiver_offset(App *a) {
     int source=a->source, standard=a->standard, sr=a->sr;
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_FCDPP);
@@ -559,6 +602,32 @@ static void exercise_receiver_offset(App *a) {
     /* Converter offset changes labels but does not change the digital shift. */
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box),100000);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->frequency_display)),==,"244.500000 MHz");
+    /* Resolve on requested RF, including both endpoints and the digital shift. */
+    g_assert_cmpfloat(converter_lo(a,2400000000.),==,100000000);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),2);
+    int editor_step=0;
+    g_idle_add(edit_converter_range,&editor_step);
+    gtk_button_clicked(GTK_BUTTON(a->converter_ranges_button));
+    double saved_rf=configured_channel_hz(a);
+    double saved_shift=receiver_offset(a);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),50);
+    g_assert_true(tune_frequency_text(a,"2300"));
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","frequency",NULL),==,2209950000.);
+    g_assert_true(tune_frequency_text(a,"2450"));
+    g_assert_cmpfloat(configured_channel_hz(a),==,2450000000.);
+    tune_step(a,1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","lo_offset",NULL),==,0);
+    tune_step(a,-1);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","lo_offset",NULL),==,90000000);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),2299999.999);
+    g_assert_cmpfloat(configured_channel_hz(a),==,2299999999.);
+    g_assert_cmpfloat(g_key_file_get_double(a->config,"b210","lo_offset",NULL),==,0);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),saved_shift/1000.);
+    g_assert_true(tune_frequency(a,saved_rf));
+    g_idle_add(edit_converter_range,&editor_step);
+    gtk_button_clicked(GTK_BUTTON(a->converter_ranges_button));
+    g_assert_false(converter_ranges_active(a));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_FCDPP);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->offset_box),0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),437001);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->receiver_offset_box),50);

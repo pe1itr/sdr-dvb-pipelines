@@ -126,7 +126,10 @@ class DabTests(unittest.TestCase):
     def test_free_retune_discards_queued_iq_at_acknowledged_byte_boundary(self):
         self.check_retune_boundary("free", 5700000123)
 
-    def check_retune_boundary(self, channel, hz):
+    def test_converter_retune_uses_tuner_ack_and_keeps_rf(self):
+        self.check_retune_boundary("free", 2400000000, 2310000000)
+
+    def check_retune_boundary(self, channel, hz, tuner_hz=None):
         with tempfile.TemporaryDirectory() as tmp:
             directory=Path(tmp)
             p=subprocess.Popen([ROOT/"build/dab_worker","--state-dir",tmp,"--channel","9C","--no-audio"],
@@ -142,12 +145,12 @@ class DabTests(unittest.TestCase):
                 self.fail("DAB worker did not acknowledge channel request")
             try:
                 wait_state(lambda s:s["generation"]==0)
-                (directory/"channel").write_text(f"1 {channel} {hz}\n")
+                (directory/"channel").write_text(f"1 {channel} {hz} {tuner_hz or ''}\n")
                 wait_state(lambda s:s["generation"]==1 and s["tuning"])
                 old=struct.pack("<hh",16384,-16384)*196608
                 # An odd partial read while waiting must not corrupt I/Q alignment.
                 p.stdin.write(old[:12345]);p.stdin.flush()
-                (directory/"tuned").write_text(f"1 {hz} {len(old)}\n")
+                (directory/"tuned").write_text(f"1 {tuner_hz or hz} {len(old)}\n")
                 p.stdin.write(old[12345:]+bytes(3));p.stdin.flush()
                 fresh_samples=196608*3
                 p.stdin.write(bytes(4*fresh_samples-3));p.stdin.close();p.stdin=None
