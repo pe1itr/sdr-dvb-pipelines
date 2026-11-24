@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="nl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<style>
+* { box-sizing: border-box }
+body { margin: 0 auto; padding: 2rem 1rem; max-width: 56rem; color: #172d36; background: #f7fafb; font: 1rem/1.5 "Source Sans 3", sans-serif }
+a { color: #005877 } h1 { margin: 0 } h2 { font-size: 1.25rem; margin: 2rem 0 .5rem }
+h3 { font-size: 1rem } details { background: white; border: 1px solid #c7d6db; border-radius: .35rem; margin: .45rem 0 }
+summary { cursor: pointer; padding: .7rem; } summary span { display: block; margin-left: 1.2rem; color: #405963 }
+summary b { display: inline-block; color: white; padding: .05rem .4rem; border-radius: .2rem; font-size: .85rem }
+.GET { background: #196551 } .PUT { background: #25568a } code, pre { overflow-wrap: anywhere; white-space: pre-wrap }
+details div { border-top: 1px solid #d8e2e6; padding: 0 1rem } dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem }
+dt { font-weight: bold } dd { margin: 0 } pre { background: #edf3f5; padding: .6rem }
+</style></head><body><main><h1>{{title}}</h1><p>{{intro}}</p>
+<a href="/openapi.json">OpenAPI-specificatie (JSON)</a>
+{{sections}}
+</main></body></html>

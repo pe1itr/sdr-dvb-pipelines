@@ -1,0 +1,571 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Linrad DVB · Ontvanger-API",
+    "version": "1.0",
+    "description": "Lees met GET de ontvanger uit. Voor PUT schakel je in Output → Status endpoint de optie Allow remote receiver control in. Verstuur PUT zonder verzoekinhoud. In headless-modus kun je de ontvanger alleen uitlezen."
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "tags": [
+          "Documentatie"
+        ],
+        "summary": "API-overzicht",
+        "description": "Open de documentatie in de browser.",
+        "responses": {
+          "200": {
+            "description": "HTML-overzicht",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/docs": {
+      "get": {
+        "tags": [
+          "Documentatie"
+        ],
+        "summary": "API-overzicht",
+        "description": "Hetzelfde overzicht als op de startpagina.",
+        "responses": {
+          "200": {
+            "description": "HTML-overzicht",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Documentatie"
+        ],
+        "summary": "OpenAPI downloaden",
+        "description": "Gebruik dit bestand in Swagger UI of importeer het in een API-client.",
+        "responses": {
+          "200": {
+            "description": "OpenAPI-document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/status": {
+      "get": {
+        "tags": [
+          "Uitlezen"
+        ],
+        "summary": "Ontvangerstatus en presets",
+        "description": "Lees de huidige instellingen, beschikbare presets en metingen. control_enabled geeft aan of bediening is toegestaan. Controleer telemetry_fresh bij het beoordelen van ontvangst.",
+        "responses": {
+          "200": {
+            "description": "Status met aanvullende velden per ontvangermodus.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/constellation": {
+      "get": {
+        "tags": [
+          "Uitlezen"
+        ],
+        "summary": "Constellatiepunten",
+        "description": "Lees de laatste I/Q-punten van het primaire DVB-T-kanaal. Controleer supported en fresh voordat je de punten gebruikt.",
+        "responses": {
+          "200": {
+            "description": "Constellatiemeting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Constellation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/start": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "SDR starten",
+        "description": "Start de ontvangst met de huidige instellingen. Volg de verdere voortgang via GET /status.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        }
+      }
+    },
+    "/control/stop": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "SDR stoppen",
+        "description": "Stop de ontvangst. Bij HTTP 202 loopt het stoppen nog.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "202": {
+            "$ref": "#/components/responses/202"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        }
+      }
+    },
+    "/control/frequency/{hz}": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "Frequentie instellen",
+        "description": "Stel de RF-frequentie in. Live afstemmen kan bij ingangen die dit in de ontvanger ondersteunen.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        },
+        "parameters": [
+          {
+            "name": "hz",
+            "description": "RF-frequentie in hele Hz, binnen het bereik van de gekozen ingang.",
+            "required": true,
+            "example": 144600000,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "in": "path"
+          }
+        ]
+      }
+    },
+    "/control/preset/{slot}": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "Preset oproepen",
+        "description": "Laad een opgeslagen preset. Tijdens ontvangst stopt eerst de SDR. Start opnieuw na het laden.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "202": {
+            "$ref": "#/components/responses/202"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "404": {
+            "$ref": "#/components/responses/404"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        },
+        "parameters": [
+          {
+            "name": "slot",
+            "description": "Opgeslagen slot. GET /status bevat labels en bezetting.",
+            "required": true,
+            "example": 2,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 6
+            },
+            "in": "path"
+          }
+        ]
+      }
+    },
+    "/control/mode/{mode}": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "Modus kiezen",
+        "description": "Stop de SDR voordat je de modus wijzigt.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        },
+        "parameters": [
+          {
+            "name": "mode",
+            "description": "Ontvangststand voor de gekozen ingang.",
+            "required": true,
+            "example": "DVB-T",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "DVB-T",
+                "DVB-S",
+                "DVB-S2"
+              ]
+            },
+            "in": "path"
+          }
+        ]
+      }
+    },
+    "/control/rate/{rate}": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "Bandbreedte of symbol rate instellen",
+        "description": "Stop eerst de SDR. Gebruik Hz voor DVB-T en symbolen per seconde voor DVB-S en DVB-S2.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        },
+        "parameters": [
+          {
+            "name": "rate",
+            "description": "Een waarde die de geselecteerde modus en ingang ondersteunen.",
+            "required": true,
+            "example": 250000,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            },
+            "in": "path"
+          }
+        ]
+      }
+    },
+    "/control/fec/{numerator}/{denominator}": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "FEC kiezen",
+        "description": "Stop de SDR en kies een code rate die de huidige modus en constellatie ondersteunen. Gebruik de twee getallen als aparte paddelen.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        },
+        "parameters": [
+          {
+            "name": "numerator",
+            "description": "Teller van de code rate.",
+            "required": true,
+            "example": 1,
+            "schema": {
+              "type": "integer"
+            },
+            "in": "path"
+          },
+          {
+            "name": "denominator",
+            "description": "Noemer van de code rate.",
+            "required": true,
+            "example": 2,
+            "schema": {
+              "type": "integer"
+            },
+            "in": "path"
+          }
+        ]
+      }
+    },
+    "/control/fec/auto": {
+      "put": {
+        "tags": [
+          "Bedienen"
+        ],
+        "summary": "Automatische FEC kiezen",
+        "description": "Voor modi of ingangen met automatische FEC, zoals DVB-T2 of Knucker. Stop eerst de SDR.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "$ref": "#/components/responses/409"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Status": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "running",
+              "stopping",
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "control_enabled": {
+            "type": "boolean"
+          },
+          "standard": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "number"
+          },
+          "configured_frequency_hz": {
+            "type": "number",
+            "nullable": true
+          },
+          "configured_fec": {
+            "type": "string"
+          },
+          "active_preset": {
+            "type": "number"
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slot": {
+                  "type": "number"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "saved": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "telemetry_fresh": {
+            "type": "boolean"
+          },
+          "recent_log": {
+            "type": "string"
+          }
+        }
+      },
+      "Constellation": {
+        "type": "object",
+        "properties": {
+          "standard": {
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "fresh": {
+            "type": "boolean"
+          },
+          "received_unix_ms": {
+            "type": "number",
+            "nullable": true
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      },
+      "Accepted": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "accepted"
+        ]
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ]
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Opdracht verwerkt.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Accepted"
+            }
+          }
+        }
+      },
+      "202": {
+        "description": "Opdracht aangenomen. Wacht via GET /status op stopped.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Accepted"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Ongeldige waarde of verzoek met inhoud.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "403": {
+        "description": "Bediening is uitgeschakeld of de ontvanger draait headless.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "404": {
+        "description": "Het presetslot is leeg.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "409": {
+        "description": "De ontvangerstatus, invoer of configuratie verhindert de opdracht.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

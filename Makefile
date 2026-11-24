@@ -120,7 +120,7 @@ GUI_HEADERS += src/sdr_rx_status.h src/status_http.h src/program_view.h src/srt_
 GUI_HEADERS += src/decoder_margin.h src/hackrf_gain.h
 GUI_HEADERS += src/signal_meter.h
 GUI_HEADERS += src/reception_log.h src/maidenhead.h
-GUI_HEADERS += $(BUILD_DIR)/generated/linrad_build_info.h
+GUI_HEADERS += $(BUILD_DIR)/generated/linrad_build_info.h $(BUILD_DIR)/generated/api_docs.h
 GTK_CFLAGS += -I$(BUILD_DIR)/generated
 GUI_HEADERS += src/leansdr_backend.h src/decoder_view.h src/decoder_monitor.h src/dvbt_backend.h src/dvbt2_backend.h src/video_view.h src/scatter_view.h src/scatter_backend.h src/ts_info.h src/ts_info_view.h
 
@@ -133,6 +133,9 @@ $(BUILD_DIR)/components/dvbt/backend.o: src/dvbt_backend.c src/dvbt_backend.h sr
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DVBT_CFLAGS) -pthread -c $< -o $@
 
 .PHONY: all package dist package-windows test clean
+
+$(BUILD_DIR)/generated/api_docs.h: tools/build-api-docs.py docs/api/reference.html docs/api/openapi.json
+	python3 tools/build-api-docs.py $@
 
 .PHONY: build-info-force
 $(BUILD_DIR)/generated/linrad_build_info.h: build-info-force VERSION tools/build-info.sh

@@ -27,6 +27,7 @@ def main():
     build.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bash", str(ROOT / "tools/build-info.sh"),
                     str(build / "generated/linrad_build_info.h")], check=True)
+    subprocess.run(["python3", "tools/build-api-docs.py", str(build / "generated/api_docs.h")], check=True)
     env = dict(os.environ, PKG_CONFIG_LIBDIR=str(sdk / "lib/pkgconfig"), PKG_CONFIG_PATH="")
     modules = "gtk+-3.0 json-c fftw3f libsamplerate libvlc libavcodec libavformat libavutil libswscale zvbi-0.2 SoapySDR uhd portaudio-2.0 faad2 hidapi LimeSuite libiio".split()
     # MSYS2 calls the samplerate module 'samplerate'.

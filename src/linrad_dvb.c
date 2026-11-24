@@ -4001,6 +4001,13 @@ static void show_my_station(GtkWidget *widget, gpointer data) {
 static char *network_status(gpointer data);
 static char *network_constellation(gpointer data);
 
+static const char *network_control(gpointer data,const char *command,const char **error);
+
+static void control_toggled(GtkToggleButton *button,gpointer data) {
+    App *a=data;
+    g_key_file_set_boolean(a->config,"status","control",gtk_toggle_button_get_active(button));
+}
+
 static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
     App *a=data;
     gboolean enabled=gtk_toggle_button_get_active(button);
@@ -4010,7 +4017,7 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
         const char *bind=gtk_entry_get_text(GTK_ENTRY(a->status_endpoint_bind));
         int port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->status_endpoint_port));
         GError *error=NULL;
-        a->status_http=status_http_start(bind,port,network_status,network_constellation,a,&error);
+        a->status_http=status_http_start(bind,port,network_status,network_constellation,network_control,a,&error);
         if (!a->status_http) {
             message=g_strdup_printf("Cannot start status endpoint: %s",error->message);
             g_clear_error(&error);enabled=FALSE;
@@ -4021,9 +4028,9 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
             g_key_file_set_string(a->config,"status","bind",bind);
             g_key_file_set_integer(a->config,"status","port",port);
             if (!strcmp(bind,"0.0.0.0") || !strcmp(bind,"::"))
-                message=g_strdup_printf("Status endpoint active on port %d.\nOpen http://RECEIVER-IP:%d/status from another computer.",port,port);
+                message=g_strdup_printf("Status endpoint active on port %d.\nOpen http://RECEIVER-IP:%d/docs for API documentation.",port,port);
             else
-                message=g_strdup_printf("Status endpoint active: http://%s%s%s:%d/status",
+                message=g_strdup_printf("API documentation: http://%s%s%s:%d/docs",
                     strchr(bind,':') ? "[" : "",bind,strchr(bind,':') ? "]" : "",port);
         }
     } else {
@@ -4056,14 +4063,18 @@ static void show_status_endpoint(GtkWidget *widget,gpointer data) {
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->status_endpoint_enabled),a->status_http!=NULL);
         gtk_widget_set_sensitive(a->status_endpoint_bind,a->status_http==NULL);
         gtk_widget_set_sensitive(a->status_endpoint_port,a->status_http==NULL);
+        GtkWidget *control=gtk_check_button_new_with_label("Allow remote receiver control");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(control),g_key_file_get_boolean(a->config,"status","control",NULL));
+        gtk_grid_attach(GTK_GRID(grid),control,0,5,2,1);
+        g_signal_connect(control,"toggled",G_CALLBACK(control_toggled),a);
         GtkWidget *hint=gtk_label_new("All receiver modes · status, measurements and recent logs\n"
             "0.0.0.0: other computers on your network; 127.0.0.1: this computer only.\n"
-            "Read-only, without authentication. Use on a trusted network.\n"
+            "Remote control allows anyone on this network to operate the receiver.\n"
             "Switch off to change address or port. Changes take effect immediately.\n"
             "Press W in the main window to save for the next start.");
         gtk_label_set_line_wrap(GTK_LABEL(hint),TRUE);gtk_label_set_max_width_chars(GTK_LABEL(hint),64);
         gtk_label_set_xalign(GTK_LABEL(hint),0);gtk_grid_attach(GTK_GRID(grid),hint,0,3,2,1);
-        char *message=a->status_http ? g_strdup_printf("Status endpoint active on port %u · /status",status_http_port(a->status_http))
+        char *message=a->status_http ? g_strdup_printf("Status endpoint active on port %u · /docs for API documentation",status_http_port(a->status_http))
             : g_strdup("Status endpoint disabled");
         a->status_endpoint_message=gtk_label_new(message);g_free(message);
         gtk_label_set_selectable(GTK_LABEL(a->status_endpoint_message),TRUE);
@@ -5277,6 +5288,88 @@ static GtkWidget *presets_create(App *a) {
     presets_refresh(a);return grid;
 }
 
+static const char *control_failure(const char **error,const char *code,const char *message) {
+    *error=message;
+    return code;
+}
+
+static gboolean control_number(const char *value,guint64 max,guint64 *number) {
+    return g_ascii_string_to_unsigned(value,10,1,max,number,NULL);
+}
+
+static const char *network_control(gpointer data,const char *command,const char **error) {
+    App *a=data;
+    const char *bad="400 Bad Request", *conflict="409 Conflict";
+    if (!a->presets || !g_key_file_get_boolean(a->config,"status","control",NULL))
+        return control_failure(error,"403 Forbidden","Enable remote control in Output > Status endpoint");
+    if (a->closing) return control_failure(error,conflict,"Receiver is closing");
+    if (!strcmp(command,"stop")) {
+        stop_pipeline(a);
+        return a->stopping ? "202 Accepted" : "200 OK";
+    }
+    if (a->stopping) return control_failure(error,conflict,"Wait until the receiver has stopped");
+    if (!strcmp(command,"start")) {
+        start_pipeline(a);
+        if (!a->running || a->exit_code)
+            return control_failure(error,conflict,a->status_message ? a->status_message : "Start failed");
+        return "200 OK";
+    }
+    const char *slash=strchr(command,'/');
+    if (!slash) return control_failure(error,"404 Not Found","Unknown command");
+    const char *value=slash+1;
+    guint64 number;
+    if (g_str_has_prefix(command,"preset/")) {
+        if (!control_number(value,6,&number)) return control_failure(error,bad,"Expected preset slot 1..6");
+        char group[16];g_snprintf(group,sizeof(group),"preset%u",(unsigned)number);
+        if (!g_key_file_has_key(a->presets,group,"settings",NULL))
+            return control_failure(error,"404 Not Found","Empty preset");
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[number-1]));
+        if (a->pending_preset) return "202 Accepted";
+        if (a->active_preset!=(int)number) return control_failure(error,conflict,"Preset could not be loaded");
+    } else if (g_str_has_prefix(command,"frequency/")) {
+        if (!control_number(value,G_GINT64_CONSTANT(9007199254740991),&number))
+            return control_failure(error,bad,"Expected a positive whole frequency in Hz");
+        if (knucker_source(a)) {
+            if (a->running) return control_failure(error,conflict,"Stop the Knucker before tuning");
+            if (number<KNUCKER_MIN_KHZ*1000 || number>KNUCKER_MAX_KHZ*1000 || number%1000)
+                return control_failure(error,bad,knucker_frequency_range);
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),number/1000);
+        } else {
+            if (!hardware_source(a) || (a->running && moon_enabled(a)))
+                return control_failure(error,conflict,"Frequency control unavailable for the current input or tracking state");
+            if (!tune_frequency(a,number)) return control_failure(error,conflict,a->status_message);
+        }
+    } else {
+        if (a->running) return control_failure(error,conflict,"Stop the receiver before changing decoder settings");
+        if (g_str_has_prefix(command,"mode/")) {
+            int mode=find_choice(value,standards,3);
+            if (mode<0 || (knucker_source(a) && mode!=2))
+                return control_failure(error,bad,"Unsupported mode for this input");
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),mode);
+        } else if (g_str_has_prefix(command,"rate/")) {
+            if (!control_number(value,100000000,&number) || a->standard>=3)
+                return control_failure(error,bad,"Unsupported rate for this mode");
+            int rate=(int)number;
+            const int *rates=a->standard==2 ? terrestrial_rates : sat_rates;
+            unsigned count=a->standard==2 ? G_N_ELEMENTS(terrestrial_rates) : G_N_ELEMENTS(sat_rates);
+            gboolean valid=a->source==SOURCE_FILE;
+            for (unsigned i=0;i<count;++i) if (rate==rates[i]) valid=TRUE;
+            if (!(knucker_source(a) ? knucker_band_index(rate)>=0 : valid))
+                return control_failure(error,bad,"Unsupported rate for this input and mode");
+            a->sr=rate;
+            if (knucker_source(a)) g_key_file_set_integer(a->config,"knucker","bandwidth",rate);
+            populate_rates(a);refresh_preview(a);
+        } else if (g_str_has_prefix(command,"fec/")) {
+            gboolean automatic=knucker_source(a) || a->standard>=3;
+            int fec=automatic ? (!strcmp(value,"auto") ? 0 : -1) : find_choice(value,fecs,G_N_ELEMENTS(fecs));
+            if (!valid_fec(a,fec)) return control_failure(error,bad,"Unsupported FEC for this mode and constellation");
+            a->fec=fec;populate_fecs(a);refresh_preview(a);
+        } else return control_failure(error,"404 Not Found","Unknown command");
+    }
+    presets_refresh(a);
+    return "200 OK";
+}
+
 /* Main-context snapshot: no GTK access from network threads, no status files. */
 static json_object *status_number(double value) {
     return isfinite(value) ? json_object_new_double(value) : NULL;
@@ -5343,6 +5436,19 @@ static char *network_status(gpointer data) {
     BOOL(root,"running",a->running);NUM(root,"exit_code",a->exit_code);
     STR(root,"message",a->status_message ? a->status_message : "Ready");
     STR(root,"standard",standards[a->standard]);STR(root,"source",sources[a->source]);NUM(root,"rate",a->sr);
+    STR(root,"configured_fec",a->standard>=3 || knucker_source(a) ? "auto" : fecs[a->fec]);
+    BOOL(root,"control_enabled",a->presets && g_key_file_get_boolean(a->config,"status","control",NULL));
+    NUM(root,"active_preset",a->active_preset);
+    json_object *slots=json_object_new_array();
+    for (int i=1;a->presets && i<=6;++i) {
+        char group[16];g_snprintf(group,sizeof(group),"preset%d",i);
+        json_object *slot=json_object_new_object();
+        char *label=preset_label(a,i);
+        NUM(slot,"slot",i);STR(slot,"label",label);g_free(label);
+        BOOL(slot,"saved",g_key_file_has_key(a->presets,group,"settings",NULL));
+        json_object_array_add(slots,slot);
+    }
+    json_object_object_add(root,"presets",slots);
     gint64 stamp=a->standard==4 ? a->dab.snapshot_time : a->decoder_view.status_time;
     double age=stamp ? (g_get_monotonic_time()-stamp)/1000.0 : NAN;
     NUM(root,"telemetry_age_ms",age);
@@ -5647,7 +5753,7 @@ int main(int argc, char **argv) {
         if (!status_bind) status_bind=g_key_file_get_string(a.config,"status","bind",NULL);
         if (!status_bind) status_bind=g_strdup("127.0.0.1");
         if (status_port) {
-            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,&a,&error);
+            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,run ? NULL : network_control,&a,&error);
             if (!a.status_http) fatal("Cannot start status endpoint: %s",error->message);
             fprintf(stderr,"[status] HTTP listening on %s port %d (/status)\n",status_bind,status_port);
         }

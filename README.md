@@ -649,6 +649,8 @@ Enable network diagnostics on Linux or Windows with:
 linrad_dvb --status-bind 0.0.0.0 --status-port 8877
 ```
 
+Open `http://RECEIVER-IP:8877/` (or `/docs`) for the offline API reference. Expand a route to see parameters, examples and responses. Import `/openapi.json` into Swagger UI or an API client.
+
 Read `http://RECEIVER-IP:8877/status` in a browser, with `curl`, or from PowerShell:
 
 ```powershell
@@ -659,7 +661,31 @@ Alternatively configure `[status]` with `enabled=true`, `bind=0.0.0.0` and
 `port=8877`. Without configuration the endpoint is disabled; the default bind
 address is `127.0.0.1`. `--status-port 0` disables a saved setting. On Windows,
 allow the chosen TCP port through the firewall for the private network.
-This is an unauthenticated, read-only diagnostic endpoint for a trusted LAN.
+The endpoint uses plain HTTP on a trusted LAN. The desktop receiver accepts
+control commands when **Allow remote receiver control** is checked in that same
+dialog (or `control=true` in `[status]`). Anyone who can reach the port can then
+operate the receiver. In headless mode the endpoint serves diagnostics only.
+
+Send an HTTP `PUT` with an empty body to one of these paths.
+
+| Path | Action |
+| --- | --- |
+| `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
+| `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. Supports live tuning on inputs that support it in the GUI. |
+| `/control/preset/2` | Recall saved slot 1–6. An active receiver stops before loading the preset. Send start to resume. |
+| `/control/mode/DVB-T` | Select DVB-T, DVB-S or DVB-S2 while stopped. |
+| `/control/rate/250000` | Set DVB-T bandwidth in Hz or DVB-S/S2 symbol rate in symbols/s while stopped. |
+| `/control/fec/1/2` | Select a FEC offered by the current mode and constellation while stopped. |
+
+For example, `curl -X PUT http://RECEIVER-IP:8877/control/start` starts the
+receiver. Commands return JSON. HTTP 200 acknowledges the command. For a 202
+response, poll `GET /status` until `state` is `stopped` before the next command.
+Errors include an `error` field. HTTP 400 indicates an invalid value, 403 disabled
+control, 404 a missing command or preset, and 409 a conflicting receiver state
+or a failed start/tune. Read `state` and `message` for subsequent pipeline events.
+Status also includes `control_enabled`, `standard`, `rate`, `configured_fec`,
+`configured_frequency_hz`, `active_preset` (0 for none), and `presets` with
+each slot's number, label and saved flag. Press **W** to persist session settings.
 
 The versioned JSON response contains `state`, `message`, `exit_code`, source,
 standard, stage activity, `telemetry_age_ms`, `telemetry_fresh` and `recent_log`

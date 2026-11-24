@@ -1,5 +1,7 @@
 #include "status_http.h"
+#include "api_docs.h"
 #include <string.h>
+#include <json-c/json.h>
 
 /* All callbacks run on the main context; no network wait blocks reception.
  * Bound request size, connections and total lifetime, including slow readers. */
@@ -7,6 +9,7 @@ struct StatusHttp {
     GSocketService *service;
     GList *clients;
     StatusHttpSnapshot snapshot, constellation;
+    StatusHttpControl control;
     gpointer data;
     guint16 port;
 };
@@ -35,14 +38,33 @@ static void written(GObject *object,GAsyncResult *result,gpointer data) {
     g_output_stream_write_all_finish(G_OUTPUT_STREAM(object),result,NULL,NULL);
     client_free(data);
 }
-static void respond(Client *c,const char *code,const char *body,const char *extra) {
-    c->response=g_strdup_printf("HTTP/1.1 %s\r\nContent-Type: application/json; charset=utf-8\r\n"
+static void respond_as(Client *c,const char *code,const char *mime,const char *body,const char *extra) {
+    c->response=g_strdup_printf("HTTP/1.1 %s\r\nContent-Type: %s; charset=utf-8\r\n"
         "Content-Length: %" G_GSIZE_FORMAT "\r\nCache-Control: no-store\r\n"
-        "X-Content-Type-Options: nosniff\r\nConnection: close\r\n%s\r\n%s",code,strlen(body),extra,body);
+        "X-Content-Type-Options: nosniff\r\nConnection: close\r\n%s\r\n%s",code,mime,strlen(body),extra,body);
     g_output_stream_write_all_async(g_io_stream_get_output_stream(G_IO_STREAM(c->connection)),
         c->response,strlen(c->response),G_PRIORITY_DEFAULT,c->cancel,written,c);
 }
+static void respond(Client *c,const char *code,const char *body,const char *extra) {
+    respond_as(c,code,"application/json",body,extra);
+}
 static void read_request(Client *c);
+/* Control requests encode all arguments in the path and take no body. */
+static gboolean empty_body(const char *headers) {
+    char **lines=g_strsplit(headers,"\r\n",-1);
+    gboolean empty=TRUE;
+    for (int i=0;lines[i][0];++i) {
+        char *value=strchr(lines[i],':');
+        if (!value) {empty=FALSE;break;}
+        *value++=0;
+        if (!g_ascii_strcasecmp(lines[i],"Transfer-Encoding") ||
+            (!g_ascii_strcasecmp(lines[i],"Content-Length") && strcmp(g_strstrip(value),"0"))) {
+            empty=FALSE;break;
+        }
+    }
+    g_strfreev(lines);
+    return empty;
+}
 static void received(GObject *object,GAsyncResult *result,gpointer data) {
     Client *c=data;
     gssize n=g_input_stream_read_finish(G_INPUT_STREAM(object),result,NULL);
@@ -58,7 +80,24 @@ static void received(GObject *object,GAsyncResult *result,gpointer data) {
     char **parts=g_strsplit(c->request," ",0);
     if (g_strv_length(parts)!=3 || (strcmp(parts[2],"HTTP/1.0") && strcmp(parts[2],"HTTP/1.1")))
         respond(c,"400 Bad Request","{\"error\":\"invalid request\"}","");
+    else if (g_str_has_prefix(parts[1],"/control/")) {
+        if (strcmp(parts[0],"PUT")) respond(c,"405 Method Not Allowed","{\"error\":\"PUT required\"}","Allow: PUT\r\n");
+        else if (!c->server->control) respond(c,"403 Forbidden","{\"error\":\"control unavailable\"}","");
+        else if (!empty_body(end+2)) respond(c,"400 Bad Request","{\"error\":\"empty body required\"}","");
+        else {
+            const char *error=NULL;
+            const char *code=c->server->control(c->server->data,parts[1]+strlen("/control/"),&error);
+            json_object *reply=json_object_new_object();
+            if (error) json_object_object_add(reply,"error",json_object_new_string(error));
+            else json_object_object_add(reply,"accepted",json_object_new_boolean(TRUE));
+            respond(c,code,json_object_to_json_string_ext(reply,JSON_C_TO_STRING_PLAIN),"");
+            json_object_put(reply);
+        }
+    }
     else if (strcmp(parts[0],"GET")) respond(c,"405 Method Not Allowed","{\"error\":\"GET required\"}","Allow: GET\r\n");
+    else if (!strcmp(parts[1],"/") || !strcmp(parts[1],"/docs"))
+        respond_as(c,"200 OK","text/html",api_reference_html,"");
+    else if (!strcmp(parts[1],"/openapi.json")) respond(c,"200 OK",api_openapi_json,"");
     else if (strcmp(parts[1],"/status") && strcmp(parts[1],"/constellation")) respond(c,"404 Not Found","{\"error\":\"unknown route\"}","");
     else {
         StatusHttpSnapshot snapshot = !strcmp(parts[1],"/constellation") ? c->server->constellation : c->server->snapshot;
@@ -78,10 +117,10 @@ static gboolean incoming(GSocketService *service,GSocketConnection *connection,G
     s->clients=g_list_prepend(s->clients,c);c->timer=g_timeout_add_seconds(3,expired,c);
     read_request(c);return TRUE;
 }
-StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,gpointer data,GError **error) {
+StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,gpointer data,GError **error) {
     GInetAddress *ip=g_inet_address_new_from_string(address);
     if (!ip) {g_set_error_literal(error,G_IO_ERROR,G_IO_ERROR_INVALID_ARGUMENT,"Status bind address must be a numeric IPv4 or IPv6 address");return NULL;}
-    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;
+    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;s->control=control;
     GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;g_object_unref(ip);
     gboolean ok=g_socket_listener_add_address(G_SOCKET_LISTENER(s->service),bind,G_SOCKET_TYPE_STREAM,
         G_SOCKET_PROTOCOL_TCP,NULL,&effective,error);g_object_unref(bind);
