@@ -21,6 +21,8 @@ struct TsInfoParser {
     guint8 pat_sections[256];
     vbi_decoder *teletext;
     double teletext_time;
+    /* libzvbi owns the decoded pages. Remember which subpage arrived last. */
+    struct { int subno; gint64 received; } latest[800];
 };
 
 static guint16 u16(const guint8 *p) { return ((guint16)p[0]<<8)|p[1]; }
@@ -37,6 +39,8 @@ static void page_clear(TsInfoSnapshot *s) {
     g_clear_pointer(&s->page_flash_off,g_bytes_unref);
     g_clear_pointer(&s->page_reveal,g_bytes_unref);
     g_clear_pointer(&s->page_reveal_flash_off,g_bytes_unref);
+    memset(s->color_pages,0,sizeof(s->color_pages));
+    memset(s->footer_links,0,sizeof(s->footer_links));
     s->width=s->height=0;
 }
 void ts_info_snapshot_clear(TsInfoSnapshot *s) {
@@ -56,6 +60,7 @@ void ts_info_parser_snapshot(TsInfoParser *p, TsInfoSnapshot *out) { snapshot_co
 static void assembly_clear(Assembly *a) { a->used=a->expected=0; a->cc=-1; }
 static void teletext_clear(TsInfoParser *p) {
     if (p->teletext) vbi_decoder_delete(p->teletext);
+    memset(p->latest,0,sizeof(p->latest));
     p->teletext=NULL; p->teletext_time=0; assembly_clear(&p->pes);
 }
 static void content_clear(TsInfoParser *p) {
@@ -95,12 +100,12 @@ void ts_info_parser_select(TsInfoParser *p, guint16 service) {
         return;
     }
 }
+static void show_cached_page(TsInfoParser *p);
 void ts_info_parser_set_page(TsInfoParser *p, unsigned page) {
     if (page<100 || page>899 || page==p->state.page_number) return;
     p->state.page_number=page;
     page_clear(&p->state); p->state.teletext_received=0;
-    /* Keep decoding the same PID. The next complete broadcast of this page
-     * supplies its original header, subpage and reception timestamp. */
+    show_cached_page(p);
 }
 
 /* DVB Annex A: selectors plus ISO-6937 default; never pass control codes or
@@ -432,24 +437,56 @@ static GBytes *teletext_frame(vbi_page *page, gboolean reveal, gboolean flash) {
     }
     return g_bytes_new_take(pixels,WIDTH*HEIGHT*4);
 }
-static void teletext_event(vbi_event *event, void *data) {
-    TsInfoParser *p=data;
+static unsigned decimal_page(unsigned bcd) {
+    unsigned tens=(bcd>>4)&15, ones=bcd&15;
+    if (bcd<0x100 || bcd>0x899 || tens>9 || ones>9) return 0;
+    return (bcd>>8)*100+tens*10+ones;
+}
+
+/* Fetch navigation separately: libzvbi may synthesize its own footer.
+ * Only make cells clickable where its label matches the visible footer. */
+static void collect_page_links(TsInfoSnapshot *s, vbi_page *broadcast) {
+    vbi_page nav;
+    if (!vbi_fetch_vt_page(broadcast->vbi,&nav,broadcast->pgno,broadcast->subno,
+                           VBI_WST_LEVEL_3p5,25,TRUE)) return;
+    for (int i=0;i<4;i++) s->color_pages[i]=decimal_page(nav.nav_link[i].pgno);
+    for (int x=0;x<40;x++) {
+        const vbi_char *cell=&nav.text[24*nav.columns+x];
+        const vbi_char *visible=&broadcast->text[24*broadcast->columns+x];
+        unsigned i=(unsigned char)nav.nav_index[x];
+        if (cell->link && i<4 && cell->unicode==visible->unicode &&
+            cell->foreground==visible->foreground)
+            s->footer_links[x]=s->color_pages[i];
+    }
+    vbi_unref_page(&nav);
+}
+static void show_cached_page(TsInfoParser *p) {
     unsigned number=p->state.page_number;
     int bcd=((number/100)<<8)|(((number/10)%10)<<4)|(number%10);
-    if (event->type!=VBI_EVENT_TTX_PAGE || event->ev.ttx_page.pgno!=bcd) return;
+    if (!p->latest[number-100].received) return;
     vbi_page page;
-    if (!vbi_fetch_vt_page(p->teletext,&page,bcd,event->ev.ttx_page.subno,
+    if (!vbi_fetch_vt_page(p->teletext,&page,bcd,p->latest[number-100].subno,
                           VBI_WST_LEVEL_3p5,25,FALSE)) return;
     if (page.columns>=40 && page.rows>=25 && page.columns*page.rows<=(int)G_N_ELEMENTS(page.text)) {
         page_clear(&p->state);
+        collect_page_links(&p->state,&page);
         p->state.page=teletext_frame(&page,FALSE,TRUE);
         p->state.page_flash_off=teletext_frame(&page,FALSE,FALSE);
         p->state.page_reveal=teletext_frame(&page,TRUE,TRUE);
         p->state.page_reveal_flash_off=teletext_frame(&page,TRUE,FALSE);
         p->state.width=480; p->state.height=250;
-        p->state.teletext_received=g_get_real_time();
+        p->state.teletext_received=p->latest[number-100].received;
     }
     vbi_unref_page(&page);
+}
+static void teletext_event(vbi_event *event, void *data) {
+    TsInfoParser *p=data;
+    if (event->type!=VBI_EVENT_TTX_PAGE) return;
+    unsigned number=decimal_page(event->ev.ttx_page.pgno);
+    if (!number) return;
+    p->latest[number-100].subno=event->ev.ttx_page.subno;
+    p->latest[number-100].received=g_get_real_time();
+    if (number==p->state.page_number) show_cached_page(p);
 }
 static void teletext_open(TsInfoParser *p) {
     p->teletext=vbi_decoder_new();

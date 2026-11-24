@@ -329,7 +329,7 @@ only where applicable; hover over a control for its tooltip.
 | **TSscatterFix** | Enable/disable separate picture reconstruction during DVB reception and show/hide its panel. |
 | **Programs / DAB station list** | Click a DVB programme to switch the embedded player, or a DAB+ station to switch audio. Programs occupies the reconstruction-panel position when TSscatterFix is off. External DVB players select their own programme. |
 | **EIT** | Open received programme/event information. |
-| **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. Pages must be received before they can be displayed. |
+| **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. The button turns green when the service announces teletext. Received pages open from memory and refresh on reception. Use the coloured Fastext links beneath the page to follow broadcast destinations. |
 | **TII** | In DAB, inspect transmitter IDs and log confirmed observations. Green indicates codes in the latest capture; **✓ Logged** marks an already logged ensemble/code combination. |
 | **USB / FM / FM-DATA** | Toggle the parallel 3 kHz USB, 12.5 kHz FM or 20 kHz flat-audio FM-DATA monitor. Here USB means upper sideband. Only one monitor mode is active at a time. |
 | **TCI** | Configure the monitor's TCI connection, audio output and optional PCM UDP stream. |

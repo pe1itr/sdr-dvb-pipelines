@@ -1038,8 +1038,10 @@ while True:
             self.write_config(cfg, path)
             from test_ts_info import Stream
             ts = Stream()
+            footer = {24: b"\x01News  \x02Sport  \x03Weather  \x06More"}
             Path(tmp, "information.ts").write_bytes(ts.pat(((1, 0x1000), (2, 0x1001))) + ts.sdt() +
-                ts.pmt() + ts.eit() + ts.eit(number=1, title=b"Next event") + ts.teletext() + ts.teletext())
+                ts.pmt() + ts.eit() + ts.eit(number=1, title=b"Next event") + ts.teletext(rows=footer,fastext=True) +
+                ts.teletext(rows=footer,fastext=True) + ts.teletext(0x123))
             # A private headless GTK display; never connects to the user's desktop.
             display = free_port()
             env = dict(os.environ, GDK_BACKEND="broadway", BROADWAY_DISPLAY=f":{display}",

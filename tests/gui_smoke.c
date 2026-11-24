@@ -1626,6 +1626,17 @@ static void exercise_information(App *a) {
         g_assert_cmpint(cairo_surface_write_to_png(surface,file),==,CAIRO_STATUS_SUCCESS);
         g_free(dir); g_free(file); cairo_destroy(cr); cairo_surface_destroy(surface);
     }
+    for (unsigned i=0;i<4;i++) g_assert_true(gtk_widget_get_visible(v->color_buttons[i]));
+    gtk_button_clicked(GTK_BUTTON(v->color_buttons[0]));
+    deadline=g_get_monotonic_time()+1000000;
+    do {
+        v->next_tick=0; ts_info_view_tick(v,backend);
+        if (v->snapshot.page) break;
+        g_usleep(1000);
+    } while (g_get_monotonic_time()<deadline);
+    g_assert_cmpuint(v->snapshot.page_number,==,123);
+    g_assert_nonnull(v->snapshot.page);
+    g_assert_false(gtk_widget_get_visible(v->color_buttons[0]));
     /* Page commands work with no incoming TS, preserve EIT/service selection,
      * and immediately hide the image belonging to the old page. */
     gtk_entry_set_text(GTK_ENTRY(v->page_number),"200");
@@ -1636,6 +1647,7 @@ static void exercise_information(App *a) {
     g_assert_null(v->snapshot.page);
     g_assert_true(v->snapshot.events[0].valid);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->status[1])),==,"Waiting for Teletext page 200");
+    g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(v->buttons[1]),"information-ready"));
     GList *navigation=gtk_container_get_children(GTK_CONTAINER(v->page_controls));
     GtkWidget *previous=g_list_nth_data(navigation,2), *next=g_list_nth_data(navigation,3);
     GtkWidget *index=g_list_nth_data(navigation,4);

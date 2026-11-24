@@ -79,7 +79,7 @@ class Stream:
         body = struct.pack('>HHBB', 42, 1, 1, 0x4e) + (b'' if empty else event)
         return self.table(0x12, section(0x4f if other else 0x4e, service, body, version, number, 1))
 
-    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200, rows=None, national=0, flags=0, unit_id=2, field=1):
+    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200, rows=None, national=0, flags=0, unit_id=2, field=1, fastext=False):
         # Hamming(8,4), odd parity, and DVB transmission bit order.
         ham = [0x15, 0x02, 0x49, 0x5e, 0x64, 0x73, 0x38, 0x2f,
                0xd0, 0xc7, 0x8c, 0x9b, 0xa1, 0xb6, 0xfd, 0xea]
@@ -104,6 +104,12 @@ class Stream:
             if rows is not None:
                 text = rows.get(row, b" ")
             lines.append(address(row) + bytes(parity(x) for x in text.ljust(40)[:40]))
+        if fastext:
+            # X/27/0, four editorial destinations in the current magazine.
+            fields = [0]
+            for target in (0x23, 0x45, 0x67, 0x89, 0xff, 0xff):
+                fields.extend([target & 15, target >> 4, 15, 7, 15, 3])
+            lines.append(address(27) + bytes(ham[n] for n in fields+[8]) + bytes(2))
         lines.append(header(page+1))  # terminates previous page
         lines += [header(page+1)] * ((-len(lines)) % 3)
         output = b''
@@ -435,7 +441,7 @@ class InformationTests(unittest.TestCase):
                     t.teletext(bcd, message='CHOSEN PAGE')+t.teletext(bcd, message='CHOSEN PAGE'),
                     '--page=900', '--gap', '--reset')
                 self.assertEqual(waiting['page_number'], number)
-                if number!=100:
+                if number not in (100,101):
                     self.assertNotIn('page_hash', waiting)
                     self.assertNotIn('page_hash', wrong)
                     self.assertFalse(waiting['teletext_received'])
@@ -447,6 +453,28 @@ class InformationTests(unittest.TestCase):
                 self.assertEqual(reset['page_number'],100)
         result=self.run_streams(initial,'--page=99','--page=-1')
         self.assertEqual([s['page_number'] for s in result],[100,100,100])
+
+    def test_fastext_footer_and_cache(self):
+        t=Stream()
+        rows={24:b'\x01News  \x02Sport  \x03Weather  \x06More'}
+        page=t.teletext(rows=rows,fastext=True)+t.teletext(rows=rows,fastext=True)
+        first, missing, cached=self.run_streams(t.pat()+t.pmt()+page,'--page=123','--page=100')
+        for snapshot in (first,cached):
+            self.assertEqual(snapshot['color_pages'],[123,145,167,189])
+            self.assertEqual(set(snapshot['footer_links']),{0,123,145,167,189})
+        self.assertEqual(missing['color_pages'],[0]*4)
+
+    def test_page_cache_updates_offscreen_and_clears_on_pid_change(self):
+        t=Stream()
+        snapshots=self.run_streams(t.pat()+t.pmt()+t.teletext(0x234),
+            '--page=234', '--page=100', t.teletext(0x234,message='NEW EDITION'),
+            '--page=234', '--page=100', '--page=234', t.pmt(ttx_pid=0x201),
+            '--page=100', '--page=234')
+        original, updated, reopened = (snapshots[i] for i in (1,4,6))
+        self.assertNotEqual(original['page_hash'],updated['page_hash'])
+        self.assertEqual(updated['page_hash'],reopened['page_hash'])
+        self.assertEqual(updated['teletext_received'],reopened['teletext_received'])
+        self.assertNotIn('page_hash',snapshots[-1])
 
     def test_classic_teletext_page_filter_updates_gap_and_removal(self):
         t=Stream()

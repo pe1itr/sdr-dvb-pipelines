@@ -30,6 +30,11 @@ static void report(const TsInfoSnapshot *s) {
     json_object_object_add(out,"decoder",json_object_new_boolean(s->teletext_decoder));
     json_object_object_add(out,"eit_received",json_object_new_int64(s->eit_received));
     json_object_object_add(out,"teletext_received",json_object_new_int64(s->teletext_received));
+    json_object *colors=json_object_new_array(), *footer=json_object_new_array();
+    for (unsigned i=0;i<4;i++) json_object_array_add(colors,json_object_new_int(s->color_pages[i]));
+    for (unsigned i=0;i<40;i++) json_object_array_add(footer,json_object_new_int(s->footer_links[i]));
+    json_object_object_add(out,"color_pages",colors);
+    json_object_object_add(out,"footer_links",footer);
     json_object_object_add(out,"page_number",json_object_new_int(s->page_number));
     json_object_object_add(out,"width",json_object_new_int(s->width));
     json_object_object_add(out,"height",json_object_new_int(s->height));

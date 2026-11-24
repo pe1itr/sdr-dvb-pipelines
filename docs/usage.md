@@ -326,8 +326,8 @@ Met **TSscatterFix aan** komt het reconstructiepaneel op deze plek terug.
 ### EIT en klassieke teletekst
 
 Naast **TSscatterFix** staan twee kleine knoppen: **EIT** en **Teletext**.
-Elke knop is grijs zolang er nog geen inhoud beschikbaar is en wordt groen zodra
-voor de gekozen service EIT-programmainformatie of de gekozen teletekstpagina is ontvangen.
+**EIT** wordt groen zodra programmainformatie is ontvangen. **Teletext** wordt groen
+zodra de gekozen service teletekst aankondigt en blijft groen tijdens het bladeren.
 De tooltip vermeldt de laatste ontvangsttijd. Beide knoppen blijven aanklikbaar.
 Elke knop opent een eigen niet-modaal venster zonder tabbladen. Beide vensters kunnen
 tegelijk openstaan; sluiten van een venster onderbreekt de ontvangst niet.
@@ -341,10 +341,13 @@ statusbalk of gegenereerde navigatietekst. Servicekeuze, ontvangststatus en de
 knop **Reveal** staan buiten het scherm. De pagina schaalt als geheel mee met
 het venster, met behoud van de beeldverhouding en scherpe bitmaptekens.
 Met **Pagina** kies je 100–899: typ drie cijfers en druk op Enter, of gebruik
-**Vorige** en **Volgende**. **Index (100)** gaat terug naar de beginpagina.
-De navigatie loopt van 899 terug naar 100 en omgekeerd. Bij een andere pagina
-verdwijnt het oude beeld en verschijnt een wachtmelding totdat de gekozen
-pagina wordt uitgezonden; niet iedere pagina bestaat. Ontvangen subpagina's
+**Vorige** en **Volgende** onder het beeld. Bij uitgezonden navigatielinks
+open je de bestemming met de bijbehorende kleurknop of door op de gekleurde
+verwijzing in de onderste teletekstregel te klikken. **Index (100)** gaat terug naar de beginpagina.
+De navigatie loopt van 899 terug naar 100 en omgekeerd. De ontvanger bewaart ontvangen pagina’s in het werkgeheugen,
+ook als het venster gesloten is. Een bewaarde pagina verschijnt direct. Bij een
+nieuwe uitzending wordt de pagina bijgewerkt. Alleen bij een ontbrekende pagina
+verschijnt een wachtmelding. Bij afsluiten vervalt de cache. Ontvangen subpagina's
 volgen automatisch de uitzending. De paginakeuze blijft bij een servicewissel
 behouden en wordt bij stoppen/herstarten 100. Alleen de informatieviewer wijzigt:
 SDR, videospeler (ook extern op GPU) en TS-uitvoer blijven lopen.

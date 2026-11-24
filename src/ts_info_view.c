@@ -37,9 +37,44 @@ static char *event_text(const TsInfoSnapshot *s) {
     }
     return g_string_free(text,FALSE);
 }
+typedef struct { double x,y,w,h; } PageRect;
+static PageRect page_rect(GtkWidget *area) {
+    double width=gtk_widget_get_allocated_width(area), height=gtk_widget_get_allocated_height(area);
+    double w=MIN(width,height*4.0/3.0), h=w*3.0/4.0;
+    return (PageRect){(width-w)/2,(height-h)/2,w,h};
+}
+static unsigned page_link_at(TsInfoView *v, double x, double y) {
+    PageRect r=page_rect(v->page);
+    if (!v->snapshot.page || x<r.x || y<r.y+r.h*24/25 || x>=r.x+r.w || y>=r.y+r.h) return 0;
+    return v->snapshot.footer_links[(int)((x-r.x)*40/r.w)];
+}
+static void color_clicked(GtkButton *button, gpointer data) {
+    TsInfoView *v=data;
+    unsigned i=GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(button),"color-index"));
+    unsigned page=v->snapshot.color_pages[i];
+    if (page) gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),page);
+}
+static gboolean click_page(GtkWidget *area, GdkEventButton *event, gpointer data) {
+    (void)area;
+    TsInfoView *v=data;
+    unsigned number=page_link_at(v,event->x,event->y);
+    if (event->button!=1 || !number) return FALSE;
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),number);
+    return TRUE;
+}
+static gboolean page_tooltip(GtkWidget *area, gint x, gint y, gboolean keyboard,
+                             GtkTooltip *tooltip, gpointer data) {
+    (void)area;
+    unsigned number=keyboard ? 0 : page_link_at(data,x,y);
+    if (!number) return FALSE;
+    char text[32];
+    g_snprintf(text,sizeof(text),"Open pagina %u",number);
+    gtk_tooltip_set_text(tooltip,text);
+    return TRUE;
+}
 static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     TsInfoView *v=data; TsInfoSnapshot *s=&v->snapshot;
-    double width=gtk_widget_get_allocated_width(area),height=gtk_widget_get_allocated_height(area);
+    PageRect r=page_rect(area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) return FALSE;
     GBytes *frame=s->page;
@@ -49,12 +84,11 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     if (!frame) frame=s->page;
     /* Keep a TV-shaped page even if a layout allocates a different aspect.
      * UI controls never consume rows or alter character proportions. */
-    double w=MIN(width,height*4.0/3.0), h=w*3.0/4.0;
     cairo_surface_t *surface=cairo_image_surface_create_for_data(
         (unsigned char *)g_bytes_get_data(frame,NULL),CAIRO_FORMAT_RGB24,s->width,s->height,s->width*4);
     cairo_save(cr);
-    cairo_translate(cr,(width-w)/2,(height-h)/2);
-    cairo_scale(cr,w/s->width,h/s->height); cairo_set_source_surface(cr,surface,0,0);
+    cairo_translate(cr,r.x,r.y);
+    cairo_scale(cr,r.w/s->width,r.h/s->height); cairo_set_source_surface(cr,surface,0,0);
     cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_NEAREST);
     cairo_paint(cr); cairo_restore(cr); cairo_surface_destroy(surface);
     return FALSE;
@@ -68,6 +102,8 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),page);
     v->updating=FALSE;
     gtk_widget_set_sensitive(v->page_controls,v->backend!=NULL);
+    for (unsigned i=0;i<4;i++)
+        gtk_widget_set_visible(v->color_buttons[i],s->color_pages[i]!=0);
     char *page_name=g_strdup_printf("Teletext page %u",page);
     atk_object_set_name(gtk_widget_get_accessible(v->page),page_name);
     gboolean catalog=force || s->count!=v->snapshot.count || s->selected!=v->snapshot.selected ||
@@ -95,12 +131,12 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->pmt)),text,-1);
         g_free(text);
     }
-    gboolean ready[2]={s->events[0].valid || s->events[1].valid,s->page!=NULL};
+    gboolean ready[2]={s->events[0].valid || s->events[1].valid,s->teletext_announced};
     for (unsigned i=0;i<2;i++) {
         char *status;
         if (i==1 && !s->teletext_decoder && v->backend)
             status=g_strdup("Teletext decoder unavailable (libzvbi initialization failed)");
-        else if (i==1 && !ready[i])
+        else if (i==1 && !s->page)
             status=s->teletext_announced ? g_strdup_printf("Waiting for Teletext page %u",page) :
                 g_strdup(s->pmt_seen ? "No Teletext announced for this service" : "Waiting for service information");
         else status=received_text(i ? s->teletext_received : s->eit_received);
@@ -108,7 +144,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         GtkStyleContext *style=gtk_widget_get_style_context(v->buttons[i]);
         if (ready[i]) gtk_style_context_add_class(style,"information-ready");
         else gtk_style_context_remove_class(style,"information-ready");
-        char *tip=g_strdup_printf("%s%s\n%s",i ? page_name : "EIT",ready[i] ? " available" : "",status);
+        char *tip=g_strdup_printf("%s%s\n%s",i ? "Teletext" : "EIT",ready[i] ? " available" : "",status);
         gtk_widget_set_tooltip_text(v->buttons[i],tip); g_free(tip);
         gtk_label_set_text(GTK_LABEL(v->status[i]),status); g_free(status);
         atk_object_set_description(gtk_widget_get_accessible(v->buttons[i]),ready[i] ? "Information available" : "Waiting for information");
@@ -212,13 +248,12 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWi
             gtk_container_add(GTK_CONTAINER(scroll),view); gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
         } else {
             v->page_controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
-            gtk_box_pack_start(GTK_BOX(box),v->page_controls,FALSE,FALSE,0);
             gtk_box_pack_start(GTK_BOX(v->page_controls),gtk_label_new("Pagina"),FALSE,FALSE,0);
             v->page_number=gtk_spin_button_new_with_range(100,899,1);
             gtk_spin_button_set_numeric(GTK_SPIN_BUTTON(v->page_number),TRUE);
             gtk_spin_button_set_wrap(GTK_SPIN_BUTTON(v->page_number),TRUE);
             gtk_entry_set_width_chars(GTK_ENTRY(v->page_number),3);
-            gtk_widget_set_tooltip_text(v->page_number,"Typ een pagina (100–899) en druk op Enter. Wacht tot deze wordt uitgezonden.");
+            gtk_widget_set_tooltip_text(v->page_number,"Typ een pagina (100–899) en druk op Enter. Eerder ontvangen pagina’s openen direct.");
             atk_object_set_name(gtk_widget_get_accessible(v->page_number),"Teletekstpagina");
             gtk_box_pack_start(GTK_BOX(v->page_controls),v->page_number,FALSE,FALSE,0);
             g_signal_connect(v->page_number,"value-changed",G_CALLBACK(page_changed),v);
@@ -237,6 +272,29 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWi
             gtk_widget_set_name(v->page,"teletext-screen");
             gtk_widget_set_size_request(v->page,320,240);
             gtk_container_add(GTK_CONTAINER(aspect),v->page);
+            gtk_widget_add_events(v->page,GDK_BUTTON_PRESS_MASK);
+            g_signal_connect(v->page,"button-press-event",G_CALLBACK(click_page),v);
+            gtk_widget_set_has_tooltip(v->page,TRUE);
+            g_signal_connect(v->page,"query-tooltip",G_CALLBACK(page_tooltip),v);
+            gtk_box_pack_start(GTK_BOX(box),v->page_controls,FALSE,FALSE,0);
+            GtkWidget *colors=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);
+            gtk_box_pack_start(GTK_BOX(box),colors,FALSE,FALSE,0);
+            const char *names[]={"Rood","Groen","Geel","Blauw"};
+            const char *inks[]={"#e53935","#21a344","#e6b800","#3978da"};
+            for (unsigned j=0;j<4;j++) {
+                GtkWidget *button=gtk_button_new();
+                v->color_buttons[j]=button;
+                GtkWidget *label=gtk_label_new(NULL);
+                char *markup=g_strdup_printf("<span foreground='%s'>●</span> %s",inks[j],names[j]);
+                gtk_label_set_markup(GTK_LABEL(label),markup);
+                g_free(markup);
+                gtk_container_add(GTK_CONTAINER(button),label);
+                gtk_widget_show(label);
+                gtk_widget_set_no_show_all(button,TRUE);
+                gtk_box_pack_start(GTK_BOX(colors),button,TRUE,TRUE,0);
+                g_object_set_data(G_OBJECT(button),"color-index",GUINT_TO_POINTER(j));
+                g_signal_connect(button,"clicked",G_CALLBACK(color_clicked),v);
+            }
             GtkWidget *controls=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);
             gtk_box_pack_start(GTK_BOX(box),controls,FALSE,FALSE,0);
             gtk_label_set_ellipsize(GTK_LABEL(v->status[i]),PANGO_ELLIPSIZE_END);
