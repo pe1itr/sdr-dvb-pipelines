@@ -117,7 +117,13 @@ CC=gcc-10 CXX=g++-10 bash tools/build_odroid_n2.sh --install-deps
 ```
 
 Het script gebruikt `sudo apt-get` voor de Ubuntu/Debian-pakketten en bouwt
-vervolgens in **build-odroid-n2/**. Standaard compileert één taak tegelijk om
+vervolgens in **build-odroid-n2/**. Bij `--check` krijg je per ontbrekende
+SDR-driver een waarschuwing met installatiehulp. Je kunt ook zonder de
+RTL-SDR-plugin bouwen. Om de meegeleverde RTL-SDR-configuratie te gebruiken,
+installeer je `soapysdr-module-rtlsdr` en controleer je met
+`SoapySDRUtil --info` of `rtlsdr` onder **Available factories** staat.
+
+Standaard compileert één taak tegelijk om
 ook op een N2 met weinig RAM te kunnen bouwen; met voldoende vrij geheugen
 kan `-j 2` worden toegevoegd. De compileropties zijn `-march=armv8-a` en
 `-mtune=cortex-a73.cortex-a53`, geschikt voor beide CPU-clusters. De GCC-opties

@@ -17,6 +17,9 @@ args = sys.argv[1:]
 with open(os.environ['BUILD_TEST_LOG'], 'a') as out:
     out.write(json.dumps({'name': name, 'args': args, 'cwd': os.getcwd(),
                           'cflags': os.getenv('CFLAGS', '')}) + '\n')
+if name in ('rustc', 'cargo'):
+    print(name, os.getenv('RUST_VERSION', '1.70.0'))
+    sys.exit(0)
 if name == 'pkg-config':
     if args[-1] == os.getenv('MISSING_LIBRARY'):
         sys.exit(1)
@@ -104,6 +107,60 @@ class BuildHelperTests(unittest.TestCase):
                     self.assertFalse(self.fixture.commands('make'))
                 finally: backup.rename(path)
 
+    def test_missing_tools_do_not_hide_missing_libraries(self):
+        (self.fixture.bin / 'cargo').unlink()
+        self.fixture.env['MISSING_LIBRARY'] = 'gtk+-3.0'
+        result = self.fixture.run('--check')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('cargo: executable missing', result.stdout)
+        self.assertIn('gtk+-3.0: development package missing', result.stdout)
+
+    def test_old_rust_is_rejected(self):
+        self.fixture.env['RUST_VERSION'] = '1.65.0'
+        result = self.fixture.run('--check')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Rust/Cargo 1.70+ required', result.stdout)
+
+    def test_mint_and_debian_install_before_build(self):
+        for distro in ('linuxmint', 'debian'):
+            with self.subTest(distro=distro):
+                # Intercept os-release and apt inside the child shell only.
+                code = r'''source "$1"
+                source() { ID=$TEST_DISTRO; }
+                sudo() { "$@"; }
+                apt-get() { echo "APT $*"; }
+                build_main --install-deps'''
+                result = subprocess.run([BASH, '-c', code, 'test', str(ROOT / 'tools/build.sh')],
+                    cwd=self.temp.name, env={**self.fixture.env, 'TEST_DISTRO': distro},
+                    text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('APT update', result.stdout)
+                self.assertIn('libzvbi-dev', result.stdout)
+                self.assertTrue(self.fixture.commands('make'))
+
+    def test_package_advice(self):
+        for distro, command in [('linuxmint ubuntu debian', 'apt install libgtk-3-dev libavformat-dev'),
+                                ('debian', 'apt install libgtk-3-dev libavformat-dev'),
+                                ('fedora', r'dnf install pkgconfig\(gtk+-3.0\)'),
+                                ('opensuse-tumbleweed', r'zypper install pkgconfig\(gtk+-3.0\)'),
+                                ('arch', 'pacman -S --needed gtk3 ffmpeg')]:
+            with self.subTest(distro=distro):
+                result = subprocess.run([BASH, '-c',
+                    'source "$1"; build_package_help "$(build_manager "$2")" gtk+-3.0 libavformat gtk+-3.0',
+                    'test', str(ROOT / 'tools/build.sh'), distro], text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(command, result.stdout)
+                self.assertEqual(result.stdout.count('libgtk-3-dev'), int('debian' in distro))
+
+    def test_mint_optional_sdr_hints(self):
+        result = subprocess.run([BASH, '-c',
+            'source "$1"; for driver in rtlsdr airspyhf rfspace lime sdrplay utility; do '
+            'build_sdr_hint apt "$driver"; done', 'test', str(ROOT / 'tools/build.sh')],
+            text=True, capture_output=True)
+        for hint in ('soapysdr-module-rtlsdr', 'soapysdr-module-airspyhf', 'soapysdr-module-rfspace',
+                     'liblimesuite-dev', 'SoapySDRPlay3', 'soapysdr-tools'):
+            self.assertIn(hint, result.stdout)
+
     def test_optional_dependencies_only_warn(self):
         self.fixture.env['MISSING_LIBRARY'] = 'LimeSuite'
         (self.fixture.bin / 'ffplay').unlink()
@@ -111,6 +168,7 @@ class BuildHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('[WARNING] ffplay missing', result.stdout)
         self.assertIn('[WARNING] Soapy driver rfspace missing', result.stdout)
+        self.assertIn('For rfspace:', result.stdout)
         self.assertEqual(len(self.fixture.commands('make')), 1)
 
     def test_make_receives_checked_flags_and_propagates_failure(self):
@@ -131,7 +189,7 @@ class BuildHelperTests(unittest.TestCase):
         self.assertFalse(marker.exists())
 
     def test_invalid_options_and_unterminated_quotes_do_not_build(self):
-        for args in (('-j', '0'), ('-j', '-1'), ('-j', 'abc'), ('--build-dir', ''), ('--unknown',), ('-j',)):
+        for args in (('-j', '0'), ('-j', '-1'), ('-j', 'abc'), ('--build-dir', ''), ('--unknown',), ('-j',), ('--check', '--install-deps')):
             result = self.fixture.run(*args)
             self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.fixture.env['CC'] = "'unterminated"

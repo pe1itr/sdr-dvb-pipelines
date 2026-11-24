@@ -85,9 +85,15 @@ class OdroidTests(unittest.TestCase):
         cfg.read(self.root / 'pi6ehv-odroid.ini')
         self.assertEqual(cfg['session']['renderer'], 'embedded')
 
+    def test_absent_rtlsdr_plugin_allows_odroid_build(self):
+        self.fixture.env['FACTORIES'] = 'hackrf'
+        result = self.run_main()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.root / 'pi6ehv-odroid.ini').exists())
+
     def test_dependency_or_runtime_failure_blocks_build_and_config(self):
         for env in ({'MAKE_STATUS': '4'}, {'PROTOCOLS': 'Input:\n srt\nOutput:\n udp'},
-                    {'ENCODERS': ' V..... libx264 H264'}, {'FACTORIES': 'hackrf'}):
+                    {'ENCODERS': ' V..... libx264 H264'}):
             with self.subTest(env=env):
                 self.fixture.log.unlink(missing_ok=True)
                 self.fixture.env.update(env)

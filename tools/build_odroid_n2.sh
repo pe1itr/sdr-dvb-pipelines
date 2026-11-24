@@ -9,17 +9,22 @@ FFMPEG_COMMIT=f1e3a2bf7a2f2cde936d1ed97f09a26853d20125
 
 odroid_usage() {
     cat <<'HELP'
-Usage: bash tools/build_odroid_n2.sh [options]
-  --check          Check dependencies and selected runtime only.
-  --install-deps   Install Ubuntu/Debian packages with apt-get (sudo if needed).
-  --srt            Check and configure the SRT repeater output.
-  --build-ffmpeg   Select SRT and build a pinned local FFmpeg with SRT in build-odroid-n2/.
-  --ffmpeg-build DIR  Link against an existing static FFmpeg build tree.
-  --ffmpeg PATH    Use an existing FFmpeg executable.
-  --config PATH    Create a configuration after building; never overwrite.
-  -j, --jobs N     Parallel build jobs (default: 1).
-  -h, --help       Show this help.
-Run on a 64-bit aarch64 ODROID; this is not a cross-compiler.
+Bouwen op een ODROID-N2/N2+ met 64-bits Debian, Ubuntu of daarop gebaseerde Armbian
+  Eerste installatie en bouw     bash tools/build_odroid_n2.sh --install-deps
+  Alleen controleren             bash tools/build_odroid_n2.sh --check
+  Opnieuw bouwen                 bash tools/build_odroid_n2.sh
+  SRT-uitvoer controleren        bash tools/build_odroid_n2.sh --check --srt
+
+Opties
+  --install-deps      Installeer de bouwpakketten met APT en bouw op de ODROID.
+  --check             Controleer de bouwomgeving en de gekozen runtime-opties.
+  --srt               Controleer FFmpeg voor SRT en kies SRT bij een nieuwe configuratie.
+  --build-ffmpeg      Bouw de vastgelegde FFmpeg-versie met SRT in build-odroid-n2/.
+  --ffmpeg-build MAP  Koppel tegen een bestaande map met een statische FFmpeg-build.
+  --ffmpeg PAD        Gebruik dit bestaande FFmpeg-programma.
+  --config PAD        Maak na de bouw hier een configuratie als die nog ontbreekt.
+  -j, --jobs N        Aantal gelijktijdige bouwtaken (standaard 1).
+  -h, --help          Toon deze uitleg.
 HELP
 }
 
@@ -39,18 +44,9 @@ odroid_require_platform() {
 }
 
 odroid_install_dependencies() {
-    local -a prefix=() packages=(
-        build-essential pkg-config cargo rustc libgtk-3-dev libglib2.0-dev
-        libjson-c-dev libfftw3-dev libsoapysdr-dev libuhd-dev libboost-system-dev
-        libasound2-dev libsamplerate0-dev libvlc-dev libavcodec-dev libavformat-dev
-        libavutil-dev libswscale-dev libzvbi-dev ffmpeg soapysdr-tools
-        soapysdr-module-rtlsdr rtl-sdr
-    )
-    command -v apt-get >/dev/null || { echo 'ERROR: apt-get is unavailable' >&2; return 1; }
-    if ((EUID!=0)); then prefix=(sudo); fi
+    local -a packages=(ffmpeg soapysdr-tools soapysdr-module-rtlsdr rtl-sdr)
     if (($1)); then packages+=(git ca-certificates libsrt-dev libssl-dev libx264-dev nasm); fi
-    "${prefix[@]}" apt-get update
-    "${prefix[@]}" apt-get install -y --no-install-recommends "${packages[@]}"
+    build_install_apt -y "${packages[@]}"
 }
 
 odroid_local_ffmpeg() (
@@ -79,7 +75,10 @@ odroid_local_ffmpeg() (
 
 odroid_check_repeater() {
     local ffmpeg=$1 protocols encoders
-    protocols=$("$ffmpeg" -hide_banner -protocols 2>&1) || return
+    if ! protocols=$("$ffmpeg" -hide_banner -protocols 2>&1); then
+        printf 'ERROR: %s\nInstall ffmpeg or select a working executable with --ffmpeg PATH.\n' "$protocols" >&2
+        return 1
+    fi
     if ! printf '%s\n' "$protocols" | awk '/^Output:/{out=1; next} out && $1=="srt"{found=1} END{exit !found}'; then
         echo 'ERROR: FFmpeg has no SRT output; use --ffmpeg PATH or --build-ffmpeg.' >&2; return 1
     fi
@@ -90,15 +89,6 @@ odroid_check_repeater() {
             echo "ERROR: FFmpeg is missing encoder $encoder" >&2; return 1
         fi
     done
-}
-
-odroid_check_rtlsdr() {
-    local drivers
-    drivers=$(SoapySDRUtil --info 2>&1) || return
-    drivers=$(printf '%s\n' "$drivers" | sed -n '/Available factories/p')
-    [[ $drivers =~ (^|[^[:alnum:]_])rtlsdr([^[:alnum:]_]|$) ]] || {
-        echo 'ERROR: SoapyRTLSDR is unavailable; install soapysdr-module-rtlsdr.' >&2; return 1;
-    }
 }
 
 odroid_write_config() (
@@ -157,6 +147,7 @@ odroid_write_config() (
 odroid_main() (
     local install=0 srt=0 build_ffmpeg=0 check=0 jobs=1 ffmpeg=ffmpeg ffmpeg_build=
     local config="$PROJECT_ROOT/pi6ehv-odroid.ini" option
+    if (($# == 0)); then echo 'Hulp en voorbeelden: bash tools/build_odroid_n2.sh --help'; fi
     while (($#)); do
         option=$1
         case $option in
@@ -170,7 +161,7 @@ odroid_main() (
                 shift 2 ;;
             -j[0-9]*) jobs=${option#-j}; shift ;;
             -h|--help) odroid_usage; return 0 ;;
-            *) echo "Unknown option: $option" >&2; return 2 ;;
+            *) echo "Unknown option: $option" >&2; odroid_usage >&2; return 2 ;;
         esac
     done
     [[ $jobs =~ ^[1-9][0-9]*$ && -n $config && -n $ffmpeg ]] || { echo 'ERROR: invalid jobs or empty path' >&2; return 2; }
@@ -208,7 +199,6 @@ odroid_main() (
         ffmpeg="$PROJECT_ROOT/$ODROID_BUILD_DIR/ffmpeg/bin/ffmpeg"
     fi
     if ((srt)); then odroid_check_repeater "$ffmpeg"; fi
-    odroid_check_rtlsdr
     ((check==0)) || return 0
     "${command[@]}"
     config=$(realpath -m -- "$config")

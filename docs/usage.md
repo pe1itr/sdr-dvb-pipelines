@@ -9,6 +9,12 @@ Commands below run from the repository root. The detailed notes are in Dutch unl
 De toepassing ondersteunt Linrad, directe SDR-hardware en IQ-bestanden. Je stelt de parameters
 rechtstreeks in de GTK-GUI in; er zijn geen profielen nodig. Zowel de GUI als de Linrad UDP-ontvanger zijn in C geschreven.
 
+Alle opties en voorbeelden staan in de ingebouwde hulp. Typ vanuit de projectmap
+
+```bash
+bash tools/build.sh --help
+```
+
 Bouwen en starten (Linux, C- en C++20-compiler, Rust/Cargo 1.70+, `pkg-config` en development packages voor
 GTK 3, GLib, json-c, FFTW3 single precision, SoapySDR, UHD, FFmpeg
 (`libavcodec`, `libavformat`, `libavutil`, `libswscale`), libzvbi (`zvbi-0.2`), ALSA,
@@ -30,7 +36,7 @@ Een ontbrekende essentiële afhankelijkheid geeft **ERROR**, exitcode 1 en
 blokkeert de build. Alle direct gekoppelde bibliotheken zijn essentieel voor
 de huidige volledige build, ook SoapySDR en UHD als je alleen Linrad gebruikt.
 
-Ontbrekende optionele Soapy-drivermodules voor HackRF, SDR-IQ en RTL-SDR en
+Ontbrekende optionele Soapy-drivermodules voor HackRF, SDR-IQ, RTL-SDR, Airspy en SDRplay en
 externe programma's VLC/CVLC, FFplay en Dire Wolf geven **WARNING**; de build
 gaat door. De drivercontrole gebruikt `SoapySDRUtil --info`, zonder radio's
 te openen. Zonder deze utility volgt een waarschuwing dat de drivers niet
@@ -41,6 +47,34 @@ UHD-firmware, toegangsrechten of beschikbare VLC-codecplugins.
 bash tools/build.sh --check     # alleen afhankelijkheden controleren
 bash tools/build.sh -j 4        # controleren en met vier jobs bouwen
 ```
+
+Op **Linux Mint, Debian en Ubuntu** kun je vanuit de uitgepakte bronmap de
+benodigde bouwpakketten installeren en direct bouwen:
+
+```bash
+bash tools/build.sh --install-deps -j 4
+```
+
+Start dit als gewone gebruiker. Het script gebruikt `sudo` voor APT.
+Wil je eerst zien wat er ontbreekt, gebruik dan `--check`. Bij ontbrekende
+bibliotheken toont het script één kopieerbaar installatiecommando voor jouw
+distributie. Dit werkt ook voor Fedora, openSUSE en Arch. Voer na installatie
+het oorspronkelijke bouwcommando opnieuw uit. Een fout bij de C++20-proef
+betekent dat je ook de getoonde compilerfout moet bekijken. Als Rust via
+rustup is geïnstalleerd en nog geen werkende toolchain heeft, voer dan als
+gewone gebruiker `rustup default stable` uit.
+
+Op een 64-bits ODROID-N2/N2+ met Debian, Ubuntu of een daarop gebaseerde
+Armbian gebruik je `bash tools/build_odroid_n2.sh --install-deps`. Daar bouwt
+het script standaard met één taak. De opties voor SRT en een eigen FFmpeg
+staan in de [ODROID-handleiding](headless.md).
+
+Bij een SDR-waarschuwing hoef je alleen iets te doen als je die ontvanger wilt
+gebruiken. Voor een RTL-SDR op Mint of Debian is dat bijvoorbeeld
+`sudo apt install soapysdr-module-rtlsdr`. Controleer daarna of `rtlsdr` onder
+**Available factories** staat bij `SoapySDRUtil --info`. Soapy laadt de plugin
+wanneer de ontvanger opnieuw start. Voor native LimeSDR Mini installeer je de
+LimeSuite-ontwikkelbestanden en bouw je opnieuw in een verse bouwmap.
 
 De helper werkt ook vanuit een andere werkmap. Hij gebruikt `make all` en
 respecteert `CC`, `CXX`, `CPPFLAGS`, `CFLAGS`, `CXXFLAGS`, `LDFLAGS`, `LDLIBS`

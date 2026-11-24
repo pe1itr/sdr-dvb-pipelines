@@ -761,7 +761,8 @@ All decoder sources and Rust dependencies are included. No neighbouring
 repositories or separately installed LeanDVB executable are needed for the
 built-in decoders.
 
-From the repository root:
+From the repository root, run `bash tools/build.sh --help` for options and
+first-install examples. To check, build and start the application:
 
 ```sh
 bash tools/build.sh --check
@@ -770,7 +771,14 @@ cp -n linrad-dvb.example.ini linrad-dvb.ini
 ./build/linrad_dvb
 ```
 
-The build helper checks headers and link dependencies before building. Missing
+On Linux Mint, Debian and Ubuntu, run `bash tools/build.sh --install-deps -j 4`
+from the extracted source directory to install the required build packages and
+build. Run the script as your normal user. For a 64-bit Ubuntu/Debian ODROID-N2
+or N2+, use `bash tools/build_odroid_n2.sh --install-deps` for the board settings.
+
+The build helper checks headers and link dependencies before building. With
+`--check`, missing dependencies are reported with package commands for the
+detected distribution (APT, DNF, Zypper or Pacman). Missing
 optional drivers produce warnings. Select your receiver in **Input**, choose the
 standard and parameters in **Mode**, then press **Start SDR**. Press **W** to
 save settings to your local configuration. With Linrad input, tune the radio in
