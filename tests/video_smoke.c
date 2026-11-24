@@ -72,6 +72,13 @@ static void check_sparse(const char *path) {
     GtkWidget *window = gtk_offscreen_window_new();
     gtk_container_add(GTK_CONTAINER(window), video_view_create(&v));
     gtk_widget_show_all(window);
+    g_assert_true(video_view_hdmi_monitor(&v, 1));
+    g_assert_cmpstr(video_view_hdmi_state(&v), ==, "No Signal");
+    video_view_hdmi_update(&v, TRUE, FALSE);
+    g_assert_cmpstr(video_view_hdmi_state(&v), ==, "Init");
+    v.hdmi_since -= G_USEC_PER_SEC;
+    video_view_hdmi_update(&v, TRUE, TRUE);
+    g_assert_cmpstr(video_view_hdmi_state(&v), ==, "Locked");
     int input[2]; g_assert_cmpint(pipe(input), ==, 0);
     GError *error = NULL;
     g_assert_true(video_view_start(&v, input[0], NULL, NULL, TRUE, &error));
@@ -96,6 +103,11 @@ static void check_sparse(const char *path) {
         g_assert_false(video_view_failed(&v));
     }
     g_assert_true(green); /* Still no EOF: input[1] remains open. */
+    v.hdmi_since -= G_USEC_PER_SEC;
+    video_view_hdmi_update(&v, TRUE, TRUE);
+    g_assert_cmpstr(video_view_hdmi_state(&v), ==, "Video");
+    video_view_hdmi_update(&v, FALSE, FALSE);
+    g_assert_cmpstr(video_view_hdmi_state(&v), ==, "No Signal");
     video_view_stop(&v); close(input[1]);
     video_view_destroy(&v); gtk_widget_destroy(window);
 }

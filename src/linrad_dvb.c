@@ -135,6 +135,8 @@ typedef struct {
     IQView iq_view;
     DecoderView decoder_view;
     VideoView video_view;
+    GtkWidget *hdmi_menu, *hdmi_menu_label, *hdmi_power, *hdmi_programs, *hdmi_preset_rows[6];
+    gint64 hdmi_menu_refresh;
     ScatterView scatter_view;
     TsInfoView information;
     ProgramView programs;
@@ -1110,11 +1112,23 @@ static void power_refresh(App *a) {
     if (!a->power_button) return;
     GtkStyleContext *style = gtk_widget_get_style_context(a->power_button);
     const char *states[] = {"receiver-off", "receiver-running", "receiver-stopping", "receiver-error", "receiver-waiting"};
-    for (unsigned i=0; i<G_N_ELEMENTS(states); ++i) gtk_style_context_remove_class(style, states[i]);
     int state = a->stopping ? 2 : a->running ? 1 : a->exit_code ? 3 : 0;
     gboolean connecting = a->source == SOURCE_AFEDRI && a->running && !a->stopping && !a->afedri_receiving;
     gboolean waiting = a->replay_wait_until != 0;
-    gtk_style_context_add_class(style, states[waiting ? 4 : connecting ? 2 : state]);
+    const char *current=states[waiting ? 4 : connecting ? 2 : state];
+    GtkStyleContext *bar=a->hdmi_power ? gtk_widget_get_style_context(a->hdmi_power) : NULL;
+    for (unsigned i=0;i<G_N_ELEMENTS(states);++i) {
+        gtk_style_context_remove_class(style,states[i]);
+        if (bar) gtk_style_context_remove_class(bar,states[i]);
+    }
+    gtk_style_context_add_class(style,current);
+    if (bar) {
+        const char *sdr_status[]={"SDR gestopt","SDR draait","SDR stopt…","SDR-fout"};
+        const char *file_status[]={"Afspelen gestopt","Bestand speelt","Afspelen stopt…","Afspeelfout"};
+        gtk_style_context_add_class(bar,current);
+        gtk_label_set_text(GTK_LABEL(a->hdmi_power),waiting ? "Wachten op afspeeltijd" :
+            connecting ? "SDR verbindt met Afedri…" : a->source==SOURCE_FILE ? file_status[state] : sdr_status[state]);
+    }
     const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
     const char *file_labels[] = {"Play file", "Stop file", "Stopping playback…", "Play file · error"};
     const char *tips[] = {"Receiver off. Click to start.",
@@ -2863,9 +2877,141 @@ static void select_program(guint16 service, gpointer data) {
     switch_program(data, service);
 }
 
+static const char *hdmi_menu_side(App *a) {
+    if (!a->hdmi_menu || !gtk_revealer_get_reveal_child(GTK_REVEALER(a->hdmi_menu))) return "off";
+    return gtk_widget_get_halign(a->hdmi_menu)==GTK_ALIGN_END ? "right" : "left";
+}
+
+static void update_hdmi_menu(App *a) {
+    if (!a->hdmi_menu || !gtk_revealer_get_reveal_child(GTK_REVEALER(a->hdmi_menu))) return;
+    gint64 now=g_get_monotonic_time();
+    if (now<a->hdmi_menu_refresh) return;
+    a->hdmi_menu_refresh=now+250000;
+    DecoderView *v=&a->decoder_view;
+    gboolean fresh=a->standard!=4 && a->running && !a->stopping && v->status_time &&
+        now-v->status_time<2*G_USEC_PER_SEC;
+    gboolean satellite=a->standard<2;
+    double db=satellite ? v->status.mer_db : v->status.snr_db;
+    char quality[32]="—";
+    if (fresh && isfinite(db)) g_snprintf(quality,sizeof(quality),"%.1f dB",db);
+    gboolean service=fresh && v->service_valid;
+    char *text=g_strdup_printf("%.6f MHz\n%s\n%s   %d %s\nFEC   %s%s%s\n%s   %s\nProvider   %s\nService   %s",
+        configured_channel_hz(a)/1e6,standards[a->standard],satellite ? "SR" : "BW",a->sr,
+        satellite ? "sym/s" : "Hz",fresh && *v->status.fec ? v->status.fec : "—",
+        satellite ? "" : "\nGI   ", satellite ? "" : fresh && *v->status.guard ? v->status.guard : "—",
+        satellite ? "MER" : "SNR",quality,service && *v->selected_provider ? v->selected_provider : "—",
+        service && *v->selected_service ? v->selected_service : "—");
+    if (g_strcmp0(gtk_label_get_text(GTK_LABEL(a->hdmi_menu_label)),text))
+        gtk_label_set_text(GTK_LABEL(a->hdmi_menu_label),text);
+    g_free(text);
+
+    const TsInfoSnapshot *catalog=&a->information.snapshot;
+    unsigned count=a->running && !a->stopping && a->standard!=4 && a->scatter_backend ? catalog->count : 0;
+    guint16 playing=a->video_view.active && a->video_view.local_display ? a->video_view.program : 0;
+    GString *list=g_string_new("<b>Programma’s</b>");
+    /* Keep the playing service visible even on a multiplex with many services. */
+    for (int pass=0;pass<2;++pass) {
+        for (unsigned i=0;i<count;++i) {
+            const TsInfoService *service=&catalog->services[i];
+            gboolean selected=playing && service->id==playing;
+            if (selected!=(pass==0)) continue;
+            if (selected) g_string_append(list,"\n<span foreground='#76ef97'><b>▶ ");
+            else g_string_append_c(list,'\n');
+            g_string_append_printf(list,"%u  ",service->id);
+            char *name=g_markup_escape_text(*service->name ? service->name : "Naam onbekend",-1);
+            g_string_append(list,name);
+            g_free(name);
+            if (selected) g_string_append(list,"</b></span>");
+        }
+    }
+    if (!count) g_string_append(list,"\n—");
+    if (g_strcmp0(gtk_label_get_label(GTK_LABEL(a->hdmi_programs)),list->str))
+        gtk_label_set_markup(GTK_LABEL(a->hdmi_programs),list->str);
+    g_string_free(list,TRUE);
+}
+
+static gboolean hdmi_monitor(App *a,int monitor) {
+    if (!video_view_hdmi_monitor(&a->video_view,monitor)) return FALSE;
+    if (!monitor || a->hdmi_menu) return TRUE;
+    GtkOverlay *overlay=GTK_OVERLAY(a->video_view.hdmi_overlay);
+    gtk_overlay_add_overlay(overlay,ts_info_view_create_hdmi_page(&a->information));
+    a->hdmi_menu=gtk_revealer_new();
+    a->hdmi_menu_label=gtk_label_new("");
+    GtkWidget *panel=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);
+    GtkWidget *title=gtk_label_new("Linrad DVB");
+    GtkWidget *build_id=gtk_label_new("Build ID: " LINRAD_BUILD_ID);
+    gtk_label_set_xalign(GTK_LABEL(build_id),0);
+    gtk_label_set_xalign(GTK_LABEL(title),0);
+    gtk_container_add(GTK_CONTAINER(a->hdmi_menu),panel);
+    gtk_box_pack_start(GTK_BOX(panel),title,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(panel),build_id,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(panel),a->hdmi_menu_label,FALSE,FALSE,0);
+    a->hdmi_power=gtk_label_new(NULL);
+    gtk_widget_set_name(a->hdmi_power,"hdmi-power");
+    gtk_label_set_xalign(GTK_LABEL(a->hdmi_power),0);
+    g_object_add_weak_pointer(G_OBJECT(a->hdmi_power),(gpointer *)&a->hdmi_power);
+    gtk_box_pack_start(GTK_BOX(panel),a->hdmi_power,FALSE,FALSE,0);
+    gtk_revealer_set_transition_duration(GTK_REVEALER(a->hdmi_menu),220);
+    g_object_add_weak_pointer(G_OBJECT(a->hdmi_menu),(gpointer *)&a->hdmi_menu);
+    gtk_widget_set_halign(a->hdmi_menu,GTK_ALIGN_START);
+    gtk_widget_set_valign(a->hdmi_menu,GTK_ALIGN_FILL);
+    gtk_label_set_yalign(GTK_LABEL(a->hdmi_menu_label),0);
+    gtk_label_set_xalign(GTK_LABEL(a->hdmi_menu_label),0);
+    gtk_label_set_width_chars(GTK_LABEL(a->hdmi_menu_label),24);
+    gtk_label_set_max_width_chars(GTK_LABEL(a->hdmi_menu_label),32);
+    gtk_label_set_line_wrap(GTK_LABEL(a->hdmi_menu_label),TRUE);
+    gtk_label_set_line_wrap_mode(GTK_LABEL(a->hdmi_menu_label),PANGO_WRAP_WORD_CHAR);
+    GtkCssProvider *style=gtk_css_provider_new();
+    gtk_widget_set_name(title,"hdmi-menu-title");
+    gtk_widget_set_name(build_id,"hdmi-menu-build");
+    gtk_css_provider_load_from_data(style,
+        "box { background-color: rgba(0,0,0,0.78); padding: 40px 48px; }"
+        "label { color: white; font: 20px Sans; }"
+        "#hdmi-menu-title { font-weight: bold; }"
+        "#hdmi-menu-build { font-size: 13px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.75); }"
+        "#hdmi-programs { font-size: 17px; }"
+        "#hdmi-power { padding: 3px 10px; font-size: 17px; font-weight: bold; border-style: solid; border-width: 1px; }"
+        ".hdmi-preset { background-color: #373b40; padding: 3px 10px; font-size: 17px; }"
+        ".hdmi-preset:selected { background-color: #176c39; color: white; }",
+        -1,NULL);
+    GtkWidget *styled[]={panel,title,build_id,a->hdmi_menu_label,a->hdmi_power};
+    for (unsigned i=0;i<G_N_ELEMENTS(styled);++i)
+        gtk_style_context_add_provider(gtk_widget_get_style_context(styled[i]),GTK_STYLE_PROVIDER(style),
+            GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    for (unsigned i=0;i<G_N_ELEMENTS(a->hdmi_preset_rows);++i) {
+        GtkWidget *row=gtk_label_new(NULL);
+        a->hdmi_preset_rows[i]=row;
+        gtk_label_set_xalign(GTK_LABEL(row),0);
+        gtk_label_set_ellipsize(GTK_LABEL(row),PANGO_ELLIPSIZE_END);
+        GtkStyleContext *context=gtk_widget_get_style_context(row);
+        gtk_style_context_add_class(context,"hdmi-preset");
+        gtk_style_context_add_provider(context,GTK_STYLE_PROVIDER(style),GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        gtk_box_pack_start(GTK_BOX(panel),row,FALSE,FALSE,0);
+    }
+    power_refresh(a);
+    GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);
+    a->hdmi_programs=gtk_label_new(NULL);
+    gtk_label_set_xalign(GTK_LABEL(a->hdmi_programs),0);
+    gtk_label_set_yalign(GTK_LABEL(a->hdmi_programs),0);
+    gtk_label_set_ellipsize(GTK_LABEL(a->hdmi_programs),PANGO_ELLIPSIZE_END);
+    gtk_widget_set_name(a->hdmi_programs,"hdmi-programs");
+    gtk_style_context_add_provider(gtk_widget_get_style_context(a->hdmi_programs),GTK_STYLE_PROVIDER(style),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    gtk_container_add(GTK_CONTAINER(scroll),a->hdmi_programs);
+    gtk_box_pack_start(GTK_BOX(panel),scroll,TRUE,TRUE,0);
+    presets_refresh(a);
+    g_object_unref(style);
+    gtk_overlay_add_overlay(overlay,a->hdmi_menu);
+    gtk_widget_show_all(a->hdmi_menu);
+    return TRUE;
+}
+
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
+    update_hdmi_menu(a);
     if (a->standard==4) {
+        video_view_hdmi_update(&a->video_view,FALSE,FALSE);
         dab_view_tick(&a->dab,a->running && !a->stopping);scatter_refresh(a);
         return G_SOURCE_CONTINUE;
     }
@@ -2928,6 +3074,22 @@ static gboolean decoder_tick(gpointer data) {
         g_strlcpy(status->provider,service ? a->decoder_view.selected_provider : "",sizeof(status->provider));
     }
     decoder_view_tick(&a->decoder_view, a->running && !a->stopping, standards[a->standard]);
+    if (a->video_view.hdmi_window) {
+        DecoderStatus *s = &a->decoder_view.status;
+        gboolean fresh = a->running && !a->stopping && a->decoder_view.status_time &&
+            g_get_monotonic_time() - a->decoder_view.status_time < 2 * G_USEC_PER_SEC;
+        unsigned locks = fresh ? s->locks : 0;
+        if (s->satellite || a->decoder_view.hardware_ts) locks &= s->lock_valid;
+        /* Decoded TS can arrive in bursts between demodulator reports. */
+        if (a->running && !a->stopping && a->scatter_backend) {
+            g_mutex_lock(&a->scatter_backend->mutex);
+            gint64 last_ts = a->scatter_backend->last_input;
+            g_mutex_unlock(&a->scatter_backend->mutex);
+            if (last_ts && g_get_monotonic_time() - last_ts < G_USEC_PER_SEC)
+                locks |= DECODER_TS;
+        }
+        video_view_hdmi_update(&a->video_view, locks & DECODER_OFDM, locks & (DECODER_FEC | DECODER_TS));
+    }
     return G_SOURCE_CONTINUE;
 }
 
@@ -5017,6 +5179,9 @@ static void gui(App *a, gboolean start_usb) {
     a->iq_view.timer = g_timeout_add(100, monitor_tick, a);
     guint decoder_timer = g_timeout_add(50, decoder_tick, a);
     monitor_tick(a); decoder_tick(a); refresh_preview(a); gtk_widget_show_all(a->window); scatter_refresh(a);
+    int saved_monitor = g_key_file_get_integer(a->presets,"hdmi","monitor",NULL);
+    if (saved_monitor > 0 && !hdmi_monitor(a,saved_monitor))
+        status(a, "Saved HDMI monitor is unavailable");
     if (start_usb && a->usb_receiver)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->usb_toggle), TRUE);
     gtk_main();
@@ -5143,6 +5308,13 @@ static void presets_refresh(App *a) {
     for (int i=0;i<6;++i) {
         char group[24];g_snprintf(group,sizeof(group),"preset%d",i+1);
         char *label=preset_label(a,i+1);gtk_button_set_label(GTK_BUTTON(a->preset_buttons[i]),label);
+        if (a->hdmi_menu) {
+            GtkWidget *row=a->hdmi_preset_rows[i];
+            if (g_strcmp0(gtk_label_get_text(GTK_LABEL(row)),label))
+                gtk_label_set_text(GTK_LABEL(row),label);
+            if (a->active_preset==i+1) gtk_widget_set_state_flags(row,GTK_STATE_FLAG_SELECTED,FALSE);
+            else gtk_widget_unset_state_flags(row,GTK_STATE_FLAG_SELECTED);
+        }
         g_free(label);
         gboolean saved=g_key_file_has_key(a->presets,group,"settings",NULL);
         gtk_widget_set_sensitive(a->preset_buttons[i],saved && !a->stopping);
@@ -5310,11 +5482,55 @@ static const char *network_control(gpointer data,const char *command,const char 
     if (!a->presets || !g_key_file_get_boolean(a->config,"status","control",NULL))
         return control_failure(error,"403 Forbidden","Enable remote control in Output > Status endpoint");
     if (a->closing) return control_failure(error,conflict,"Receiver is closing");
+    if (g_str_has_prefix(command,"osd/")) {
+        const char *side=command+strlen("osd/");
+        if (strcmp(side,"off") && strcmp(side,"left") && strcmp(side,"right"))
+            return control_failure(error,bad,"Expected left, right or off");
+        if (!strcmp(side,"off")) {
+            if (a->hdmi_menu) gtk_revealer_set_reveal_child(GTK_REVEALER(a->hdmi_menu),FALSE);
+        } else {
+            if (!a->hdmi_menu) return control_failure(error,conflict,"Enable HDMI first");
+            GtkRevealer *panel=GTK_REVEALER(a->hdmi_menu);
+            gboolean left=!strcmp(side,"left");
+            GtkAlign edge=left ? GTK_ALIGN_START : GTK_ALIGN_END;
+            if (gtk_widget_get_halign(a->hdmi_menu)!=edge) {
+                gtk_revealer_set_transition_type(panel,GTK_REVEALER_TRANSITION_TYPE_NONE);
+                gtk_revealer_set_reveal_child(panel,FALSE);
+                gtk_widget_set_halign(a->hdmi_menu,edge);
+            }
+            gtk_revealer_set_transition_type(panel,left ? GTK_REVEALER_TRANSITION_TYPE_SLIDE_RIGHT :
+                GTK_REVEALER_TRANSITION_TYPE_SLIDE_LEFT);
+            gtk_revealer_set_reveal_child(panel,TRUE);
+            a->hdmi_menu_refresh=0;
+            update_hdmi_menu(a);
+        }
+        return "200 OK";
+    }
+    if (g_str_has_prefix(command,"hdmi/")) {
+        const char *value = command + strlen("hdmi/");
+        guint64 monitor = 0;
+        if (strcmp(value,"off") && !control_number(value,G_MAXINT,&monitor))
+            return control_failure(error,bad,"Expected a one-based monitor number or off");
+        if (monitor && (a->renderer != RENDER_EMBEDDED || a->video_view.external))
+            return control_failure(error,conflict,"Select the embedded player for HDMI");
+        int previous = a->video_view.hdmi_monitor;
+        if (!hdmi_monitor(a,(int)monitor))
+            return control_failure(error,bad,"Monitor is unavailable");
+        int saved = g_key_file_get_integer(a->presets,"hdmi","monitor",NULL);
+        g_key_file_set_integer(a->presets,"hdmi","monitor",(int)monitor);
+        if (!presets_write(a)) {
+            g_key_file_set_integer(a->presets,"hdmi","monitor",saved);
+            hdmi_monitor(a,previous);
+            return control_failure(error,"500 Internal Server Error","Cannot save HDMI monitor");
+        }
+        return "200 OK";
+    }
     if (!strcmp(command,"stop")) {
         stop_pipeline(a);
         return a->stopping ? "202 Accepted" : "200 OK";
     }
     if (!strcmp(command,"teletext/off")) {
+        if (a->information.hdmi_page) gtk_widget_hide(a->information.hdmi_page);
         gtk_dialog_response(GTK_DIALOG(a->information.dialogs[1]),GTK_RESPONSE_CLOSE);
         return "200 OK";
     }
@@ -5354,8 +5570,12 @@ static const char *network_control(gpointer data,const char *command,const char 
                 return control_failure(error,conflict,"This Teletext page has no link for that color");
             gtk_button_clicked(GTK_BUTTON(a->information.color_buttons[color]));
         } else if (!open_current) ts_info_backend_set_page(backend,(unsigned)number);
+        a->information.next_tick=0;
         ts_info_view_tick(&a->information,backend);
-        gtk_button_clicked(GTK_BUTTON(a->information.buttons[1]));
+        if (a->information.hdmi_page) {
+            gtk_widget_hide(a->information.dialogs[1]);
+            gtk_widget_show(a->information.hdmi_page);
+        } else gtk_button_clicked(GTK_BUTTON(a->information.buttons[1]));
         return "200 OK";
     }
     if (g_str_has_prefix(command,"preset/")) {
@@ -5515,7 +5735,12 @@ static char *network_status(gpointer data) {
     if (a->standard==1) STR(root,"configured_constellation",constellations[a->constellation]);
     STR(root,"configured_fec",a->standard>=3 || knucker_source(a) ? "auto" : fecs[a->fec]);
     BOOL(root,"control_enabled",a->presets && g_key_file_get_boolean(a->config,"status","control",NULL));
-    BOOL(root,"teletext_visible",a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1]));
+    NUM(root,"hdmi_monitor",a->video_view.hdmi_monitor);
+    STR(root,"hdmi_state",video_view_hdmi_state(&a->video_view));
+    STR(root,"hdmi_osd",hdmi_menu_side(a));
+    gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
+    BOOL(root,"hdmi_teletext_visible",hdmi_text);
+    BOOL(root,"teletext_visible",hdmi_text || (a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1])));
     if (a->running && !a->stopping && a->standard!=4 && a->information.backend) {
         const TsInfoSnapshot *info=&a->information.snapshot;
         NUM(root,"teletext_page",info->page_number);

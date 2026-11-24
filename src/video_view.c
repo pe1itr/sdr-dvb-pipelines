@@ -24,7 +24,7 @@ static void output_controls(VideoView *v) {
     const char *label = v->external ? "Terug in venster" : "Extern op GPU";
     if (g_strcmp0(gtk_button_get_label(GTK_BUTTON(v->output_button)), label))
         gtk_button_set_label(GTK_BUTTON(v->output_button), label);
-    gtk_widget_set_sensitive(v->output_button, v->active && v->local_display &&
+    gtk_widget_set_sensitive(v->output_button, !v->hdmi_window && v->active && v->local_display &&
         !g_atomic_int_get(&v->stopping) && !g_atomic_int_get(&v->input_ended));
 }
 
@@ -202,13 +202,63 @@ static void display_frame(void *opaque, void *picture) {
     VideoView *v = opaque;
     g_mutex_lock(&v->mutex);
     memcpy(v->frame, v->pixels, (size_t)v->pitch * v->height);
+    v->frame_time = g_get_monotonic_time();
     v->ready = v->dirty = TRUE;
     g_mutex_unlock(&v->mutex);
+}
+
+const char *video_view_hdmi_state(VideoView *v) {
+    static const char *const states[] = {"No Signal", "Init", "Locked", "Video"};
+    return v->hdmi_window ? states[v->hdmi_state] : "Off";
+}
+
+void video_view_hdmi_update(VideoView *v, gboolean detected, gboolean locked) {
+    if (!v->hdmi_window) return;
+    gint64 now = g_get_monotonic_time();
+    int previous = v->hdmi_state;
+    if (!detected && !locked) {
+        v->hdmi_state = HDMI_NO_SIGNAL;
+    } else if (previous == HDMI_NO_SIGNAL) {
+        v->hdmi_state = HDMI_INIT;
+        v->hdmi_acquired = now;
+    } else if (!locked) {
+        v->hdmi_state = HDMI_INIT;
+        if (previous != HDMI_INIT) v->hdmi_acquired = now;
+    } else if (previous == HDMI_INIT) {
+        if (now - v->hdmi_since >= 350000) v->hdmi_state = HDMI_LOCKED;
+    } else {
+        g_mutex_lock(&v->mutex);
+        gboolean picture = v->ready && v->frame_time >= v->hdmi_acquired &&
+                           now - v->frame_time < 2 * G_USEC_PER_SEC;
+        g_mutex_unlock(&v->mutex);
+        if (!picture) v->hdmi_state = HDMI_LOCKED;
+        else if (now - v->hdmi_since >= 350000) v->hdmi_state = HDMI_VIDEO;
+    }
+    if ((int)v->hdmi_state != previous) {
+        v->hdmi_since = now;
+        gtk_widget_queue_draw(v->hdmi_area);
+    }
 }
 
 static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     VideoView *v = data;
     double w = gtk_widget_get_allocated_width(widget), h = gtk_widget_get_allocated_height(widget);
+    if (widget == v->hdmi_area && v->hdmi_state != HDMI_VIDEO) {
+        cairo_set_source_rgb(cr, 0, 0, 0.68);
+        cairo_paint(cr);
+        PangoLayout *label = gtk_widget_create_pango_layout(widget, video_view_hdmi_state(v));
+        PangoFontDescription *font = pango_font_description_from_string("Sans Bold");
+        pango_font_description_set_absolute_size(font, MAX(16, h / 12) * PANGO_SCALE);
+        pango_layout_set_font_description(label, font);
+        int tw, th;
+        pango_layout_get_pixel_size(label, &tw, &th);
+        cairo_move_to(cr, (w - tw) / 2, (h - th) / 2);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        pango_cairo_show_layout(cr, label);
+        pango_font_description_free(font);
+        g_object_unref(label);
+        return FALSE;
+    }
     cairo_set_source_rgb(cr, 0, 0, 0); cairo_paint(cr);
     g_mutex_lock(&v->mutex);
     if (v->ready) {
@@ -234,6 +284,34 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     g_mutex_unlock(&v->mutex);
     return FALSE;
+}
+
+gboolean video_view_hdmi_monitor(VideoView *v, int monitor) {
+    if (!monitor) {
+        if (v->hdmi_window) gtk_widget_destroy(v->hdmi_window);
+        v->hdmi_window = v->hdmi_area = v->hdmi_overlay = NULL;
+        v->hdmi_monitor = 0;
+        return TRUE;
+    }
+    GdkScreen *screen = gtk_widget_get_screen(v->area);
+    if (monitor < 1 || monitor > gdk_display_get_n_monitors(gdk_screen_get_display(screen)))
+        return FALSE;
+    if (!v->hdmi_window) {
+        v->hdmi_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        gtk_window_set_title(GTK_WINDOW(v->hdmi_window), "Linrad DVB HDMI");
+        gtk_window_set_decorated(GTK_WINDOW(v->hdmi_window), FALSE);
+        gtk_window_set_deletable(GTK_WINDOW(v->hdmi_window), FALSE);
+        v->hdmi_area = gtk_drawing_area_new();
+        v->hdmi_overlay = gtk_overlay_new();
+        gtk_container_add(GTK_CONTAINER(v->hdmi_window), v->hdmi_overlay);
+        gtk_container_add(GTK_CONTAINER(v->hdmi_overlay), v->hdmi_area);
+        g_signal_connect(v->hdmi_area, "draw", G_CALLBACK(draw), v);
+        v->hdmi_state = HDMI_NO_SIGNAL;
+    }
+    gtk_window_fullscreen_on_monitor(GTK_WINDOW(v->hdmi_window), screen, monitor - 1);
+    gtk_widget_show_all(v->hdmi_window);
+    v->hdmi_monitor = monitor;
+    return TRUE;
 }
 
 static gboolean tick(gpointer data) {
@@ -271,7 +349,10 @@ static gboolean tick(gpointer data) {
     g_mutex_lock(&v->mutex);
     gboolean dirty = v->dirty; v->dirty = FALSE;
     g_mutex_unlock(&v->mutex);
-    if (dirty) gtk_widget_queue_draw(v->area);
+    if (dirty) {
+        gtk_widget_queue_draw(v->area);
+        if (v->hdmi_window && v->hdmi_state == HDMI_VIDEO) gtk_widget_queue_draw(v->hdmi_area);
+    }
     output_controls(v);
     return G_SOURCE_CONTINUE;
 }
@@ -578,6 +659,7 @@ gboolean video_view_failed(VideoView *v) {
 }
 
 void video_view_destroy(VideoView *v) {
+    video_view_hdmi_monitor(v, 0);
     if (v->timer) { g_source_remove(v->timer); v->timer = 0; }
     video_view_stop(v);
     /* Destruction must not depend on running the GTK loop for another second. */

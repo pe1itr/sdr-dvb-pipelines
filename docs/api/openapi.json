@@ -177,6 +177,59 @@
         ]
       }
     },
+    "/control/osd/{side}": {
+      "put": {
+        "tags": ["Receiver control"],
+        "summary": "Position or hide the HDMI information menu",
+        "description": "Show reception and service information on the selected side of the fullscreen HDMI output.",
+        "parameters": [{ "name": "side", "in": "path", "required": true, "description": "Menu position",
+          "example": "left", "schema": { "type": "string", "enum": ["left", "right", "off"] } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/200" },
+          "400": { "$ref": "#/components/responses/400" },
+          "403": { "$ref": "#/components/responses/403" },
+          "409": { "description": "Enable HDMI first." }
+        }
+      }
+    },
+    "/control/hdmi/{monitor}": {
+      "put": {
+        "tags": [
+          "Receiver control"
+        ],
+        "summary": "Select the fullscreen HDMI display",
+        "description": "Use the embedded DVB player. The monitor selection is restored at GUI startup. Read hdmi_monitor and hdmi_state from /status.",
+        "parameters": [
+          {
+            "name": "monitor",
+            "in": "path",
+            "required": true,
+            "description": "Display number starting at 1, or off to close fullscreen output.",
+            "schema": {
+              "type": "string"
+            },
+            "example": "1"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/200"
+          },
+          "400": {
+            "$ref": "#/components/responses/400"
+          },
+          "403": {
+            "$ref": "#/components/responses/403"
+          },
+          "409": {
+            "description": "Select the embedded player."
+          },
+          "500": {
+            "description": "Could not save display selection."
+          }
+        }
+      }
+    },
     "/control/program/{id}": {
       "put": {
         "tags": ["Receiver control"],
@@ -202,7 +255,7 @@
       "put": {
         "tags": ["Receiver control"],
         "summary": "Show Teletext",
-        "description": "During DVB reception, open the Teletext window on the current page. GET /status reports whether the window is visible in teletext_visible.",
+        "description": "During DVB reception, show the current page on the active HDMI display or in the desktop Teletext window. GET /status reports whether the window is visible in teletext_visible.",
         "responses": {
           "200": { "$ref": "#/components/responses/200" },
           "400": { "$ref": "#/components/responses/400" },
@@ -215,7 +268,7 @@
       "put": {
         "tags": ["Receiver control"],
         "summary": "Hide Teletext",
-        "description": "Close the Teletext window. The selected page is retained during reception. This also works when the window is already closed or reception has stopped.",
+        "description": "Hide HDMI Teletext and close the desktop Teletext window. The selected page is retained during reception. This also works when the window is already closed or reception has stopped.",
         "responses": {
           "200": { "$ref": "#/components/responses/200" },
           "400": { "$ref": "#/components/responses/400" },
@@ -249,7 +302,7 @@
       "put": {
         "tags": ["Receiver control"],
         "summary": "Open a Teletext page",
-        "description": "During DVB reception, open the Teletext window on the receiver and select a page of the current service. A cached page appears immediately. Otherwise the receiver waits for the broadcast. The HTTP response acknowledges selection. Read teletext_page and teletext_page_received from GET /status to check availability.",
+        "description": "During DVB reception, show Teletext on the active HDMI display or in the desktop window and select a page of the current service. A cached page appears immediately. Otherwise the receiver waits for the broadcast. The HTTP response acknowledges selection. Read teletext_page and teletext_page_received from GET /status to check availability.",
         "parameters": [
           {
             "name": "page",
@@ -539,7 +592,11 @@
             } }
           },
           "selected_program": { "type": "integer", "nullable": true, "description": "Service ID selected for playback, or null when none is selected in the current list." },
-          "teletext_visible": { "type": "boolean", "description": "Whether the receiver desktop is showing the Teletext window." },
+          "hdmi_monitor": { "type": "integer", "description": "Display number starting at 1, or zero when off." },
+          "hdmi_osd": { "type": "string", "enum": ["left", "right", "off"] },
+          "hdmi_teletext_visible": { "type": "boolean" },
+          "hdmi_state": { "type": "string", "enum": ["Off", "No Signal", "Init", "Locked", "Video"] },
+          "teletext_visible": { "type": "boolean", "description": "Whether Teletext is visible on HDMI or in the desktop window." },
           "teletext_page": { "type": "integer", "description": "Selected page in the active desktop DVB Teletext viewer." },
           "teletext_color_links": { "type": "object", "description": "Available Fastext keys and their destination page numbers on the current page.", "additionalProperties": { "type": "integer", "minimum": 100, "maximum": 899 } },
           "teletext_page_received": { "type": "boolean", "description": "True when the selected page is available to display." },

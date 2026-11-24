@@ -179,13 +179,13 @@ class ReceiverControlTests(unittest.TestCase):
                     cfg['paths'][key] = str(ROOT / value)
             self.port = free_port()
             cfg['status'].update(enabled='true', control='true', port=str(self.port))
-            cfg['session']['renderer'] = 'udp'
+            cfg['session']['renderer'] = 'embedded'
             cfg['linrad']['port'] = str(free_port())
             config = Path(tmp) / 'test.ini'
             with config.open('w') as out:
                 cfg.write(out)
             Path(str(config) + '.presets.ini').write_text(
-                '[preset2]\nlabel=Test RTL\nsettings=[session]\\nsource=rtlsdr\\n'
+                '[hdmi]\nmonitor=1\n[preset2]\nlabel=Test RTL\nsettings=[session]\\nsource=rtlsdr\\n'
                 'standard=DVB-T\\nsr=250000\\nfec=1/2\\nrenderer=udp\\n\n')
             display = f':{free_port()}'
             env = dict(os.environ, GDK_BACKEND='broadway', BROADWAY_DISPLAY=display,
@@ -222,6 +222,18 @@ class ReceiverControlTests(unittest.TestCase):
             code, body = self.get('/control/' + command, 'PUT')
             self.assertEqual(code, expected, body)
 
+        self.assertEqual((state['hdmi_monitor'], state['hdmi_state']), (1, 'No Signal'))
+        put('hdmi/off')
+        self.assertEqual(self.get()[1]['hdmi_state'], 'Off')
+        put('osd/left', 409)
+        put('osd/x', 400)
+        put('hdmi/9999', 400)
+        put('hdmi/1')
+        self.assertEqual(self.get()[1]['hdmi_state'], 'No Signal')
+        for side in ('right', 'left', 'off'):
+            put('osd/' + side)
+            self.assertEqual(self.get()[1]['hdmi_osd'], side)
+        put('hdmi/off')
         self.assertTrue(state['control_enabled'])
         self.assertEqual(state['presets'][1], {'slot': 2, 'label': 'Test RTL', 'saved': True})
         self.assertEqual(self.get('/control/start')[0], 405)
@@ -296,6 +308,16 @@ class ReceiverControlTests(unittest.TestCase):
         for invalid in ('99', '900', '10A', '0101'):
             put('teletext/' + invalid, 400)
         self.assertEqual(self.get()[1]['teletext_page'], 101)
+        put('hdmi/1')
+        put('teletext/123')
+        state = self.get()[1]
+        self.assertTrue(state['hdmi_teletext_visible'])
+        self.assertEqual(state['teletext_page'], 123)
+        put('teletext/off')
+        self.assertFalse(self.get()[1]['teletext_visible'])
+        put('teletext/on')
+        put('hdmi/off')
+        self.assertFalse(self.get()[1]['hdmi_teletext_visible'])
         put('gpu-ldpc/on', 409)
         put('rate/40000', 409)
         put('constellation/qpsk', 409)

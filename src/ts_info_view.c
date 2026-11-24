@@ -76,7 +76,24 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     TsInfoView *v=data; TsInfoSnapshot *s=&v->snapshot;
     PageRect r=page_rect(area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
-    if (!s->page || s->width<=0 || s->height<=0) return FALSE;
+    if (!s->page || s->width<=0 || s->height<=0) {
+        if (area==v->hdmi_page) {
+            char message[64];
+            g_snprintf(message,sizeof(message),"Wachten op teletekstpagina %u",s->page_number ? s->page_number : 100);
+            PangoLayout *layout=gtk_widget_create_pango_layout(area,message);
+            PangoFontDescription *font=pango_font_description_from_string("Sans Bold");
+            pango_font_description_set_absolute_size(font,MAX(14,r.h/24)*PANGO_SCALE);
+            pango_layout_set_font_description(layout,font);
+            int w,h;
+            pango_layout_get_pixel_size(layout,&w,&h);
+            cairo_set_source_rgb(cr,1,1,1);
+            cairo_move_to(cr,r.x+(r.w-w)/2,r.y+(r.h-h)/2);
+            pango_cairo_show_layout(cr,layout);
+            pango_font_description_free(font);
+            g_object_unref(layout);
+        }
+        return FALSE;
+    }
     GBytes *frame=s->page;
     gboolean reveal=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(v->reveal));
     if (reveal) frame=v->flash_on ? s->page_reveal : s->page_reveal_flash_off;
@@ -93,6 +110,14 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     cairo_paint(cr); cairo_restore(cr); cairo_surface_destroy(surface);
     return FALSE;
 }
+GtkWidget *ts_info_view_create_hdmi_page(TsInfoView *v) {
+    v->hdmi_page=gtk_drawing_area_new();
+    g_object_add_weak_pointer(G_OBJECT(v->hdmi_page),(gpointer *)&v->hdmi_page);
+    gtk_widget_set_no_show_all(v->hdmi_page,TRUE);
+    g_signal_connect(v->hdmi_page,"draw",G_CALLBACK(draw_page),v);
+    return v->hdmi_page;
+}
+
 static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
     unsigned page=s->page_number ? s->page_number : 100;
     v->updating=TRUE;
@@ -150,11 +175,14 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         atk_object_set_description(gtk_widget_get_accessible(v->buttons[i]),ready[i] ? "Information available" : "Waiting for information");
     }
     g_free(page_name);
-    gboolean image_changed=force || s->page!=v->snapshot.page;
+    gboolean image_changed=force || s->page!=v->snapshot.page || s->page_number!=v->snapshot.page_number;
     if (force || s->selected!=v->snapshot.selected || !s->page)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),FALSE);
     ts_info_snapshot_clear(&v->snapshot); v->snapshot=*s; memset(s,0,sizeof(*s));
-    if (image_changed) gtk_widget_queue_draw(v->page);
+    if (image_changed) {
+        gtk_widget_queue_draw(v->page);
+        if (v->hdmi_page) gtk_widget_queue_draw(v->hdmi_page);
+    }
 }
 static void service_changed(GtkComboBox *box, gpointer data) {
     TsInfoView *v=data;
@@ -198,6 +226,7 @@ static gboolean flash_tick(gpointer data) {
     gboolean on=(g_get_monotonic_time()%G_USEC_PER_SEC)<750000;
     if (on!=v->flash_on) {
         v->flash_on=on;
+        if (v->snapshot.page && v->hdmi_page && gtk_widget_get_visible(v->hdmi_page)) gtk_widget_queue_draw(v->hdmi_page);
         if (v->snapshot.page && gtk_widget_get_visible(v->dialogs[1])) gtk_widget_queue_draw(v->page);
     }
     return G_SOURCE_CONTINUE;
@@ -319,6 +348,7 @@ void ts_info_view_tick(TsInfoView *v, TsInfoBackend *backend) {
     TsInfoSnapshot s={0}; ts_info_backend_snapshot(backend,&s); update(v,&s,FALSE);
 }
 void ts_info_view_reset(TsInfoView *v) {
+    if (v->hdmi_page) gtk_widget_hide(v->hdmi_page);
     v->backend=NULL; v->next_tick=0;
     if (!v->dialogs[0]) return;
     TsInfoSnapshot s={0}; update(v,&s,TRUE);

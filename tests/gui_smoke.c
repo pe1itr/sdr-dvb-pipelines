@@ -2465,6 +2465,36 @@ static gboolean exercise(gpointer data) {
         const char *error=NULL;
         const char *keys[]={"red","green","yellow","blue"};
         const unsigned pages[]={123,145,167,189};
+        g_assert_true(hdmi_monitor(a,1));
+        gtk_revealer_set_transition_duration(GTK_REVEALER(a->hdmi_menu),0);
+        const char *menu_commands[]={"osd/left","osd/right"};
+        for (unsigned i=0;i<G_N_ELEMENTS(menu_commands);i++) {
+            g_assert_cmpstr(network_control(a,menu_commands[i],&error),==,"200 OK");
+            GtkWidget *overlay=a->video_view.hdmi_overlay;
+            GtkAllocation screen={0,0,1280,720};
+            gtk_widget_size_allocate(overlay,&screen);
+            GtkWidget *panel=gtk_bin_get_child(GTK_BIN(a->hdmi_menu));
+            GList *rows=gtk_container_get_children(GTK_CONTAINER(panel));
+            GtkWidget *title=rows->data;
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(title)),==,"Linrad DVB");
+            GtkWidget *build_id=rows->next->data;
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(build_id)),==,"Build ID: " LINRAD_BUILD_ID);
+            g_assert_cmpint(pango_layout_get_line_count(gtk_label_get_layout(GTK_LABEL(build_id))),==,1);
+            g_assert_true(rows->next->next->data==a->hdmi_menu_label);
+            g_list_free(rows);
+            GtkBorder border;
+            gtk_style_context_get_border(gtk_widget_get_style_context(build_id),GTK_STATE_FLAG_NORMAL,&border);
+            g_assert_cmpint(border.bottom,==,1);
+            int x,y;
+            g_assert_true(gtk_widget_translate_coordinates(panel,overlay,0,0,&x,&y));
+            int width=gtk_widget_get_allocated_width(panel);
+            g_assert_cmpint(width,>,0);
+            g_assert_cmpint(width,<,screen.width);
+            g_assert_cmpint(y,==,0);
+            g_assert_cmpint(x,==,i ? screen.width-width : 0);
+            g_assert_cmpint(gtk_widget_get_allocated_height(panel),==,screen.height);
+        }
+        g_assert_cmpstr(network_control(a,"osd/off",&error),==,"200 OK");
         for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) {
             g_assert_cmpstr(network_control(a,"teletext/100",&error),==,"200 OK");
             deadline=g_get_monotonic_time()+G_USEC_PER_SEC;
@@ -2474,6 +2504,10 @@ static gboolean exercise(gpointer data) {
                 if (a->information.snapshot.page) break;
                 g_usleep(1000);
             } while (g_get_monotonic_time()<deadline);
+            g_assert_nonnull(a->information.snapshot.page);
+            g_assert_true(gtk_widget_get_visible(a->information.hdmi_page));
+            g_assert_false(gtk_widget_get_visible(a->information.dialogs[1]));
+            g_assert_true(gtk_widget_get_toplevel(a->information.hdmi_page)==a->video_view.hdmi_window);
             char *encoded=network_status(a);
             json_object *state=json_tokener_parse(encoded);
             json_object *links=json_object_object_get(state,"teletext_color_links");
@@ -2485,6 +2519,12 @@ static gboolean exercise(gpointer data) {
             g_assert_cmpuint(a->information.snapshot.page_number,==,pages[i]);
         }
         g_assert_cmpstr(network_control(a,"program/2",&error),==,"200 OK");
+        g_assert_cmpstr(network_control(a,"osd/right",&error),==,"200 OK");
+        const char *program_text=gtk_label_get_text(GTK_LABEL(a->hdmi_programs));
+        g_assert_true(g_str_has_prefix(program_text,"Programma’s\n▶ 2  "));
+        g_assert_nonnull(strstr(program_text,"\n1  "));
+        g_assert_true(hdmi_monitor(a,0));
+        g_assert_null(a->information.hdmi_page);
         g_assert_cmpstr(network_control(a,"program/3",&error),==,"409 Conflict");
         char *encoded=network_status(a);
         json_object *state=json_tokener_parse(encoded);
@@ -2614,7 +2654,12 @@ static gboolean exercise_presets(gpointer data) {
     if (!phase) {
         g_assert_true(g_file_get_contents(a->config_path,&original_ini,NULL,NULL));
         g_assert_cmpint(a->active_preset,==,0);
+        g_assert_true(hdmi_monitor(a,1));
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->hdmi_power),"receiver-off"));
         for (int i=0;i<6;++i) {
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_preset_rows[i])),==,
+                gtk_button_get_label(GTK_BUTTON(a->preset_buttons[i])));
+            g_assert_false(gtk_widget_get_state_flags(a->hdmi_preset_rows[i]) & GTK_STATE_FLAG_SELECTED);
             g_assert_false(gtk_widget_get_sensitive(a->preset_buttons[i]));
             GtkWidget *grid=gtk_widget_get_parent(a->preset_buttons[i]);int column,row;
             gtk_container_child_get(GTK_CONTAINER(grid),a->preset_buttons[i],"left-attach",&column,"top-attach",&row,NULL);
@@ -2645,6 +2690,9 @@ static gboolean exercise_presets(gpointer data) {
         g_assert_cmpint(a->source,==,2);g_assert_cmpint(a->standard,==,4);
         g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_channel_box)),==,0);
         g_assert_cmpint(a->active_preset,==,3);
+        for (int i=0;i<6;++i)
+            g_assert_cmpint(!!(gtk_widget_get_state_flags(a->hdmi_preset_rows[i]) & GTK_STATE_FLAG_SELECTED),==,i==2);
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_preset_rows[2])),==,"DAB 5A");
         char *disk=NULL;g_assert_true(g_file_get_contents(a->config_path,&disk,NULL,NULL));
         g_assert_cmpstr(disk,==,original_ini);g_free(disk);
         gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
@@ -2658,19 +2706,28 @@ static gboolean exercise_presets(gpointer data) {
         g_assert_cmpstr(gtk_entry_get_text(GTK_ENTRY(a->hardware_entries[2][0])),==,"type=b200");
         g_assert_cmpfloat(a->iq_view.floor,==,-142);g_assert_cmpfloat(a->iq_view.meter.span,==,70);
         gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
-        start_pipeline(a);g_assert_true(a->running);
+        gtk_button_clicked(GTK_BUTTON(a->power_button));g_assert_true(a->running);
+        if (a->source==SOURCE_AFEDRI) {
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_power)),==,"SDR verbindt met Afedri…");
+            a->afedri_receiving=TRUE;
+            power_refresh(a);
+        }
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->hdmi_power),"receiver-running"));
         presets_refresh(a);g_assert_cmpint(a->active_preset,==,1);
         gtk_button_clicked(GTK_BUTTON(a->preset_buttons[1]));
         g_assert_true(a->stopping);g_assert_cmpint(a->pending_preset,==,2);
+        g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->hdmi_power),"receiver-stopping"));
         g_assert_cmpint(a->standard,==,0); /* Old settings retained until stopped. */
         phase=1;return G_SOURCE_CONTINUE;
     }
     if (a->running || a->stopping) return G_SOURCE_CONTINUE;
+    g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->hdmi_power),"receiver-off"));
     g_assert_cmpint(a->pending_preset,==,0);g_assert_cmpint(a->active_preset,==,2);
     g_assert_cmpint(a->standard,==,1);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),0);
     presets_refresh(a);g_assert_cmpint(a->active_preset,==,0);
     g_assert_false(gtk_style_context_has_class(gtk_widget_get_style_context(a->preset_buttons[1]),"preset-active"));
+    g_assert_false(gtk_widget_get_state_flags(a->hdmi_preset_rows[1]) & GTK_STATE_FLAG_SELECTED);
     /* Going back manually must not reactivate a preset. */
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),1);
     presets_refresh(a);g_assert_cmpint(a->active_preset,==,0);
