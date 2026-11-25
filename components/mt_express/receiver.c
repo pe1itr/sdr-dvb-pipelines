@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
 #include <libusb.h>
@@ -83,14 +84,18 @@ static bool number(const char *text, unsigned *value) {
 }
 
 int main(int argc, char **argv) {
-    MtTune tune={.alpha=-1,.beta=-1,.lock_acquire=-1,.lock_release=-1};
-    if ((argc!=7 && argc!=11) || !number(argv[1],&tune.frequency_khz) || !number(argv[2],&tune.symbol_rate) ||
+    MtTune tune={.detector2=2,.alpha=-1,.beta=-1,.lock_acquire=-1,.lock_release=-1};
+    unsigned dx_relock=0;
+    if ((argc!=7 && argc!=11 && argc!=12 && argc!=14) || !number(argv[1],&tune.frequency_khz) || !number(argv[2],&tune.symbol_rate) ||
         !number(argv[3],&tune.standard) || !number(argv[4],&tune.code) ||
         !number(argv[5],&tune.input_b) || !number(argv[6],&tune.search_khz)) {
-        fprintf(stderr,"Usage: mt_express_rx frequency_kHz symbol_rate standard(1|2) code input_B(0|1) search_kHz [alpha beta lock_acquire lock_release]\n");
+        fprintf(stderr,"Usage: mt_express_rx frequency_kHz symbol_rate standard(1|2) code input_B(0|1) search_kHz [alpha beta lock_acquire lock_release [dx_relock [detector1 detector2]]]\n");
         return 2;
     }
-    if (argc==11) {
+    if (argc==14 && (!number(argv[12],&tune.detector1) || tune.detector1>2 ||
+                     !number(argv[13],&tune.detector2) || tune.detector2>2)) return 2;
+    if (argc>=12 && (!number(argv[11],&dx_relock) || dx_relock>1)) return 2;
+    if (argc>=11) {
         int *settings[]={&tune.alpha,&tune.beta,&tune.lock_acquire,&tune.lock_release};
         for (int i=0;i<4;++i) {
             unsigned value;
@@ -109,7 +114,10 @@ int main(int argc, char **argv) {
     if (!rc) rc = libusb_set_auto_detach_kernel_driver(device, 1);
     bool control=false, ts=false, monitoring=false;
     pthread_t thread;
-    MtMonitor monitor={.device=device,.socket=-1};
+    MtMonitor monitor={.device=device,.socket=-1,.dx_relock=dx_relock,.input_b=tune.input_b,
+                       .master_clock_hz=mt_master_clock_hz(tune.symbol_rate),.tune=tune,
+                       .live_tuning=getenv("LINRAD_MT_TUNE_PIPE")!=NULL};
+    if (!rc && monitor.live_tuning && fcntl(STDIN_FILENO,F_SETFL,O_NONBLOCK)<0) rc=LIBUSB_ERROR_IO;
     if (!rc) { rc=mt_control_open(device); control=!rc; }
     if (!rc) { rc=libusb_claim_interface(device,1); ts=!rc; }
     if (!rc) rc=mt_tune(device,&tune);
@@ -120,18 +128,21 @@ int main(int argc, char **argv) {
         else {
             struct sockaddr_in dest={.sin_family=AF_INET,.sin_port=htons(n),.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
             monitor.socket=socket(AF_INET,SOCK_DGRAM,0);
-            if (monitor.socket<0 || connect(monitor.socket,(struct sockaddr *)&dest,sizeof(dest))<0 ||
-                pthread_create(&thread,NULL,mt_monitor_run,&monitor)) rc=LIBUSB_ERROR_OTHER;
-            else monitoring=true;
+            if (monitor.socket<0 || connect(monitor.socket,(struct sockaddr *)&dest,sizeof(dest))<0) rc=LIBUSB_ERROR_OTHER;
         }
     }
+    if (!rc && (port || dx_relock || monitor.live_tuning)) {
+        if (pthread_create(&thread,NULL,mt_monitor_run,&monitor)) rc=LIBUSB_ERROR_OTHER;
+        else monitoring=true;
+    }
     if (!rc) {
-        fprintf(stderr,"MT Express: input %c, %u kHz, %u sym/s, DVB-S%s, LNB off\n",tune.input_b ? 'B' : 'A', tune.frequency_khz,tune.symbol_rate,tune.standard==2 ? "2" : "");
+        fprintf(stderr,"MT Express: input %c, %u kHz, %u sym/s, DVB-S%s, demod clock %u Hz, LNB off\n",tune.input_b ? 'B' : 'A', tune.frequency_khz,tune.symbol_rate,tune.standard==2 ? "2" : "",monitor.master_clock_hz);
         rc = receive(device);
 
     }
     atomic_store(&monitor.finished,true);
     if (monitoring) pthread_join(thread,NULL);
+    if (!rc && monitor.live_tuning && monitor.error) rc=monitor.error;
     if (monitor.socket>=0) close(monitor.socket);
     if (ts) libusb_release_interface(device,1);
     if (control) libusb_release_interface(device,0);

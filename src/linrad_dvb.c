@@ -84,7 +84,7 @@ typedef struct {
     gboolean batc_receiver;
     char knucker_fft[12], knucker_constellation[12];
     GtkWidget *knucker_program;
-    GtkWidget *mt_mode, *mt_rate, *mt_code, *mt_input, *mt_search, *mt_loop[4];
+    GtkWidget *mt_mode, *mt_rate, *mt_code, *mt_input, *mt_search, *mt_dx, *mt_detector[2], *mt_loop[4];
     gboolean mt_loading;
     SdrRxStatus sdr_status;
     gint64 sdr_status_time;
@@ -816,6 +816,9 @@ static void build_pipeline(App *a) {
         add_number(s,NULL,a->standard || !code ? code : 1<<(code-1));
         add_number(s,NULL,mt_setting(a,"input_b")); add_number(s,NULL,mt_setting(a,"search_khz"));
         for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i) add_number(s,NULL,mt_setting(a,mt_loop_keys[i]));
+        add_number(s,NULL,!!mt_setting(a,"dx_relock"));
+        add_number(s,NULL,mt_setting(a,"detector1"));
+        add_number(s,NULL,mt_setting(a,"detector2"));
     } else if (knucker_source(a)) {
         s = new_stage(a,"knucker");
         a->batc_receiver=TRUE;
@@ -1412,7 +1415,7 @@ static void start_pipeline(App *a) {
         g_free(path); g_free(resolved);
     }
     a->tune_fd = -1;
-    if (a->window && !hardware_ts_source(a)) {
+    if (a->window && !knucker_source(a)) {
         if (!g_unix_open_pipe(tune_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(tune_pipe[1], TRUE, NULL)) goto pipe_error;
     }
@@ -1502,7 +1505,7 @@ static void start_pipeline(App *a) {
         int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
         if (i == 1) out = a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
         if (hardware_ts_source(a)) {
-            in = i == 0 ? nullfd : pipes[1][0];
+            in = i == 0 ? (tune_pipe[0]>=0 ? tune_pipe[0] : nullfd) : pipes[1][0];
             out = i == 0 ? scatter_pipe[1] : nullfd;
             if (i==0 && a->batc_receiver) {
                 in=scatter_pipe[1];
@@ -1513,6 +1516,9 @@ static void start_pipeline(App *a) {
         char **env = g_get_environ();
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
         env = g_environ_unsetenv(env, "LINRAD_DECODER_MONITOR_PORT");
+        env = g_environ_unsetenv(env,"LINRAD_MT_TUNE_PIPE");
+        if (i==0 && a->source==SOURCE_MT_EXPRESS && tune_pipe[0]>=0)
+            env=g_environ_setenv(env,"LINRAD_MT_TUNE_PIPE","1",TRUE);
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
         env = g_environ_unsetenv(env, "LINRAD_BOND_CONTROL");
         if (i==1 && a->bond_control) env=g_environ_setenv(env,"LINRAD_BOND_CONTROL",a->bond_control,TRUE);
@@ -1598,7 +1604,7 @@ static void tuning_changed(GtkWidget *widget, gpointer data);
 
 static void tuning_refresh(App *a) {
     if (!a->frequency_display) return;
-    gtk_widget_set_sensitive(a->frequency_button, hardware_source(a) && !a->stopping && !(a->running && moon_enabled(a)));
+    gtk_widget_set_sensitive(a->frequency_button, (hardware_source(a) || a->source==SOURCE_MT_EXPRESS) && !a->stopping && !(a->running && moon_enabled(a)));
     gtk_widget_set_sensitive(a->gain_display, hardware_source(a));
     if (hardware_source(a)) {
         char *gain=g_strdup_printf(a->source == SOURCE_AIRSPYR2 ? "Gain setting %.0f" : a->source == SOURCE_AIRSPYHF ? "Gain: automatic (VHF)" : rx_rsp(sources[a->source]) ? "IF reduction %.0f dB" : a->source == SOURCE_FCDPP ? "IF gain %.0f dB" : a->source == SOURCE_RTLSDR ? "Gain %.1f dB" : "Gain %.0f dB",g_key_file_get_double(a->config,sources[a->source],"gain",NULL));
@@ -1643,7 +1649,7 @@ static void tuning_refresh(App *a) {
         char label[48];
         g_snprintf(label,sizeof(label),"%.3f MHz",g_key_file_get_double(a->config,"mt_express","frequency",NULL)/1e6);
         gtk_label_set_text(GTK_LABEL(a->frequency_display),label);
-        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Set MT Express tuning in Input while stopped.");
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Click the receive frequency to tune the MT Express; arrow keys step by 1 kHz.");
         return;
     }
     if (knucker_source(a)) {
@@ -1710,7 +1716,8 @@ static void file_controls_refresh(App *a);
 /* Shared by arrow tuning and direct frequency entry. Only publish the new
  * setting after the existing live control pipe accepted the command. */
 static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel) {
-    if (!hardware_source(a) || a->stopping || (a->running && moon_enabled(a))) return FALSE;
+    gboolean mt=a->source==SOURCE_MT_EXPRESS;
+    if ((!hardware_source(a) && !mt) || a->stopping || (a->running && moon_enabled(a))) return FALSE;
     const char *section = sources[a->source];
     next=round(next);
     if (a->standard==4) {
@@ -1751,16 +1758,22 @@ static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel)
         return TRUE;
     }
     double rf=next;
-    double lo=converter_lo(a,rf);
-    next=rf-lo-receiver_offset(a);
-    if (!rx_tuning_valid(section,next,receiver_offset(a))) {
+    double lo=mt ? 0 : converter_lo(a,rf);
+    next=mt ? rf : rf-lo-receiver_offset(a);
+    if (mt && (next<144e6 || next>2450e6 || fmod(next,1000)!=0)) {
+        status(a,"MT Express requires 144–2450 MHz in whole kHz"); return FALSE;
+    }
+    if (!mt && !rx_tuning_valid(section,next,receiver_offset(a))) {
         status(a, "SDR/IF tuning limit reached (converter LO does not extend the hardware range)"); return FALSE;
     }
     if (a->running) {
         char command[64];
         int length = g_snprintf(command, sizeof(command), "%.0f\n", next);
+        uint32_t khz=mt ? (uint32_t)(next/1000) : 0;
+        const void *payload=command;
+        if (mt) { payload=&khz; length=sizeof(khz); }
         ssize_t sent;
-        do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, command, (size_t)length); }
+        do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, payload, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
         if (sent != length) { status(a, "Tuning command not sent; try again"); return FALSE; }
     }
@@ -1770,6 +1783,13 @@ static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel)
     }
     ts_info_view_reset(&a->information);
     program_view_update(&a->programs, &(TsInfoSnapshot){0}, 0, FALSE);
+    if (mt && a->running) {
+        DecoderView *v=&a->decoder_view;
+        v->mt_expected_khz=next/1000;
+        v->mt_valid=FALSE; v->status_time=v->points_time=0;
+        memset(v->history_time,0,sizeof(v->history_time));
+        signal_meter_reset(&a->iq_view.meter);
+    }
     g_key_file_set_double(a->config, section, "frequency", next);
     g_key_file_set_double(a->config,section,"lo_offset",lo);
     g_signal_handlers_block_by_func(a->frequency_box, source_changed, a);
@@ -1782,9 +1802,10 @@ static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel)
 }
 
 static void tune_step(App *a, int direction) {
-    if (!hardware_source(a) || a->stopping) return;
+    if ((!hardware_source(a) && a->source!=SOURCE_MT_EXPRESS) || a->stopping) return;
     const char *section=sources[a->source];
     double step=g_key_file_get_double(a->config,section,"tune_step",NULL);
+    if (a->source==SOURCE_MT_EXPRESS) step=1000;
     double next=configured_channel_hz(a)+direction*step;
     if (a->standard==4) {
         if (dab_free_tuning(a)) next=dab_frequency(a)+direction*step;
@@ -1813,7 +1834,7 @@ static gboolean tune_frequency_text(App *a, const char *text) {
 static void frequency_clicked(GtkButton *button, gpointer data) {
     (void)button;
     App *a=data;
-    if (!hardware_source(a) || a->stopping) return;
+    if ((!hardware_source(a) && a->source!=SOURCE_MT_EXPRESS) || a->stopping) return;
     GtkWidget *dialog=gtk_dialog_new_with_buttons("Tune frequency",GTK_WINDOW(a->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
         "_Cancel",GTK_RESPONSE_CANCEL,"_Tune",GTK_RESPONSE_ACCEPT,NULL);
@@ -2566,7 +2587,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
         if (hardware_source(a)) gain_step(a,-1);
         return hardware_source(a);
     }
-    if (!hardware_source(a)) return FALSE;
+    if (!hardware_source(a) && a->source!=SOURCE_MT_EXPRESS) return FALSE;
     /* Handle before GTK propagates to focused entries: plain arrows tune
      * throughout this window; modified arrows retain normal editing behavior. */
     if (event->keyval == GDK_KEY_Left || event->keyval == GDK_KEY_KP_Left) { tune_step(a, -1); return TRUE; }
@@ -2600,6 +2621,9 @@ static void mt_fields_refresh(App *a) {
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_rate),a->sr);
     for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_loop[i]),mt_setting(a,mt_loop_keys[i]));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_detector[0]),mt_setting(a,"detector1"));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_detector[1]),mt_setting(a,"detector2"));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->mt_dx),mt_setting(a,"dx_relock")!=0);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_search),mt_setting(a,"search_khz"));
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_input),mt_setting(a,"input_b"));
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->mt_code));
@@ -2618,7 +2642,12 @@ static void mt_changed(GtkWidget *widget, gpointer data) {
         refresh_preview(a);
         return;
     }
-    if (widget==a->mt_mode) {
+    if (widget==a->mt_detector[0] || widget==a->mt_detector[1]) {
+        g_key_file_set_integer(a->config,"mt_express",widget==a->mt_detector[0] ? "detector1" : "detector2",
+                               gtk_combo_box_get_active(GTK_COMBO_BOX(widget)));
+    } else if (widget==a->mt_dx) {
+        g_key_file_set_integer(a->config,"mt_express","dx_relock",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));
+    } else if (widget==a->mt_mode) {
         a->standard=gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
         g_key_file_set_integer(a->config,"mt_express","standard",a->standard+1);
         g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
@@ -3251,6 +3280,7 @@ static gboolean decoder_tick(gpointer data) {
         }
     }
     a->decoder_view.hardware_ts=hardware_ts_source(a);
+    a->decoder_view.mt_expected_khz=a->source==SOURCE_MT_EXPRESS ? configured_channel_hz(a)/1000 : 0;
     if (a->decoder_view.hardware_ts) {
         DecoderStatus *status=&a->decoder_view.status;
         if ((a->batc_receiver || a->source==SOURCE_MT_EXPRESS) && a->scatter_backend) {
@@ -3323,6 +3353,14 @@ static gboolean monitor_tick(gpointer data) {
         GtkWidget *button=mode==MONITOR_FM_DATA ? a->fm_data_toggle : mode==MONITOR_FM ? a->fm_toggle : a->usb_toggle;
         gtk_widget_set_tooltip_text(button,tip); g_free(tip);
     }
+    SignalMeter *meter=&a->iq_view.meter;
+    signal_meter_source(meter,a->source==SOURCE_MT_EXPRESS);
+    if (meter->mt) {
+        signal_meter_configure(meter,a->running && !a->stopping,FALSE,0,0,center,a->sr);
+        double stamp=a->decoder_view.status_time/1e6;
+        if (a->decoder_view.mt_valid && stamp>meter->last && g_get_monotonic_time()/1e6-stamp<1.5)
+            signal_meter_accumulate(meter,pow(10,a->decoder_view.mt_rf_input_dbm/10.0),stamp);
+    }
     iq_view_receive(&a->iq_view);
     return G_SOURCE_CONTINUE;
 }
@@ -3355,11 +3393,11 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
 #ifdef HAVE_MT_EXPRESS
-    const char *mt_keys[]={"standard","symbol_rate","input_b","s1_rate","s2_modcod","search_khz"};
+    const char *mt_keys[]={"standard","symbol_rate","input_b","s1_rate","s2_modcod","search_khz","detector1","detector2"};
     for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
         if (!g_key_file_has_key(a->config,"mt_express",mt_loop_keys[i],NULL))
             g_key_file_set_integer(a->config,"mt_express",mt_loop_keys[i],-1);
-    const int mt_defaults[]={2,5000000,1,0,0,0};
+    const int mt_defaults[]={2,5000000,1,0,0,0,0,2};
     for (unsigned i=0;i<G_N_ELEMENTS(mt_keys);++i)
         if (!g_key_file_has_key(a->config,"mt_express",mt_keys[i],NULL))
             g_key_file_set_integer(a->config,"mt_express",mt_keys[i],mt_defaults[i]);
@@ -4093,7 +4131,13 @@ static void create_config(App *a) {
                 a->mt_loop[i]=spin(loops,labels[i],i,-1,i<2 ? 63 : 255,1);
                 g_signal_connect(a->mt_loop[i],"value-changed",G_CALLBACK(mt_changed),a);
             }
-            GtkWidget *fields[]={a->mt_mode,a->mt_input,a->mt_rate,a->mt_code,a->mt_search};
+            a->mt_dx=gtk_check_button_new_with_label("DX relock at last carrier offset");
+            gtk_widget_set_tooltip_text(a->mt_dx,"After loss of lock, try the last received carrier offset once, then resume normal acquisition.");
+            gtk_grid_attach(GTK_GRID(loops),a->mt_dx,0,4,2,1);
+            g_signal_connect(a->mt_dx,"toggled",G_CALLBACK(mt_changed),a);
+            a->mt_detector[0]=combo(loops,"Loop 1 phase detector",5,(const char *[]){"Costas","Citroen 1","Citroen 2"},3,0);
+            a->mt_detector[1]=combo(loops,"Loop 2 phase detector",6,(const char *[]){"C/N > 7 dB","C/N < 7 dB","Native"},3,2);
+            GtkWidget *fields[]={a->mt_detector[0],a->mt_detector[1],a->mt_mode,a->mt_input,a->mt_rate,a->mt_code,a->mt_search};
             for (unsigned i=0;i<G_N_ELEMENTS(fields);++i)
                 g_signal_connect(fields[i],GTK_IS_SPIN_BUTTON(fields[i]) ? "value-changed" : "changed",G_CALLBACK(mt_changed),a);
         } else if (source==SOURCE_KNUCKER) {
@@ -5899,10 +5943,9 @@ static const char *network_control(gpointer data,const char *command,const char 
             number=dab_channels[channel].hz;
         }
         if (a->source==SOURCE_MT_EXPRESS) {
-            if (a->running) return control_failure(error,conflict,"Stop MT Express before tuning");
             if (number<144000000 || number>2450000000LL || number%1000)
                 return control_failure(error,bad,"MT Express requires 144–2450 MHz in whole kHz");
-            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),number/1000);
+            if (!tune_frequency(a,number,FALSE)) return control_failure(error,conflict,a->status_message);
         } else if (knucker_source(a)) {
             if (a->running) return control_failure(error,conflict,"Stop the Knucker before tuning");
             if (number<KNUCKER_MIN_KHZ*1000 || number>KNUCKER_MAX_KHZ*1000 || number%1000)
@@ -6196,6 +6239,13 @@ static char *network_status(gpointer data) {
             NUM(d,"rms_dbfs",v->rms_dbfs);NUM(d,"peak_dbfs",v->peak_dbfs);
             NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
             if (hardware_ts_source(a)) {
+                if (a->source==SOURCE_MT_EXPRESS && a->decoder_view.mt_valid) {
+                    NUM(d,"lna_gain_estimate_db",a->decoder_view.mt_lna_gain_db);
+                    NUM(d,"rf_input_estimate_dbm",a->decoder_view.mt_rf_input_dbm);
+                    NUM(d,"agc1_raw",a->decoder_view.mt_agc1);
+                    NUM(d,"agc2_raw",a->decoder_view.mt_agc2);
+                    if (a->decoder_view.mt_bch_flag>=0) BOOL(d,"bch_error_flag",a->decoder_view.mt_bch_flag);
+                }
                 if (knucker_source(a) && !a->batc_receiver) json_object_object_add(d,"sync_discarded_bytes",status_counter(a->knucker_sync_bytes));
             } else {
                 NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);

@@ -27,6 +27,14 @@ typedef struct {
     uint32_t ldpc_gpu_requested, ldpc_backend; /* 0 waiting/unknown, 1 CPU, 2 GPU */
     uint64_t ldpc_gpu_frames, ldpc_cpu_frames;
 } DecoderStatus;
+/* MT worker extends its RF status without changing the other workers' ABI. */
+typedef struct {
+    DecoderStatus rf;
+    uint16_t agc1, agc2;
+    uint32_t frequency_khz;
+    float lna_gain_db, rf_input_dbm;
+    int8_t bch_flag; /* -1 until DVB-S2 packet delineator lock */
+} DecoderMtStatus;
 typedef struct {
     uint32_t magic, type, count;
     float iq[DECODER_POINTS * 2];

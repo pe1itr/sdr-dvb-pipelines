@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "monitor.h"
+#include <unistd.h>
+#include <errno.h>
+#include <signal.h>
 #include "../../src/decoder_monitor.h"
 #include <math.h>
 #include <stdio.h>
@@ -65,13 +68,51 @@ static double constellation_mer(const MerWindow *w) {
     return signal>0 && error>0 ? 10*log10(signal/error) : NAN;
 }
 
+// Interpolate the MiniTioune indication in G8GKQ's measured BATC table.
+typedef struct { int code, dbm; } RfPoint;
+static double interpolate_rf(const RfPoint *points,unsigned count,int code) {
+    for (unsigned i=1;i<count;i++) {
+        if (code>points[i].code) continue;
+        if (code<=points[0].code) return points[0].dbm;
+        double fraction=(double)(code-points[i-1].code)/(points[i].code-points[i-1].code);
+        return points[i-1].dbm+fraction*(points[i].dbm-points[i-1].dbm);
+    }
+    return points[count-1].dbm;
+}
+static double mt_rf_estimate_dbm(unsigned agc1,unsigned agc2) {
+    static const RfPoint weak[]={{149,-71},{225,-71},{290,-73},{400,-76},{450,-78},
+        {560,-80},{780,-83},{1000,-85},{1480,-88},{2020,-90},{2560,-92},{3200,-94}};
+    static const RfPoint strong[]={{10,-71},{21800,-70},{25100,-68},{27100,-66},
+        {28900,-62},{31000,-55},{32400,-50},{33600,-44},{35000,-38},{36000,-33},
+        {36600,-30},{37600,-26}};
+    if (!agc1 && !agc2) return NAN;
+    if (agc1<21800) {
+        double lower=interpolate_rf(weak,sizeof(weak)/sizeof(*weak),agc2);
+        if (agc1<=10) return lower;
+        return lower+(-70-lower)*(agc1-10)/21790.0;
+    }
+    return interpolate_rf(strong,sizeof(strong)/sizeof(*strong),agc1);
+}
+
 static int report(MtMonitor *m, MerWindow *window) {
     DecoderStatus s={.magic=DECODER_MONITOR_MAGIC,.type=DECODER_STATUS,.satellite=1,
         .lock_valid=DECODER_OFDM|DECODER_FEC,.mer_db=NAN,.snr_db=NAN,
         .peak_dbfs=NAN,.rms_dbfs=NAN,.cfo_hz=NAN,.pilot_lock=NAN,.pilots=-1,.short_frame=-1,.modcod=-1};
+    DecoderMtStatus mt={.bch_flag=-1};
     uint8_t state[11],carrier[3],fec;
     int rc=mt_register_read(m->device,0x69,0xf211,2,state,sizeof(state));
     if (rc) return rc;
+    uint8_t gain[2];
+    rc=mt_register_read(m->device,0x69,0xf20e,2,gain,2);
+    if (rc) return rc;
+    mt.agc1=(gain[0]<<8)|gain[1];
+    rc=mt_register_read(m->device,0x69,0xf236,2,gain,2);
+    if (rc) return rc;
+    mt.agc2=(gain[0]<<8)|gain[1];
+    mt.rf_input_dbm=mt_rf_estimate_dbm(mt.agc1,mt.agc2);
+    mt.frequency_khz=m->tune.frequency_khz;
+    mt.lna_gain_db=NAN;
+    mt_lna_gain(m->device,m->input_b,&mt.lna_gain_db);
     unsigned mode=(state[10]>>5)&3;
     bool s2=mode==2;
     if (s2) s.satellite=2;
@@ -81,6 +122,7 @@ static int report(MtMonitor *m, MerWindow *window) {
         if (rc) return rc;
         if (fec&(s2 ? 2 : 8)) s.locks|=DECODER_FEC;
         if (s2) {
+            if (s.locks & DECODER_FEC) mt.bch_flag=!!(fec & 8);
             unsigned code=(state[0]>>2)&31;
             if (code>0 && code<29) {
                 s.modcod=code;
@@ -104,8 +146,30 @@ static int report(MtMonitor *m, MerWindow *window) {
         if (rc) return rc;
         int32_t offset=(carrier[0]<<16)|(carrier[1]<<8)|carrier[2];
         if (offset&0x800000) offset-=0x1000000;
-        s.cfo_hz=offset*(135000000.0/16777216.0);
+        if (m->dx_relock && (s.locks & DECODER_FEC)) {
+            // CFRINIT is the signed high 16 bits of the 24-bit CFR estimate.
+            m->last_offset=(carrier[0]<<8)|carrier[1];
+            m->dx_state=DX_TRACKED;
+        }
+        s.cfo_hz=offset*(m->master_clock_hz/16777216.0);
     }
+    if (m->dx_relock) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC,&now);
+        int64_t ms=(int64_t)now.tv_sec*1000+now.tv_nsec/1000000;
+        if (s.locks & DECODER_FEC) m->loss_since_ms=0;
+        else if (m->dx_state!=DX_IDLE) {
+            if (!m->loss_since_ms) m->loss_since_ms=ms;
+            int delay=m->dx_state==DX_TRACKED ? 500 : 2000;
+            if (ms-m->loss_since_ms>=delay) {
+                rc=mt_restart_carrier(m->device,m->dx_state==DX_TRACKED ? m->last_offset : 0);
+                if (rc) return rc;
+                m->dx_state=m->dx_state==DX_TRACKED ? DX_TRYING : DX_IDLE;
+                m->loss_since_ms=ms;
+            }
+        }
+    }
+    if (m->socket<0) return 0;
     if (window->order!=s.constellation_order || window->code!=s.modcod) {
         window->used=0;
         window->order=s.constellation_order;
@@ -130,7 +194,8 @@ static int report(MtMonitor *m, MerWindow *window) {
         ++points.count;
     }
     s.mer_db=window->db;
-    send(m->socket,&s,sizeof(s),MSG_DONTWAIT);
+    mt.rf=s;
+    send(m->socket,&mt,sizeof(mt),MSG_DONTWAIT);
     if (points.count) send(m->socket,&points,sizeof(points),MSG_DONTWAIT);
     return 0;
 }
@@ -139,6 +204,26 @@ void *mt_monitor_run(void *argument) {
     MtMonitor *m=argument;
     MerWindow window={.db=NAN};
     while (!atomic_load(&m->finished)) {
+        if (m->live_tuning) {
+            uint32_t requests[32];
+            ssize_t n=read(STDIN_FILENO,requests,sizeof(requests));
+            // Single local writer, fixed-size atomic commands, Hz on the GUI.
+            if (n>0 && n%(ssize_t)sizeof(*requests)==0) {
+                unsigned khz=requests[n/sizeof(*requests)-1];
+                if (khz!=m->tune.frequency_khz) {
+                    m->tune.frequency_khz=khz;
+                    m->error=mt_tune(m->device,&m->tune);
+                    if (m->error) break;
+                    m->dx_state=DX_IDLE; m->loss_since_ms=0;
+                    window=(MerWindow){.db=NAN};
+                    fprintf(stderr,"MT Express tuned to %u kHz\n",khz);
+                }
+            } else if (!n) m->live_tuning=0;
+            else if (n>0 || (errno!=EINTR && errno!=EAGAIN && errno!=EWOULDBLOCK)) {
+                m->error=LIBUSB_ERROR_IO;
+                break;
+            }
+        }
         m->error=report(m,&window);
         if (m->error) {
             fprintf(stderr,"MT Express: telemetry: %s\n",libusb_error_name(m->error));
@@ -146,6 +231,10 @@ void *mt_monitor_run(void *argument) {
         }
         struct timespec interval={0,50000000};
         nanosleep(&interval,NULL);
+    }
+    if (m->error && m->live_tuning) {
+        fprintf(stderr,"MT Express control: %s\n",libusb_error_name(m->error));
+        raise(SIGTERM);
     }
     return NULL;
 }

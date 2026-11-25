@@ -13,6 +13,11 @@ typedef struct {
     gint64 status_time, points_time, buffer_time;
     gboolean active, hardware_ts;
     DecoderStatus status;
+    gboolean mt_valid;
+    int mt_bch_flag;
+    float mt_lna_gain_db,mt_rf_input_dbm;
+    unsigned mt_expected_khz;
+    unsigned mt_agc1,mt_agc2;
     char selected_service[128], selected_provider[128];
     char selected_video_codec[32], selected_audio_codec[32];
     gboolean service_valid;

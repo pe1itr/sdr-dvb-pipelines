@@ -123,16 +123,41 @@ static int demod_word(libusb_device_handle *d, unsigned reg, uint16_t value) {
     uint8_t bytes[]={value >> 8,value & 255};
     return mt_register_write(d,DEMOD,reg,2,bytes,2);
 }
+int mt_restart_carrier(libusb_device_handle *d, uint16_t initial_offset) {
+    int rc=demod_byte(d,0xf216,0x1c);
+    if (!rc) rc=demod_word(d,0xf248,initial_offset);
+    if (!rc) rc=demod_byte(d,0xf216,0x15);
+    return rc;
+}
 static int tuner_access(libusb_device_handle *d, uint8_t gate, unsigned reg, uint8_t *data, size_t n, bool write) {
     int rc=demod_byte(d,0xf12a,gate|128);
     if (rc) return rc;
     return write ? mt_register_write(d,TUNER,reg,1,data,n) : mt_register_read(d,TUNER,reg,1,data,n);
 }
+// The demodulator PLL uses the module's 30 MHz reference and an output
+// divider of four. Low SR uses input divider two and feedback divider eleven.
+static void clock_dividers(unsigned symbol_rate, uint8_t *input, uint8_t *feedback) {
+    if (symbol_rate<=125000) {
+        *input=2;
+        *feedback=11;
+    } else {
+        *input=1;
+        *feedback=18;
+    }
+}
+unsigned mt_master_clock_hz(unsigned symbol_rate) {
+    uint8_t input,feedback;
+    clock_dividers(symbol_rate,&input,&feedback);
+    return 30000000U*feedback/(4U*input);
+}
+
 // Values below were read back from the local Express on PI6EHV, then
 // compared with its hardware reset state. Only the required control fields
 // are programmed; measurement/status registers are never replayed.
-static int setup_demodulator(libusb_device_handle *d) {
-    uint8_t clock[]={0x39,18,4,2};
+static int setup_demodulator(libusb_device_handle *d, unsigned symbol_rate) {
+    uint8_t input,feedback;
+    clock_dividers(symbol_rate,&input,&feedback);
+    uint8_t clock[]={0x38|input,feedback,4,2};
     int rc=mt_register_write(d,DEMOD,0xf1b3,2,clock,sizeof(clock));
     for (unsigned i=0; !rc && i<50; ++i) {
         uint8_t locked;
@@ -165,6 +190,38 @@ static int setup_lnas(libusb_device_handle *d, uint8_t gate, bool input_b) {
         if (!rc) rc=mt_register_write(d,addr,2,1,&path,1);
         if (rc) return rc;
     }
+    return 0;
+}
+
+// Request the current STVVGLNA gain on the selected RF input. The repeater
+// closes after each downstream transaction. Restore the closed gate on exit.
+int mt_lna_gain(libusb_device_handle *d, unsigned input_b, float *gain_db) {
+    uint8_t addr=input_b ? 0x64 : 0x67;
+    uint8_t gate,ctrl,values[3];
+    int rc=mt_register_read(d,DEMOD,0xf12a,2,&gate,1);
+    if (rc) return rc;
+    rc=demod_byte(d,0xf12a,gate|128);
+    if (!rc) rc=mt_register_read(d,addr,1,1,&ctrl,1);
+    if (!rc) {
+        ctrl=(ctrl & ~0x40)|0x20;
+        rc=demod_byte(d,0xf12a,gate|128);
+        if (!rc) rc=mt_register_write(d,addr,1,1,&ctrl,1);
+    }
+    if (!rc) {
+        struct timespec delay={0,5000000};
+        nanosleep(&delay,NULL);
+        rc=demod_byte(d,0xf12a,gate|128);
+        if (!rc) rc=mt_register_read(d,addr,1,1,values,sizeof(values));
+    }
+    int closed=demod_byte(d,0xf12a,gate&127);
+    if (rc || closed) return rc ? rc : closed;
+    // Approximate the four nominal gain ranges using their endpoints.
+    // The fine-gain steps are nonlinear. This is an indication in dB.
+    static const float low[]={-17.2f,-12.1f,-6.0f,1.85f};
+    static const float high[]={-8.1f,-1.6f,4.85f,13.0f};
+    unsigned stage=values[2]&3, fine=values[0]&31;
+    float fraction=fine ? (fine-1)/30.0f : 0;
+    *gain_db=low[stage]+fraction*(high[stage]-low[stage]);
     return 0;
 }
 
@@ -215,10 +272,10 @@ int mt_tune(libusb_device_handle *d, const MtTune *s) {
     if(s->frequency_khz<144000 || s->frequency_khz>2450000 ||
        s->symbol_rate<70000 || s->symbol_rate>10000000 ||
        (s->standard!=1 && s->standard!=2) || s->input_b>1 ||
-       s->code>(s->standard==1 ? 63U : 28U) || s->search_khz>30000)
+       s->code>(s->standard==1 ? 63U : 28U) || s->search_khz>30000 || s->detector1>2 || s->detector2>2)
         return LIBUSB_ERROR_INVALID_PARAM;
     uint8_t gate=0;
-    int rc=setup_demodulator(d);
+    int rc=setup_demodulator(d,s->symbol_rate);
     if (rc) return rc;
     rc=mt_register_read(d,DEMOD,0xf12a,2,&gate,1);
     if (rc) return rc;
@@ -232,6 +289,13 @@ int mt_tune(libusb_device_handle *d, const MtTune *s) {
     uint8_t mode;
     rc=mt_register_read(d,DEMOD,0xf214,2,&mode,1);
     if (!rc) rc=demod_byte(d,0xf216,0x1c); // stop acquisition for parameter update
+    const unsigned registers[]={0xf238,0xf290};
+    const unsigned detectors[]={s->detector1,s->detector2};
+    for (unsigned i=0;!rc && i<2;i++) {
+        uint8_t config;
+        rc=mt_register_read(d,DEMOD,registers[i],2,&config,1);
+        if (!rc) rc=demod_byte(d,registers[i],(config&~3)|detectors[i]);
+    }
     // Carrier gains are raw mantissa/exponent codes. Keep the measured
     // mode bits and restore the measured defaults on every acquisition.
     static const uint8_t alpha[]={0x0b,0x0a,0x49,0x48};
@@ -246,8 +310,11 @@ int mt_tune(libusb_device_handle *d, const MtTune *s) {
     if (!rc) rc=demod_byte(d,0xf214,(mode&0x3f)|(s->standard==2 ? 0x80 : 0x40));
     if (!rc) rc=demod_byte(d,0xf211,s->standard==2 && s->code ? 0x80|(s->code<<2) : 0);
     if (!rc) rc=demod_byte(d,0xf33c,s->standard==1 && s->code ? s->code : 0x3f);
-    unsigned sr=(s->symbol_rate*65536ULL+67500000)/135000000;
-    unsigned window=(s->search_khz ? s->search_khz : s->symbol_rate*3/2000)*65536ULL/135000;
+    unsigned master=mt_master_clock_hz(s->symbol_rate);
+    unsigned sr=(s->symbol_rate*65536ULL+master/2)/master;
+    unsigned window=(s->search_khz ? s->search_khz : s->symbol_rate*3/2000)*65536ULL/(master/1000);
+    // The Express accepted a maximum positive carrier bound of 0x3fff on readback.
+    if (window>0x3fff) window=0x3fff;
     if(!rc) rc=demod_word(d,0xf25e,sr);
     if(!rc) rc=demod_word(d,0xf260,sr+sr/50+1);
     if(!rc) rc=demod_word(d,0xf262,sr-sr/50-1);

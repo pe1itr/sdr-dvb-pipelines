@@ -10,7 +10,8 @@ typedef struct {
     GtkWidget *area, *buttons[6];
     double reference, span, interval;
     double center, rate, bandwidth, offset;
-    gboolean filtered, active, configured;
+    gboolean filtered, active, configured, mt;
+    double mt_reference;
     struct { double time, db; } points[SIGNAL_METER_POINTS];
     unsigned head, count, average_count;
     double sum, bucket, origin, last, value;
@@ -55,9 +56,8 @@ static void signal_meter_configure(SignalMeter *m, gboolean active, gboolean fil
     m->offset=offset; m->center=center; m->rate=rate; m->configured=TRUE;
 }
 
-static void signal_meter_feed(SignalMeter *m, const IQMonitorFrame *frame, double now) {
+static void signal_meter_accumulate(SignalMeter *m, double power, double now) {
     if (!m->active) return;
-    double power=signal_meter_power(frame,m->filtered,m->bandwidth,m->offset);
     if (!isfinite(power) || power<0) return;
     if (!m->average_count) m->origin=now;
     double bucket=floor((now-m->origin)/m->interval+1e-8);
@@ -72,6 +72,10 @@ static void signal_meter_feed(SignalMeter *m, const IQMonitorFrame *frame, doubl
     m->value=10*log10(MAX(m->sum/m->average_count,1e-20));
 }
 
+static void signal_meter_feed(SignalMeter *m, const IQMonitorFrame *frame, double now) {
+    if (!m->mt) signal_meter_accumulate(m,signal_meter_power(frame,m->filtered,m->bandwidth,m->offset),now);
+}
+
 static gboolean signal_meter_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     SignalMeter *m=data;
     double w=gtk_widget_get_allocated_width(widget), h=gtk_widget_get_allocated_height(widget);
@@ -84,7 +88,7 @@ static gboolean signal_meter_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     plot_font(cr,"monospace",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL);
     cairo_set_font_size(cr,11);
     char text[128];
-    double floor_db=m->reference-m->span/2;
+    double floor_db=(m->mt ? m->mt_reference : m->reference)-m->span/2;
     /* Linrad uses horizontal grid lines, a left dB scale and a yellow RMS
      * trace. The six arrows occupy the same corners as meter_graph.c. */
     double raw=m->span/5, decade=pow(10,floor(log10(raw)));
@@ -119,10 +123,13 @@ static gboolean signal_meter_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
     }
     cairo_stroke(cr); cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8);
-    if (fresh) g_snprintf(text,sizeof(text),"%s  %.1f dBFS",m->filtered ? "BW" : "Full",m->value);
+    if (m->mt && fresh) g_snprintf(text,sizeof(text),"RF input (BATC est.)  %s%.0f dBm",
+        m->value>=-26.0001 ? "≥ " : m->value<=-93.9999 ? "≤ " : "",m->value);
+    else if (m->mt) g_strlcpy(text,m->active ? "RF level · waiting for MT Express" : "RF level · stopped",sizeof(text));
+    else if (fresh) g_snprintf(text,sizeof(text),"%s  %.1f dBFS",m->filtered ? "BW" : "Full",m->value);
     else g_snprintf(text,sizeof(text),"%s  %s",m->filtered ? "BW" : "Full",m->active ? "Waiting for IQ" : "Stopped");
     cairo_move_to(cr,28,15); cairo_show_text(cr,text);
-    cairo_move_to(cr,28,h-8); cairo_show_text(cr,"dBFS");
+    cairo_move_to(cr,28,h-8); cairo_show_text(cr,m->mt ? "dBm" : "dBFS");
     g_snprintf(text,sizeof(text),"%.1f s/pt  %.0f s",m->interval,duration);
     cairo_move_to(cr,80,h-8); cairo_show_text(cr,text);
     return FALSE;
@@ -131,10 +138,10 @@ static gboolean signal_meter_draw(GtkWidget *widget, cairo_t *cr, gpointer data)
 static void signal_meter_refresh(SignalMeter *m) {
     const char *tips[]={"Finer level resolution", "Coarser level resolution",
         "Move trace up", "Move trace down", "Faster / less averaging", "Slower / more averaging"};
-    gboolean sensitive[]={m->span>1,m->span<160,m->reference>-200,m->reference<20,
+    gboolean sensitive[]={m->span>1,m->span<160,m->mt ? m->mt_reference>-200 : m->reference>-200,m->mt ? m->mt_reference<20 : m->reference<20,
                           m->interval>.100001,m->interval<12.799999};
     for (int i=0; i<6; ++i) {
-        char *tip=g_strdup_printf("%s · range %.1f dB · %.1f s per point",tips[i],m->span,m->interval);
+        char *tip=g_strdup_printf("%s · range %.1f %s · %.1f s per point",tips[i],m->span,"dB",m->interval);
         gtk_widget_set_tooltip_text(m->buttons[i],tip); g_free(tip);
         gtk_widget_set_sensitive(m->buttons[i],sensitive[i]);
     }
@@ -146,8 +153,9 @@ static void signal_meter_clicked(GtkButton *button, gpointer data) {
     int i=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"meter-index"));
     if (i==0) m->span=MAX(1,m->span/1.3);
     if (i==1) m->span=MIN(160,m->span*1.4);
-    if (i==2) m->reference=MAX(-200,m->reference-m->span*.1);
-    if (i==3) m->reference=MIN(20,m->reference+m->span*.1);
+    if (m->mt && (i==2 || i==3)) m->mt_reference=CLAMP(m->mt_reference+(i==2 ? -1 : 1)*m->span*.1,-200,20);
+    else if (i==2) m->reference=MAX(-200,m->reference-m->span*.1);
+    else if (i==3) m->reference=MIN(20,m->reference+m->span*.1);
     if (i>=4) {
         m->interval=CLAMP(m->interval*(i==4 ? .5 : 2),.1,12.8);
         signal_meter_reset(m);
@@ -176,7 +184,19 @@ static double signal_meter_setting(GKeyFile *config, const char *key, double fal
     g_clear_error(&error); return value;
 }
 
+static const char *iq_meter_tip="Signal strength over time in dBFS. BW selects channel or full input power.";
+static void signal_meter_source(SignalMeter *m, gboolean mt) {
+    if (m->mt==mt) return;
+    m->mt=mt;
+    signal_meter_reset(m);
+    if (m->area) {
+        gtk_widget_set_tooltip_text(m->area,mt ? "Estimated broadband RF input from AGC1/AGC2 using the BATC MiniTioune indication. Scale limits: -94 to -26 dBm. LNA gain shows further gain reduction at the upper limit." : iq_meter_tip);
+        signal_meter_refresh(m);
+    }
+}
+
 static GtkWidget *signal_meter_create(SignalMeter *m, GKeyFile *config) {
+    m->mt_reference=-60;
     m->reference=signal_meter_setting(config,"meter_reference_dbfs",-50,-200,20);
     m->span=signal_meter_setting(config,"meter_range_db",80,1,160);
     m->interval=signal_meter_setting(config,"meter_seconds_per_point",.1,.1,12.8);

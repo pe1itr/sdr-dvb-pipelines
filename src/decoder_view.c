@@ -182,6 +182,7 @@ void decoder_view_stop(DecoderView *v) {
     memset(v->history_time,0,sizeof(v->history_time));
     v->history_next=0;
     memset(&v->queue,0,sizeof(v->queue));
+    v->mt_valid=FALSE;
     memset(&v->status,0,sizeof(v->status)); memset(&v->points,0,sizeof(v->points));
 }
 
@@ -200,14 +201,25 @@ gboolean decoder_view_start(DecoderView *v) {
 
 static void receive_frames(DecoderView *v) {
     if (v->fd<0 || !v->port) return;
-    union { DecoderStatus status; DecoderConstellation points; DecoderBuffer queue; DecoderDvbtHealth health; } frame;
+    union { DecoderMtStatus mt; DecoderStatus status; DecoderConstellation points; DecoderBuffer queue; DecoderDvbtHealth health; } frame;
     /* Bound GUI work even if a backend produces too many updates. MSG_TRUNC
      * ensures oversized datagrams cannot masquerade as a valid frame. */
     for (int i=0;i<64;++i) {
         ssize_t n=recv(v->fd,&frame,sizeof(frame),MSG_DONTWAIT | MSG_TRUNC);
         if (n<0) break;
         if (n<8 || frame.status.magic!=DECODER_MONITOR_MAGIC || !v->active) continue;
-        if (frame.status.type==DECODER_STATUS && n==sizeof(DecoderStatus)) {
+        if (frame.status.type==DECODER_STATUS && (n==sizeof(DecoderStatus) || (v->hardware_ts && n==sizeof(DecoderMtStatus)))) {
+            if (n==sizeof(DecoderMtStatus) && v->mt_expected_khz && frame.mt.frequency_khz!=v->mt_expected_khz) {
+                v->mt_valid=FALSE;
+                continue;
+            }
+            v->mt_valid=n==sizeof(DecoderMtStatus);
+            if (v->mt_valid) {
+                v->mt_lna_gain_db=frame.mt.lna_gain_db;
+                v->mt_rf_input_dbm=frame.mt.rf_input_dbm;
+                v->mt_agc1=frame.mt.agc1; v->mt_agc2=frame.mt.agc2;
+                v->mt_bch_flag=frame.mt.bch_flag;
+            }
             if (v->hardware_ts && frame.status.satellite) {
                 /* The USB relay owns TS counters and service lock. The RF
                  * monitor cannot observe either at its demodulator registers. */
@@ -227,6 +239,7 @@ static void receive_frames(DecoderView *v) {
             v->status.guard[sizeof(v->status.guard)-1]=0;
             v->status_time=g_get_monotonic_time();
         } else if (frame.points.type==DECODER_CONSTELLATION && n==sizeof(DecoderConstellation) && frame.points.count<=DECODER_POINTS) {
+            if (v->hardware_ts && v->mt_expected_khz && !v->mt_valid) continue;
             v->points=frame.points; v->points_time=g_get_monotonic_time();
             v->points_received_us=g_get_real_time();
             v->history[v->history_next]=frame.points;
@@ -304,14 +317,21 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     const char *dvb_names[]={"Service","Provider","Pilot","Buffer","Video codec","TS","Output","RS OK","RS errors","CC errors","D margin"};
     for (unsigned i=0;i<G_N_ELEMENTS(fields);++i)
         gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(fields[i]),"caption")),dab ? dab_names[i] : dvb_names[i]);
+    gboolean mt=v->hardware_ts && satellite;
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rms),"caption")),mt ? "AGC1" : "IQ RMS");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->peak),"caption")),mt ? "AGC2" : "Peak");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rms),"units")),mt ? "raw" : "dBFS");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->peak),"units")),mt ? "raw" : "dBFS");
+    if (mt) gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->buffer),"caption")),"LNA gain");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->buffer),"units")),mt ? "dB" : "%");
     if (dab) measurement(v->margin,"%.1f",fresh ? s->mer_db : NAN);
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->snr),"caption")),satellite ? "MER" : "SNR");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"caption")),dab ? "CP lock" : satellite ? "Pilots" : "Pilot");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->pilot),"units")),satellite ? "" : "%");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->guard),"caption")),satellite ? "Frame" : "GI");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),dab ? "FIGs" : (s2 || t2) ? "BCH OK" : "RS OK");
-    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),dab ? "FIB errors" : (s2 || t2) ? "BCH errors" : "RS errors");
-    gtk_widget_set_tooltip_text(v->buffer,dab ? "Progress of the current 8-second FIC/TII capture" : t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
+    gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),mt && s2 ? "BCH flag" : dab ? "FIB errors" : (s2 || t2) ? "BCH errors" : "RS errors");
+    gtk_widget_set_tooltip_text(v->buffer,mt ? "Estimated gain of the selected input LNA" : dab ? "Progress of the current 8-second FIC/TII capture" : t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
     if ((satellite || t2) && !v->hardware_ts) {
         s->lock_valid |= DECODER_SERVICE;
         if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
@@ -349,6 +369,12 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         measurement(v->cc_errors,"%.0f",s->cc_errors);
         if (v->hardware_ts) {
             set_value(v->rs_ok,""); set_value(v->rs_errors,""); set_value(v->cc_errors,"");
+        }
+        if (mt && v->mt_valid) {
+            measurement(v->buffer,"%.1f",v->mt_lna_gain_db);
+            measurement(v->rms,"%.0f",v->mt_agc1);
+            measurement(v->peak,"%.0f",v->mt_agc2);
+            if (s2 && v->mt_bch_flag>=0) set_value(v->rs_errors,v->mt_bch_flag ? "Error" : "Clear");
         }
         if (satellite && !v->hardware_ts) {
             measurement(v->rs_ok,"%.0f",s->fec_good); measurement(v->rs_errors,"%.0f",s->fec_bad);

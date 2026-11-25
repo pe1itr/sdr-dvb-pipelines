@@ -151,7 +151,7 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     return FALSE;
 }
 static void iq_view_receive(IQView *v) {
-    signal_meter_configure(&v->meter,v->active,v->enabled,v->bandwidth,
+    if (!v->meter.mt) signal_meter_configure(&v->meter,v->active,v->enabled,v->bandwidth,
                            v->receiver_offset,v->center,v->rate);
     IQMonitorFrame frame; int count=0;
     while(v->fd>=0 && count++<32) {

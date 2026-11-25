@@ -394,9 +394,16 @@ validation. See [receiver setup and test status](docs/receivers.md).
 
 On Linux with libusb-1.0, select **Input → MT Express (Serit FTS-4334)** to
 tune the receiver directly. Set the frequency in kHz (144000–2450000),
-antenna input, DVB-S or DVB-S2, symbol rate and modulation/FEC. Stop reception
-to change tuning, then start again. An AFC search width of zero selects the
-automatic range. Advanced carrier loop and lock threshold controls use raw
+antenna input, DVB-S or DVB-S2, symbol rate and modulation/FEC. Click the MHz display during reception to retune, or use the left and
+right arrow keys for 1 kHz steps. An AFC search width of zero selects the
+automatic range. Symbol rates up to and including 125 ksym/s select the
+41.25 MHz demodulator clock automatically. Higher rates use 135 MHz.
+The MT signal meter estimates broadband RF input before lock by interpolating
+AGC1 and AGC2 against the MiniTioune indication in [G8GKQ’s BATC measurements](https://wiki.batc.org.uk/MiniTiouner_Power_Level_Indication).
+The indicated range is −94 to −26 dBm; absolute calibration depends on the module and setup. The LNA gain display estimates the selected input gain from its
+coarse and fine gain readbacks. Under Carrier recovery, select the phase
+detectors for loops 1 and 2 (defaults Costas and Native).
+Advanced carrier loop and lock threshold controls use raw
 register codes, with −1 restoring the measured defaults. LNB power stays off.
 The independent USB worker supplies the transport stream to the player and
 service selector and sends measured constellation points to the decoder view.

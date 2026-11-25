@@ -13,6 +13,10 @@ int mt_control_open(libusb_device_handle *dev);
 
 typedef struct {
     unsigned frequency_khz, symbol_rate, standard, code, input_b, search_khz;
+    unsigned detector1, detector2;
     int alpha, beta, lock_acquire, lock_release;
 } MtTune;
+int mt_lna_gain(libusb_device_handle *dev, unsigned input_b, float *gain_db);
+unsigned mt_master_clock_hz(unsigned symbol_rate);
+int mt_restart_carrier(libusb_device_handle *dev, uint16_t initial_offset);
 int mt_tune(libusb_device_handle *dev, const MtTune *settings);
