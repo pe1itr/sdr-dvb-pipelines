@@ -225,28 +225,31 @@ int mt_lna_gain(libusb_device_handle *d, unsigned input_b, float *gain_db) {
     return 0;
 }
 
+// The tuner paths have the same synthesizer layout at different offsets.
+static void pll_registers(unsigned khz, unsigned filter, uint8_t regs[5]) {
+    unsigned divider=0;
+    while (divider<3 && ((uint64_t)khz<<(divider+1))<2400000) ++divider;
+    uint64_t ratio=(((uint64_t)khz<<(divider+19))+7500)/15000;
+    unsigned integer=ratio>>18, fraction=ratio&0x3ffff;
+    regs[0]=integer;
+    regs[1]=((fraction&127)<<1)|(integer>>8);
+    regs[2]=fraction>>7;
+    regs[3]=(regs[3]&0x88)|0x10|(fraction>>15);
+    regs[4]=(divider<<5)|filter;
+}
+
 static int tune_pll(libusb_device_handle *d, const MtTune *s, uint8_t gate) {
     // Serit FTS-4334L rev F1, section 3.2. Path 1 reference measured on
     // the Express is 30 MHz. RDIV divides by two when set.
     uint8_t regs[11];
     int rc=tuner_access(d,gate,0,regs,sizeof(regs),false);
     if (rc) return rc;
-    unsigned p=0;
-    while (p<3 && ((uint64_t)s->frequency_khz<<(p+1))<2400000) ++p;
     uint8_t reference_and_gain[]={0x75,0x30};
     rc=tuner_access(d,gate,0,reference_and_gain,sizeof(reference_and_gain),true);
     if (rc) return rc;
-    unsigned ref=15000;
-    uint64_t multiplier=(((uint64_t)s->frequency_khz<<(p+19))+ref/2)/ref;
-    if ((multiplier>>18)>511) return LIBUSB_ERROR_INVALID_PARAM;
-    unsigned integer=multiplier>>18, fraction=multiplier&0x3ffff;
-    regs[2]=integer;
-    regs[3]=((fraction&127)<<1)|(integer>>8);
-    regs[4]=fraction>>7;
-    regs[5]=(regs[5]&0x88)|0x10|(fraction>>15);
     // The baseband filter has a 5 MHz minimum cutoff and 1 MHz steps.
     unsigned cutoff=(s->symbol_rate*7ULL+9999999)/10000000;
-    regs[6]=(p<<5)|(cutoff>5 ? cutoff-5 : 0);
+    pll_registers(s->frequency_khz,cutoff>5 ? cutoff-5 : 0,regs+2);
     rc=tuner_access(d,gate,2,regs+2,5,true);
     if (rc) return rc;
     // The Express B connection measured RF-C on path 1; A uses RF-B.
@@ -322,5 +325,63 @@ int mt_tune(libusb_device_handle *d, const MtTune *s) {
     if(!rc) rc=demod_word(d,0xf246,-(int)window);
     if(!rc) rc=demod_word(d,0xf248,0);
     if(!rc) rc=demod_byte(d,0xf216,0x15);
+    return rc;
+}
+
+// STV6120 register map, Serit FTS-4334L rev F1 section 3.2. Only the
+// path-2 fields change. Leave the common reference and input LNAs alone.
+int mt_scan_restore(libusb_device_handle *dev, MtScanPath *path) {
+    if (!path->active) return 0;
+    int rc=tuner_access(dev,path->gate,9,path->saved,sizeof(path->saved),true);
+    if (!rc && (path->saved[1]&2) && (path->saved[2]&0x20)) {
+        uint8_t calibrate=6;
+        rc=tuner_access(dev,path->gate,18,&calibrate,1,true);
+    }
+    int closed=demod_byte(dev,0xf12a,path->gate);
+    if (!rc && !closed) path->active=0;
+    return rc ? rc : closed;
+}
+
+int mt_scan_power(libusb_device_handle *dev, MtScanPath *path, unsigned khz, uint16_t *power) {
+    *power=UINT16_MAX;
+    if (khz<144000 || khz>2450000) return 0;
+    int rc=0;
+    if (!path->active) {
+        rc=mt_register_read(dev,DEMOD,0xf12a,2,&path->gate,1);
+        if (rc) return rc;
+        rc=tuner_access(dev,path->gate,9,path->saved,sizeof(path->saved),false);
+        if (rc) {
+            demod_byte(dev,0xf12a,path->gate);
+            return rc;
+        }
+        uint8_t input=path->saved[0]&3;
+        // CTRL11: SYN_2 (bit 5) on, SDoff_2 (bit 6) off.
+        // Preserve REFOUT_SEL_2 (bit 4), the DC loop and baseband gain.
+        uint8_t route[]={(path->saved[0]&~12)|(input<<2),path->saved[1]|2,
+                         (path->saved[2]&~0x40)|0x20};
+        path->active=1;
+        rc=tuner_access(dev,path->gate,9,route,sizeof(route),true);
+    }
+    uint8_t pll[5]={0,0,0,path->saved[6],0};
+    pll_registers(khz,0,pll);
+    if (!rc) rc=tuner_access(dev,path->gate,12,pll,sizeof(pll),true);
+    uint8_t calibration=0;
+    for (int attempt=0; !rc && attempt<2; ++attempt) {
+        calibration=6;
+        rc=tuner_access(dev,path->gate,18,&calibration,1,true);
+        for (int poll=0; !rc && poll<20; ++poll) {
+            struct timespec delay={0,5000000};
+            nanosleep(&delay,NULL);
+            rc=tuner_access(dev,path->gate,18,&calibration,1,false);
+            if ((calibration&7)==1) break;
+        }
+        if ((calibration&7)==1) break;
+    }
+    int closed=demod_byte(dev,0xf12a,path->gate);
+    if (rc || closed) return rc ? rc : closed;
+    if ((calibration&7)!=1) return 0;
+    uint8_t iq[2];
+    rc=mt_register_read(dev,DEMOD,0xf40a,2,iq,sizeof(iq));
+    if (!rc) *power=iq[0]+iq[1];
     return rc;
 }

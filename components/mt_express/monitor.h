@@ -6,7 +6,8 @@ typedef struct {
     libusb_device_handle *device;
     int socket;
     atomic_bool finished;
-    int error,live_tuning;
+    int error,live_tuning,scan_enabled;
+    unsigned scan_port;
     MtTune tune;
     unsigned input_b, dx_relock, master_clock_hz;
     uint16_t last_offset;

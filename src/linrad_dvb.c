@@ -84,7 +84,7 @@ typedef struct {
     gboolean batc_receiver;
     char knucker_fft[12], knucker_constellation[12];
     GtkWidget *knucker_program;
-    GtkWidget *mt_mode, *mt_rate, *mt_code, *mt_input, *mt_search, *mt_dx, *mt_detector[2], *mt_loop[4];
+    GtkWidget *mt_mode, *mt_rate, *mt_code, *mt_input, *mt_search, *mt_dx, *mt_scan, *mt_detector[2], *mt_loop[4];
     gboolean mt_loading;
     SdrRxStatus sdr_status;
     gint64 sdr_status_time;
@@ -1517,6 +1517,13 @@ static void start_pipeline(App *a) {
         env = g_environ_unsetenv(env, "LINRAD_IQ_MONITOR_PORT");
         env = g_environ_unsetenv(env, "LINRAD_DECODER_MONITOR_PORT");
         env = g_environ_unsetenv(env,"LINRAD_MT_TUNE_PIPE");
+        env = g_environ_unsetenv(env,"LINRAD_MT_SCAN_PORT");
+        env = g_environ_unsetenv(env,"LINRAD_MT_SCAN_ON");
+        if (i==0 && a->source==SOURCE_MT_EXPRESS && a->iq_view.port && a->decoder_view.port) {
+            char port[16]; g_snprintf(port,sizeof(port),"%d",a->iq_view.port);
+            env=g_environ_setenv(env,"LINRAD_MT_SCAN_PORT",port,TRUE);
+            if (mt_setting(a,"scan")) env=g_environ_setenv(env,"LINRAD_MT_SCAN_ON","1",TRUE);
+        }
         if (i==0 && a->source==SOURCE_MT_EXPRESS && tune_pipe[0]>=0)
             env=g_environ_setenv(env,"LINRAD_MT_TUNE_PIPE","1",TRUE);
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
@@ -2597,6 +2604,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
 
 static void input_fields_visible(App *a) {
     gboolean iq=!hardware_ts_source(a);
+    if (a->mt_scan) gtk_widget_set_visible(a->mt_scan,a->source==SOURCE_MT_EXPRESS);
     const int iq_rows[]={1,2,5,6,7};
     for (unsigned i=0;i<G_N_ELEMENTS(iq_rows);++i) {
         int row=iq_rows[i];
@@ -2617,6 +2625,7 @@ static void standard_changed(GtkWidget *widget, gpointer data);
 static void mt_fields_refresh(App *a) {
     if (!a->mt_mode) return;
     a->mt_loading=TRUE;
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->mt_scan),mt_setting(a,"scan")!=0);
     gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_mode),a->standard);
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_rate),a->sr);
     for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
@@ -2635,7 +2644,25 @@ static void mt_fields_refresh(App *a) {
 }
 static void mt_changed(GtkWidget *widget, gpointer data) {
     App *a=data;
-    if (a->mt_loading || a->running || a->source!=SOURCE_MT_EXPRESS) return;
+    if (a->mt_loading || a->source!=SOURCE_MT_EXPRESS) return;
+    if (widget==a->mt_scan) {
+        uint32_t command=gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)) ? MT_SCAN_ON : MT_SCAN_OFF;
+        if (a->running) {
+            ssize_t sent;
+            do { sent=write(a->tune_fd,&command,sizeof(command)); } while (sent<0 && errno==EINTR);
+            if (sent!=sizeof(command)) {
+                a->mt_loading=TRUE;
+                gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget),mt_setting(a,"scan")!=0);
+                a->mt_loading=FALSE;
+                status(a,"MT scan command could not be sent");
+                return;
+            }
+        }
+        g_key_file_set_integer(a->config,"mt_express","scan",command);
+        a->iq_view.rows=0;
+        return;
+    }
+    if (a->running) return;
     for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i) {
         if (widget!=a->mt_loop[i]) continue;
         g_key_file_set_integer(a->config,"mt_express",mt_loop_keys[i],gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget)));
@@ -3329,13 +3356,22 @@ static gboolean monitor_tick(gpointer data) {
     if (a->replay_wait_until) replay_countdown_refresh(a);
     presets_refresh(a);
     const char *section = sources[a->source];
-    a->iq_view.active = !hardware_ts_source(a) && a->running && !a->stopping;
+    gboolean mt=a->source==SOURCE_MT_EXPRESS;
+    if (mt!=a->iq_view.mt_scan) {
+        a->iq_view.mt_scan=mt;
+        a->iq_view.rows=0;
+        if (a->iq_view.area) iq_view_tooltip(&a->iq_view);
+        if (a->iq_view.level_buttons[0]) iq_view_level_refresh(&a->iq_view);
+    }
+    a->iq_view.active = (!hardware_ts_source(a) || (mt && mt_setting(a,"scan"))) && a->running && !a->stopping;
+    if (mt && !a->iq_view.active) a->iq_view.rows=0;
     a->iq_view.bandwidth = g_key_file_get_double(a->config, section, "filter_bandwidth", NULL);
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
     a->iq_view.receiver_offset = effective_offset(a);
     double center = g_key_file_get_double(a->config, section, "frequency", NULL)
         + g_key_file_get_double(a->config, section, "lo_offset", NULL);
     double rate = g_key_file_get_double(a->config, section, "sample_rate", NULL);
+    if (mt) { center=g_key_file_get_double(a->config,section,"frequency",NULL); rate=(MT_SCAN_POINTS-1)*MT_SCAN_STEP_KHZ*1000.0; }
     if (center != a->iq_view.center || rate != a->iq_view.rate) {
         a->iq_view.rows = 0; a->iq_view.last_frame = 0;
     }
@@ -3393,11 +3429,11 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
 #ifdef HAVE_MT_EXPRESS
-    const char *mt_keys[]={"standard","symbol_rate","input_b","s1_rate","s2_modcod","search_khz","detector1","detector2"};
+    const char *mt_keys[]={"standard","symbol_rate","input_b","s1_rate","s2_modcod","search_khz","detector1","detector2","scan"};
     for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
         if (!g_key_file_has_key(a->config,"mt_express",mt_loop_keys[i],NULL))
             g_key_file_set_integer(a->config,"mt_express",mt_loop_keys[i],-1);
-    const int mt_defaults[]={2,5000000,1,0,0,0,0,2};
+    const int mt_defaults[]={2,5000000,1,0,0,0,0,2,1};
     for (unsigned i=0;i<G_N_ELEMENTS(mt_keys);++i)
         if (!g_key_file_has_key(a->config,"mt_express",mt_keys[i],NULL))
             g_key_file_set_integer(a->config,"mt_express",mt_keys[i],mt_defaults[i]);
@@ -4116,6 +4152,12 @@ static void create_config(App *a) {
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->header_box), integer_setting(a, "linrad", "header_bytes", 0, 65534));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->center_box), g_key_file_get_double(a->config, "linrad", "frequency", NULL)/1e6);
         } else if (source==SOURCE_MT_EXPRESS) {
+            a->mt_scan=gtk_check_button_new_with_label("Scan spectrum and waterfall with second tuner");
+            gtk_widget_set_margin_start(a->mt_scan,12);
+            gtk_widget_set_no_show_all(a->mt_scan,TRUE);
+            gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(a->config_dialog))),a->mt_scan,FALSE,FALSE,0);
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->mt_scan),mt_setting(a,"scan")!=0);
+            g_signal_connect(a->mt_scan,"toggled",G_CALLBACK(mt_changed),a);
             a->mt_mode=combo(grid,"Standard",0,standards,2,0);
             a->mt_input=combo(grid,"Antenna input",1,(const char *[]){"A","B"},2,1);
             a->mt_rate=spin(grid,"Symbol rate (sym/s)",2,70000,10000000,1000);

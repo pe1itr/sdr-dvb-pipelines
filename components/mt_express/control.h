@@ -20,3 +20,11 @@ int mt_lna_gain(libusb_device_handle *dev, unsigned input_b, float *gain_db);
 unsigned mt_master_clock_hz(unsigned symbol_rate);
 int mt_restart_carrier(libusb_device_handle *dev, uint16_t initial_offset);
 int mt_tune(libusb_device_handle *dev, const MtTune *settings);
+
+typedef struct {
+    uint8_t gate, saved[8];
+    int active;
+} MtScanPath;
+
+int mt_scan_power(libusb_device_handle *dev, MtScanPath *path, unsigned khz, uint16_t *power);
+int mt_scan_restore(libusb_device_handle *dev, MtScanPath *path);

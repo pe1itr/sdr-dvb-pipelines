@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "monitor.h"
+#include "scan.h"
+#include <netinet/in.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
@@ -203,13 +205,27 @@ static int report(MtMonitor *m, MerWindow *window) {
 void *mt_monitor_run(void *argument) {
     MtMonitor *m=argument;
     MerWindow window={.db=NAN};
+    MtScanPath path={0};
+    MtScanRow row={.magic=MT_SCAN_MAGIC};
+    unsigned point=0;
+    struct sockaddr_in destination={.sin_family=AF_INET,.sin_port=htons(m->scan_port),
+                                     .sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
     while (!atomic_load(&m->finished)) {
         if (m->live_tuning) {
             uint32_t requests[32];
             ssize_t n=read(STDIN_FILENO,requests,sizeof(requests));
             // Single local writer, fixed-size atomic commands, Hz on the GUI.
             if (n>0 && n%(ssize_t)sizeof(*requests)==0) {
-                unsigned khz=requests[n/sizeof(*requests)-1];
+                unsigned khz=m->tune.frequency_khz;
+                for (size_t i=0;i<(size_t)n/sizeof(*requests);++i) {
+                    if (requests[i]<=MT_SCAN_ON) m->scan_enabled=requests[i]==MT_SCAN_ON;
+                    else khz=requests[i];
+                }
+                if (!m->scan_enabled || khz!=m->tune.frequency_khz) {
+                    point=0;
+                    m->error=mt_scan_restore(m->device,&path);
+                    if (m->error) break;
+                }
                 if (khz!=m->tune.frequency_khz) {
                     m->tune.frequency_khz=khz;
                     m->error=mt_tune(m->device,&m->tune);
@@ -229,9 +245,25 @@ void *mt_monitor_run(void *argument) {
             fprintf(stderr,"MT Express: telemetry: %s\n",libusb_error_name(m->error));
             break;
         }
+        if (m->scan_enabled && m->scan_port && m->socket>=0) {
+            row.center_khz=m->tune.frequency_khz;
+            unsigned khz=row.center_khz+((int)point-MT_SCAN_POINTS/2)*MT_SCAN_STEP_KHZ;
+            int rc=mt_scan_power(m->device,&path,khz,&row.power[point]);
+            if (rc) {
+                fprintf(stderr,"MT Express scan stopped: %s\n",libusb_error_name(rc));
+                m->scan_enabled=0;
+                point=0;
+                if (mt_scan_restore(m->device,&path))
+                    fprintf(stderr,"MT Express: could not restore second tuner path\n");
+            } else if (++point==MT_SCAN_POINTS) {
+                sendto(m->socket,&row,sizeof(row),MSG_DONTWAIT,(struct sockaddr *)&destination,sizeof(destination));
+                point=0;
+            }
+        }
         struct timespec interval={0,50000000};
         nanosleep(&interval,NULL);
     }
+    if (mt_scan_restore(m->device,&path)) fprintf(stderr,"MT Express: second tuner restore failed\n");
     if (m->error && m->live_tuning) {
         fprintf(stderr,"MT Express control: %s\n",libusb_error_name(m->error));
         raise(SIGTERM);

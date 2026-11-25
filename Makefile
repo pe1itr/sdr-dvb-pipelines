@@ -118,7 +118,7 @@ GTK_CFLAGS += -Icomponents/bonding/include
 GUI_SOURCES += src/status_http.c src/program_view.c src/srt_output.c src/dab_view.c
 GUI_HEADERS += src/sdr_rx_status.h src/status_http.h src/program_view.h src/srt_output.h src/dab_view.h components/dab/channels.h components/dab/country.h
 GUI_HEADERS += src/decoder_margin.h src/hackrf_gain.h
-GUI_HEADERS += src/signal_meter.h
+GUI_HEADERS += src/signal_meter.h components/mt_express/scan.h
 GUI_HEADERS += src/reception_log.h src/maidenhead.h
 GUI_HEADERS += $(BUILD_DIR)/generated/linrad_build_info.h $(BUILD_DIR)/generated/api_docs.h
 GTK_CFLAGS += -I$(BUILD_DIR)/generated
@@ -504,7 +504,7 @@ $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke: compo
 
 ifneq ($(shell pkg-config --exists libusb-1.0 && echo yes),)
 GTK_CFLAGS += -DHAVE_MT_EXPRESS
-$(BUILD_DIR)/mt_express_rx: components/mt_express/receiver.c components/mt_express/control.c components/mt_express/monitor.c components/mt_express/control.h components/mt_express/monitor.h src/decoder_monitor.h | $(BUILD_DIR)
+$(BUILD_DIR)/mt_express_rx: components/mt_express/receiver.c components/mt_express/control.c components/mt_express/monitor.c components/mt_express/control.h components/mt_express/monitor.h components/mt_express/scan.h src/decoder_monitor.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -D_POSIX_C_SOURCE=200809L $(filter %.c,$^) -o $@ $(LDFLAGS) -pthread $(shell pkg-config --cflags --libs libusb-1.0) -lm
 
 $(BUILD_DIR)/linrad_dvb: $(BUILD_DIR)/mt_express_rx

@@ -2,6 +2,7 @@
 #ifndef IQ_VIEW_H
 #define IQ_VIEW_H
 #include "iq_monitor.h"
+#include "../components/mt_express/scan.h"
 #include "signal_meter.h"
 #include "usb_demod.h"
 #include <math.h>
@@ -14,7 +15,8 @@ typedef struct {
     IQMonitorFrame frame;
     float history[IQ_VIEW_ROWS][IQ_MONITOR_BINS];
     double bandwidth, center, rate, floor, span, receiver_offset;
-    gboolean enabled, active;
+    gboolean enabled, active, mt_scan;
+    double mt_floor, mt_span;
     gboolean usb_enabled;
     MonitorMode monitor_mode;
     double usb_frequency;
@@ -26,7 +28,7 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     double w=gtk_widget_get_allocated_width(widget), h=gtk_widget_get_allocated_height(widget);
     double left=65, right=w-40, wf=5, wh=h/2-32;
     double top=h/2+25, bottom=h-30;
-    double floor=v->floor, span=v->span;
+    double floor=v->mt_scan ? v->mt_floor : v->floor, span=v->mt_scan ? v->mt_span : v->span;
     cairo_set_source_rgb(cr, 0,0,0); cairo_paint(cr);
     plot_font(cr,"sans",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_NORMAL); cairo_set_font_size(cr,12);
     cairo_set_source_rgb(cr,.9,.9,.9);
@@ -38,12 +40,16 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         g_snprintf(text,sizeof(text),"%.0f",floor+span-span*j/4);
         cairo_set_source_rgb(cr,.8,.8,.8); cairo_move_to(cr,12,y+4); cairo_show_text(cr,text);
     }
-    cairo_move_to(cr,4,top-12); cairo_show_text(cr,"dBFS/Hz");
+    cairo_move_to(cr,4,top-12); cairo_show_text(cr,v->mt_scan ? "rel. dB" : "dBFS/Hz");
     if (v->rows) {
         cairo_surface_t *surface=cairo_image_surface_create(CAIRO_FORMAT_RGB24,IQ_MONITOR_BINS,IQ_VIEW_ROWS);
         unsigned char *bytes=cairo_image_surface_get_data(surface);
         int stride=cairo_image_surface_get_stride(surface);
         for(int y=0;y<IQ_VIEW_ROWS;++y) for(int x=0;x<IQ_MONITOR_BINS;++x) {
+            if (y<v->rows && !isfinite(v->history[y][x])) {
+                ((uint32_t *)(bytes+y*stride))[x]=0x303030;
+                continue;
+            }
             double t=y<v->rows ? CLAMP((v->history[y][x]-floor)/span,0,1) : 0;
             unsigned r=255*CLAMP(3*t-1.5,0,1), g=255*CLAMP(3*t-.5,0,1), b=255*CLAMP(3*t,0,1)*(1-CLAMP(3*t-2,0,1));
             ((uint32_t *)(bytes+y*stride))[x]=(r<<16)|(g<<8)|b;
@@ -54,7 +60,8 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_set_source_rgb(cr,.2,1,.45);
         for(int i=0;i<IQ_MONITOR_BINS;++i) {
             double x=left+(right-left)*i/(IQ_MONITOR_BINS-1), y=bottom-CLAMP((v->frame.power[i]-floor)/span,0,1)*(bottom-top);
-            if(i) cairo_line_to(cr,x,y); else cairo_move_to(cr,x,y);
+            if (!isfinite(v->frame.power[i])) continue;
+            if(i && isfinite(v->frame.power[i-1])) cairo_line_to(cr,x,y); else cairo_move_to(cr,x,y);
         }
         cairo_stroke(cr);
 
@@ -82,6 +89,9 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
             cairo_move_to(cr,tx,wf+wh+18); cairo_show_text(cr,text);
             cairo_move_to(cr,tx,bottom+18); cairo_show_text(cr,text);
         }
+    }
+    if (rate>0 && !v->mt_scan) {
+        double low=v->center-rate/2;
         double shift=isfinite(v->receiver_offset) ? v->receiver_offset : 0;
         double half=CLAMP(v->bandwidth/rate,0,1)*(right-left)/2, center=(left+right)/2+shift/rate*(right-left);
         cairo_save(cr);
@@ -147,7 +157,7 @@ static gboolean iq_view_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     cairo_stroke(cr);
     cairo_restore(cr);
     cairo_set_source_rgb(cr,.8,.8,.8);
-    cairo_move_to(cr,left,top-10); cairo_show_text(cr,"Spectrum · receive frequency (MHz)");
+    cairo_move_to(cr,left,top-10); cairo_show_text(cr,v->mt_scan ? "MT scan · frequency (MHz)" : "Spectrum · receive frequency (MHz)");
     return FALSE;
 }
 static void iq_view_receive(IQView *v) {
@@ -155,17 +165,32 @@ static void iq_view_receive(IQView *v) {
                            v->receiver_offset,v->center,v->rate);
     IQMonitorFrame frame; int count=0;
     while(v->fd>=0 && count++<32) {
-        ssize_t n=recv(v->fd,&frame,sizeof(frame),MSG_DONTWAIT|MSG_TRUNC);
+        union { IQMonitorFrame iq; MtScanRow scan; } packet;
+        ssize_t n=recv(v->fd,&packet,sizeof(packet),MSG_DONTWAIT|MSG_TRUNC);
         if(n<0) break;
-        if(n!=sizeof(frame)||frame.magic!=IQ_MONITOR_MAGIC||!isfinite(frame.rate)||frame.rate<=0) continue;
-        gboolean valid=TRUE;
-        for(int i=0;i<IQ_MONITOR_BINS;++i) if(!isfinite(frame.power[i])) valid=FALSE;
-        if(!valid || !v->active) continue;
+        if (v->mt_scan) {
+            const MtScanRow *row=&packet.scan;
+            if (!v->active || n!=sizeof(*row) || row->magic!=MT_SCAN_MAGIC ||
+                row->center_khz*1000.0!=v->center) continue;
+            frame=(IQMonitorFrame){.rate=v->rate};
+            for (int i=0;i<IQ_MONITOR_BINS;++i) {
+                unsigned point=(i*(MT_SCAN_POINTS-1)+(IQ_MONITOR_BINS-1)/2)/(IQ_MONITOR_BINS-1);
+                unsigned code=row->power[point];
+                frame.power[i]=code>510 ? NAN : 10*log10(MAX(1u,code)/510.0);
+            }
+        } else {
+            if(n!=sizeof(frame)) continue;
+            frame=packet.iq;
+            if(frame.magic!=IQ_MONITOR_MAGIC||!isfinite(frame.rate)||frame.rate<=0) continue;
+            gboolean valid=TRUE;
+            for(int i=0;i<IQ_MONITOR_BINS;++i) if(!isfinite(frame.power[i])) valid=FALSE;
+            if(!valid || !v->active) continue;
+        }
         if(frame.rate!=v->frame.rate) v->rows=0;
         memmove(v->history+1,v->history,(IQ_VIEW_ROWS-1)*sizeof(v->history[0]));
         memcpy(v->history[0],frame.power,sizeof(frame.power));
         v->frame=frame; v->rows=MIN(v->rows+1,IQ_VIEW_ROWS); v->last_frame=g_get_monotonic_time();
-        signal_meter_feed(&v->meter,&frame,v->last_frame/1e6);
+        if (!v->mt_scan) signal_meter_feed(&v->meter,&frame,v->last_frame/1e6);
     }
     gtk_widget_queue_draw(v->area);
     if (v->meter.area) gtk_widget_queue_draw(v->meter.area);
@@ -174,10 +199,10 @@ static void iq_view_receive(IQView *v) {
 static void iq_view_level_refresh(IQView *v) {
     for (int i=0; i<4; ++i) {
         gboolean span=i>=2, up=i%2==0;
-        double value=span ? v->span : v->floor;
+        double value=span ? (v->mt_scan ? v->mt_span : v->span) : (v->mt_scan ? v->mt_floor : v->floor);
         gtk_widget_set_sensitive(v->level_buttons[i], up ? value<(span ? 160 : -10) : value>(span ? 10 : -200));
         char *tip=g_strdup_printf("%s %s (5 dB) · currently %.0f %s",
-            up ? "Increase" : "Decrease", span ? "range" : "floor", value, span ? "dB" : "dBFS/Hz");
+            up ? "Increase" : "Decrease", span ? "range" : "floor", value, span ? "dB" : v->mt_scan ? "rel. dB" : "dBFS/Hz");
         gtk_widget_set_tooltip_text(v->level_buttons[i],tip); g_free(tip);
     }
     gtk_widget_queue_draw(v->area);
@@ -187,8 +212,8 @@ static void iq_view_level_clicked(GtkButton *button, gpointer data) {
     IQView *v=data;
     int index=GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button),"level-index"));
     double delta=index%2==0 ? 5 : -5;
-    if (index>=2) v->span=CLAMP(v->span+delta,10,160);
-    else v->floor=CLAMP(v->floor+delta,-200,-10);
+    double *level=index>=2 ? (v->mt_scan ? &v->mt_span : &v->span) : (v->mt_scan ? &v->mt_floor : &v->floor);
+    *level=CLAMP(*level+delta,index>=2 ? 10 : -200,index>=2 ? 160 : -10);
     iq_view_level_refresh(v);
 }
 
@@ -214,17 +239,23 @@ static double iq_view_saved_level(GKeyFile *config, const char *key, double fall
     return value;
 }
 
+static void iq_view_tooltip(IQView *v) {
+    gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ monitor could not open a local socket" :
+        v->mt_scan ? "Second tuner scan: relative power, newest sweep at the top. Gray cells indicate missing readings." :
+        "Waterfall: newest at the top. IQ before filtering; blue → green → yellow = more power. Frequency in MHz. Click the spectrum to tune the active USB / FM / FM-DATA receiver.");
+}
+
 static GtkWidget *iq_view_create(IQView *v, GKeyFile *config) {
     v->fd=socket(AF_INET,SOCK_DGRAM|SOCK_NONBLOCK|SOCK_CLOEXEC,0);
     struct sockaddr_in addr={.sin_family=AF_INET,.sin_addr.s_addr=htonl(INADDR_LOOPBACK)};
     socklen_t len=sizeof(addr);
     if(v->fd>=0 && (bind(v->fd,(struct sockaddr *)&addr,sizeof(addr)) || getsockname(v->fd,(struct sockaddr *)&addr,&len))) {close(v->fd);v->fd=-1;}
     if(v->fd>=0) v->port=ntohs(addr.sin_port);
+    v->mt_floor=-20; v->mt_span=20;
     v->floor=iq_view_saved_level(config,"floor_dbfs_hz",-160,-200,-10);
     v->span=iq_view_saved_level(config,"range_db",100,10,160);
     v->area=gtk_drawing_area_new(); gtk_widget_set_size_request(v->area,600,280);
-    gtk_widget_set_tooltip_text(v->area,v->fd<0 ? "IQ monitor could not open a local socket" :
-        "Waterfall: newest at the top. IQ before filtering; blue → green → yellow = more power. Frequency in MHz. Click the spectrum to tune the active USB / FM / FM-DATA receiver.");
+    iq_view_tooltip(v);
     g_signal_connect(v->area,"draw",G_CALLBACK(iq_view_draw),v);
     GtkWidget *overlay=gtk_overlay_new();
     gtk_container_add(GTK_CONTAINER(overlay),v->area);

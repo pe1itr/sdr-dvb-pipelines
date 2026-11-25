@@ -405,6 +405,13 @@ coarse and fine gain readbacks. Under Carrier recovery, select the phase
 detectors for loops 1 and 2 (defaults Costas and Native).
 Advanced carrier loop and lock threshold controls use raw
 register codes, with −1 restoring the measured defaults. LNB power stays off.
+**Scan spectrum and waterfall with second tuner** is enabled by default in the MT
+input settings. Toggle it during reception to start or stop scanning. Each sweep
+samples 61 frequencies in 1 MHz steps across ±30 MHz around the receive frequency on the same
+antenna input. Each point measures relative power through the second tuner’s
+5 MHz baseband low-pass filter (roughly 10 MHz full RF bandwidth). Adjacent
+points overlap substantially, so narrow carriers appear broadened. Gray cells
+indicate missing measurements. Press **W** to save the setting.
 The independent USB worker supplies the transport stream to the player and
 service selector and sends measured constellation points to the decoder view.
 MER is estimated from the errors of 256 received symbols. D margin subtracts

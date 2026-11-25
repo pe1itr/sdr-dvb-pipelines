@@ -131,6 +131,10 @@ int main(int argc, char **argv) {
             if (monitor.socket<0 || connect(monitor.socket,(struct sockaddr *)&dest,sizeof(dest))<0) rc=LIBUSB_ERROR_OTHER;
         }
     }
+    const char *scan_port=getenv("LINRAD_MT_SCAN_PORT");
+    if (scan_port && number(scan_port,&monitor.scan_port) && monitor.scan_port<=65535)
+        monitor.scan_enabled=getenv("LINRAD_MT_SCAN_ON")!=NULL;
+    else monitor.scan_port=0;
     if (!rc && (port || dx_relock || monitor.live_tuning)) {
         if (pthread_create(&thread,NULL,mt_monitor_run,&monitor)) rc=LIBUSB_ERROR_OTHER;
         else monitoring=true;
