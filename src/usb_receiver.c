@@ -15,7 +15,7 @@ struct UsbReceiver {
     char *path, *device;
     GThread *thread;
     GMutex mutex;
-    gint stop, muted, tci_only;
+    gint stop, muted, tci_only, fm_squelch;
     double center, rate, offset;
     float tci_gain;
     gboolean source_active;
@@ -91,6 +91,12 @@ double usb_receiver_frequency(UsbReceiver *r) {
 }
 static double tci_tune(double frequency, void *user) {
     UsbReceiver *r=user; usb_receiver_tune(r,frequency); return usb_receiver_frequency(r);
+}
+void usb_receiver_set_fm_squelch(UsbReceiver *r, gboolean enabled) {
+    g_atomic_int_set(&r->fm_squelch, !!enabled);
+}
+gboolean usb_receiver_fm_squelch(UsbReceiver *r) {
+    return r && g_atomic_int_get(&r->fm_squelch);
 }
 gboolean usb_receiver_tci_only(UsbReceiver *r) {
     return r && g_atomic_int_get(&r->tci_only);
@@ -249,7 +255,10 @@ static gpointer receive(gpointer user) {
                 if (sequence && copy->sequence!=sequence+1) { usb_demod_free(demod); demod=NULL; pcm_udp_reset(r); }
                 sequence=copy->sequence;
                 if (!demod) demod=usb_demod_new_mode(rate,offset,mode);
-                if (demod) usb_demod_feed(demod,copy->iq,copy->samples,copy->u8,audio,r);
+                if (demod) {
+                    usb_demod_set_fm_squelch(demod,usb_receiver_fm_squelch(r));
+                    usb_demod_feed(demod,copy->iq,copy->samples,copy->u8,audio,r);
+                }
                 last=g_get_monotonic_time(); worked=TRUE;
             } else { usb_demod_free(demod); demod=NULL; sequence=0; pcm_udp_reset(r); }
         }

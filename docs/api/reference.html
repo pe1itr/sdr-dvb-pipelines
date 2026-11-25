@@ -23,6 +23,7 @@ Send <code>PUT /control/monitor/off</code> to end the session. The configured We
 Connect a TCI client such as MSHV to this port to listen to monitor audio and tune
 within the IQ spectrum. With the default local bind address, use
 <code>ws://127.0.0.1:{{tci_port}}</code> on the receiver computer.</p>
+<p>For voice FM, send <code>PUT /control/monitor/squelch/on</code> to silence channel noise automatically, or <code>PUT /control/monitor/squelch/off</code> for continuous audio. The TCI stream stays connected while squelched.</p>
 <p>To change the TCI port, switch the monitor off and open <strong>TCI</strong>
 (<kbd>Alt+T</kbd>). For a client on your trusted LAN, set <code>tci_bind</code> in
 the INI file’s <code>[usb]</code> section to the receiver’s LAN address and use

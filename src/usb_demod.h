@@ -10,6 +10,7 @@ typedef struct UsbDemod UsbDemod;
 typedef void (*UsbAudioCallback)(const float *audio, size_t count, void *user);
 UsbDemod *usb_demod_new(double rate, double offset);
 UsbDemod *usb_demod_new_mode(double rate, double offset, MonitorMode mode);
+void usb_demod_set_fm_squelch(UsbDemod *d, int enabled);
 void usb_demod_free(UsbDemod *d);
 void usb_demod_feed(UsbDemod *d, const unsigned char *iq, size_t samples, int u8,
                     UsbAudioCallback callback, void *user);

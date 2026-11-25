@@ -364,6 +364,20 @@
         }
       }
     },
+    "/control/monitor/squelch/{action}": {
+      "put": {
+        "tags": ["Receiver control"],
+        "summary": "Enable or disable automatic FM monitor squelch",
+        "description": "Suppresses noise on FM monitor audio outputs while keeping the audio stream running. The session setting defaults to off and applies only in FM. GET /status reports monitor_fm_squelch_enabled.",
+        "parameters": [{ "name": "action", "in": "path", "required": true, "description": "Turn automatic squelch on or off.", "example": "on", "schema": { "type": "string", "enum": ["on", "off"] } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/200" },
+          "400": { "$ref": "#/components/responses/400" },
+          "403": { "$ref": "#/components/responses/403" },
+          "409": { "$ref": "#/components/responses/409" }
+        }
+      }
+    },
     "/control/network-info/{action}": {
       "put": {
         "tags": ["Receiver control"],
@@ -738,6 +752,7 @@
           "hdmi_osd": { "type": "string", "enum": ["left", "right", "off"] },
           "tsscatterfix_enabled": { "type": "boolean" },
           "monitor_mode": { "type": "string", "enum": ["off", "usb", "fm", "fm-data"] },
+          "monitor_fm_squelch_enabled": { "type": "boolean", "description": "Session preference for automatic squelch in FM voice mode." },
           "monitor_speaker_muted": { "type": "boolean", "description": "Local monitor playback is muted or the monitor is routed to TCI only." },
           "network_info_visible": { "type": "boolean" },
           "eit_overlay_enabled": { "type": "boolean" },

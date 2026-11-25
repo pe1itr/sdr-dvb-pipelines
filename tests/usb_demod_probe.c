@@ -10,9 +10,12 @@ static void output(const float *audio, size_t count, void *user) {
     if (fwrite(audio,sizeof(float),count,stdout)!=count) exit(2);
 }
 int main(int argc, char **argv) {
-    if (argc==2 && !strcmp(argv[1],"fm-data-iq")) {
-        UsbDemod *d=usb_demod_new_mode(48000,0,MONITOR_FM_DATA);
+    if ((argc==2 && !strcmp(argv[1],"fm-data-iq")) || (argc==5 && !strcmp(argv[1],"iq"))) {
+        MonitorMode mode=argc==2 || !strcmp(argv[2],"fm-data") ? MONITOR_FM_DATA :
+            !strcmp(argv[2],"fm") ? MONITOR_FM : MONITOR_USB;
+        UsbDemod *d=usb_demod_new_mode(argc==2 ? 48000 : atoi(argv[4]),0,mode);
         if (!d) return 1;
+        usb_demod_set_fm_squelch(d,argc==5 && atoi(argv[3]));
         unsigned char iq[8192*4]; size_t count;
         while ((count=fread(iq,4,8192,stdin))) usb_demod_feed(d,iq,count,0,output,NULL);
         usb_demod_free(d); return ferror(stdin) ? 2 : 0;

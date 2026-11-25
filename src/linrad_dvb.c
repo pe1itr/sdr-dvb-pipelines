@@ -5573,6 +5573,14 @@ static const char *network_control(gpointer data,const char *command,const char 
     if (!a->presets || !g_key_file_get_boolean(a->config,"status","control",NULL))
         return control_failure(error,"403 Forbidden","Enable remote control in Output > Status endpoint");
     if (a->closing) return control_failure(error,conflict,"Receiver is closing");
+    if (g_str_has_prefix(command,"monitor/squelch/")) {
+        const char *action=command+strlen("monitor/squelch/");
+        if (strcmp(action,"on") && strcmp(action,"off"))
+            return control_failure(error,bad,"Expected on or off");
+        if (!a->usb_receiver) return control_failure(error,conflict,"Audio monitor unavailable");
+        usb_receiver_set_fm_squelch(a->usb_receiver,!strcmp(action,"on"));
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"monitor/")) {
         const char *value=command+strlen("monitor/");
         GtkWidget *buttons[]={a->usb_toggle,a->fm_toggle,a->fm_data_toggle};
@@ -5882,6 +5890,7 @@ static char *network_status(gpointer data) {
     BOOL(root,"tsscatterfix_enabled",use_scatter(a));
     gboolean monitor_on=usb_receiver_running(a->usb_receiver);
     STR(root,"monitor_mode",monitor_on ? monitor_api_modes[usb_receiver_mode(a->usb_receiver)] : "off");
+    BOOL(root,"monitor_fm_squelch_enabled",usb_receiver_fm_squelch(a->usb_receiver));
     BOOL(root,"monitor_speaker_muted",usb_receiver_muted(a->usb_receiver) || usb_receiver_tci_only(a->usb_receiver));
     BOOL(root,"network_info_visible",a->network_dialog!=NULL);
     BOOL(root,"eit_overlay_enabled",ts_info_view_eit_visible(&a->information));

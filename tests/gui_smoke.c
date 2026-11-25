@@ -1332,6 +1332,10 @@ static void exercise_usb(App *a) {
     gboolean control_enabled=g_key_file_get_boolean(a->config,"status","control",NULL);
     g_key_file_set_boolean(a->config,"status","control",TRUE);
     const char *error=NULL;
+    g_assert_false(usb_receiver_fm_squelch(a->usb_receiver));
+    g_assert_cmpstr(network_control(a,"monitor/squelch/on",&error),==,"200 OK");
+    g_assert_true(usb_receiver_fm_squelch(a->usb_receiver));
+    g_assert_cmpstr(network_control(a,"monitor/squelch/5",&error),==,"400 Bad Request");
     g_assert_cmpstr(network_control(a,"monitor/usb",&error),==,"409 Conflict");
     g_assert_false(usb_receiver_tci_only(a->usb_receiver));
     close(fd);
@@ -1352,6 +1356,9 @@ static void exercise_usb(App *a) {
     g_assert_cmpstr(network_control(a,"monitor/off",&error),==,"200 OK");
     g_assert_false(usb_receiver_tci_only(a->usb_receiver));
     g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_assert_true(usb_receiver_fm_squelch(a->usb_receiver));
+    g_assert_cmpstr(network_control(a,"monitor/squelch/off",&error),==,"200 OK");
+    g_assert_false(usb_receiver_fm_squelch(a->usb_receiver));
     g_key_file_set_boolean(a->config,"status","control",control_enabled);
     for (unsigned upper=0;upper<2;++upper) {
         event.keyval=upper ? GDK_KEY_U : GDK_KEY_u;

@@ -7,6 +7,7 @@ import mmap
 import hashlib
 import math
 import os
+import random
 from pathlib import Path
 import socket
 import shutil
@@ -80,6 +81,38 @@ class DemodTests(unittest.TestCase):
                 self.assertLess(wanted, .6)
                 for unwanted in (1800, 2000):
                     self.assertLess(amplitude(audio, unwanted), wanted * .03)
+
+    def test_automatic_fm_squelch(self):
+        rng = random.Random(2026)
+        for rate in (12500, 48000, 96000):
+            iq = bytearray()
+            # Alternate noise and modulated carrier, with a tenfold gain change.
+            for gain, carrier in ((200, False), (200, True), (2000, False), (2000, True)):
+                for i in range(rate // 4):
+                    phase = 2.5 * math.sin(2 * math.pi * 1000 * i / rate)
+                    re = rng.gauss(0, gain) + (5 * gain * math.cos(phase) if carrier else 0)
+                    im = rng.gauss(0, gain) + (5 * gain * math.sin(phase) if carrier else 0)
+                    iq.extend(struct.pack('<hh', round(re), round(im)))
+            for mode in ('fm', 'usb', 'fm-data'):
+                if mode == 'fm-data' and rate < 24000:
+                    continue
+                args = [ROOT / 'build/usb_demod_probe', 'iq', mode]
+                def decode(enabled):
+                    return subprocess.run([*args, str(enabled), str(rate)], input=iq,
+                                          capture_output=True, check=True).stdout
+                reference, gated = decode(0), decode(1)
+                if mode != 'fm':
+                    self.assertEqual(gated, reference)
+                    continue
+                self.assertEqual(len(reference), len(gated))
+                original, audio = array.array('f', reference), array.array('f', gated)
+                for i in range(4):
+                    part = slice(i * 12000 + 7000, i * 12000 + 10000)
+                    self.assertGreater(max(map(abs, original[part])), .03)
+                    if i % 2:
+                        self.assertEqual(audio[part], original[part])
+                    else:
+                        self.assertFalse(any(audio[part]))
 
     def test_fm_voice_lowpass_and_silence(self):
         for tone in (0, -1, 6000):

@@ -20,6 +20,9 @@ struct UsbDemod {
     double highpass, highpass_previous, highpass_alpha;
     float audio_taps[AUDIO_TAPS], audio_history[AUDIO_TAPS];
     unsigned audio_position;
+    int squelch_enabled, squelch_open;
+    unsigned window_samples, window_used, bad_windows;
+    double power_sum, power_squared_sum;
 };
 UsbDemod *usb_demod_new(double rate, double offset) {
     return usb_demod_new_mode(rate,offset,MONITOR_USB);
@@ -53,6 +56,7 @@ UsbDemod *usb_demod_new_mode(double rate, double offset, MonitorMode mode) {
     }
     for (int i=0;i<TAPS;++i) d->taps[i]/=sum;
     if (mode==MONITOR_FM) {
+        d->window_samples=(unsigned)lround(intermediate*.020);
         sum=0;
         for (int i=0;i<AUDIO_TAPS;++i) {
             double t=i-(AUDIO_TAPS-1)/2;
@@ -66,6 +70,35 @@ UsbDemod *usb_demod_new_mode(double rate, double offset, MonitorMode mode) {
     d->resampler=src_new(SRC_SINC_FASTEST,1,&error);
     if (!d->resampler) { free(d); return NULL; }
     return d;
+}
+void usb_demod_set_fm_squelch(UsbDemod *d, int enabled) {
+    enabled=enabled && d->mode==MONITOR_FM;
+    if (enabled==d->squelch_enabled) return;
+    d->squelch_enabled=enabled;
+    d->squelch_open=0;
+    d->window_used=d->bad_windows=0;
+    d->power_sum=d->power_squared_sum=0;
+}
+
+/* A clean FM carrier has a nearly constant envelope. For Gaussian channel
+ * noise, mean(power)^2 / mean(power^2) approaches 0.5, independent of gain.
+ * Evaluate every 20 ms and hold through two noisy windows before closing. */
+static int fm_carrier_present(UsbDemod *d, double power) {
+    d->power_sum+=power;
+    d->power_squared_sum+=power*power;
+    if (++d->window_used==d->window_samples) {
+        double energy=d->window_samples*d->power_squared_sum;
+        double coherence=d->power_sum*d->power_sum;
+        if (energy>0 && coherence>energy*(d->squelch_open ? .62 : .72)) {
+            d->squelch_open=1;
+            d->bad_windows=0;
+        } else if (d->squelch_open && ++d->bad_windows>=3) {
+            d->squelch_open=0;
+        }
+        d->window_used=0;
+        d->power_sum=d->power_squared_sum=0;
+    }
+    return d->squelch_open;
 }
 void usb_demod_free(UsbDemod *d) {
     if (d) { src_delete(d->resampler); free(d); }
@@ -152,6 +185,7 @@ void usb_demod_feed(UsbDemod *d, const unsigned char *iq, size_t samples, int u8
                 filtered+=d->audio_history[pos]*d->audio_taps[j]; pos=pos ? pos-1 : AUDIO_TAPS-1;
             }
             d->audio_position=(d->audio_position+1)%AUDIO_TAPS;
+            if (d->squelch_enabled && !fm_carrier_present(d,fi*fi+fq*fq)) filtered=0;
             d->input[d->used++]=filtered;
         } else {
             d->input[d->used++]=(float)(2*(fi*d->ai-fq*d->aq));
