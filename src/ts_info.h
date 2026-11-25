@@ -24,6 +24,8 @@ typedef struct {
     unsigned page_number; /* requested decimal Teletext page, 100..899 */
     GBytes *page; /* immutable native Cairo RGB24 pixels */
     GBytes *page_flash_off, *page_reveal, *page_reveal_flash_off;
+    GBytes *fastext_row; /* One 40-cell raster row, same pixel format and width as page. */
+    gboolean index_shortcuts; /* Color keys derived from printed index rows. */
     guint16 color_pages[4], footer_links[40]; /* decimal navigation targets, zero if absent */
     int width, height;
 } TsInfoSnapshot;

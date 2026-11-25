@@ -1123,11 +1123,11 @@ static void power_refresh(App *a) {
     }
     gtk_style_context_add_class(style,current);
     if (bar) {
-        const char *sdr_status[]={"SDR gestopt","SDR draait","SDR stopt…","SDR-fout"};
-        const char *file_status[]={"Afspelen gestopt","Bestand speelt","Afspelen stopt…","Afspeelfout"};
+        const char *sdr_status[]={"SDR stopped","SDR running","Stopping SDR…","SDR error"};
+        const char *file_status[]={"Playback stopped","Playing file","Stopping playback…","Playback error"};
         gtk_style_context_add_class(bar,current);
-        gtk_label_set_text(GTK_LABEL(a->hdmi_power),waiting ? "Wachten op afspeeltijd" :
-            connecting ? "SDR verbindt met Afedri…" : a->source==SOURCE_FILE ? file_status[state] : sdr_status[state]);
+        gtk_label_set_text(GTK_LABEL(a->hdmi_power),waiting ? "Waiting for scheduled playback" :
+            connecting ? "Connecting to Afedri…" : a->source==SOURCE_FILE ? file_status[state] : sdr_status[state]);
     }
     const char *labels[] = {"Start SDR", "Stop SDR · running", "Stopping SDR…", "Start SDR · error"};
     const char *file_labels[] = {"Play file", "Stop file", "Stopping playback…", "Play file · error"};
@@ -2908,7 +2908,7 @@ static void update_hdmi_menu(App *a) {
     const TsInfoSnapshot *catalog=&a->information.snapshot;
     unsigned count=a->running && !a->stopping && a->standard!=4 && a->scatter_backend ? catalog->count : 0;
     guint16 playing=a->video_view.active && a->video_view.local_display ? a->video_view.program : 0;
-    GString *list=g_string_new("<b>Programma’s</b>");
+    GString *list=g_string_new("<b>Programs</b>");
     /* Keep the playing service visible even on a multiplex with many services. */
     for (int pass=0;pass<2;++pass) {
         for (unsigned i=0;i<count;++i) {
@@ -2918,7 +2918,7 @@ static void update_hdmi_menu(App *a) {
             if (selected) g_string_append(list,"\n<span foreground='#76ef97'><b>▶ ");
             else g_string_append_c(list,'\n');
             g_string_append_printf(list,"%u  ",service->id);
-            char *name=g_markup_escape_text(*service->name ? service->name : "Naam onbekend",-1);
+            char *name=g_markup_escape_text(*service->name ? service->name : "Unknown name",-1);
             g_string_append(list,name);
             g_free(name);
             if (selected) g_string_append(list,"</b></span>");
@@ -5745,6 +5745,7 @@ static char *network_status(gpointer data) {
         const TsInfoSnapshot *info=&a->information.snapshot;
         NUM(root,"teletext_page",info->page_number);
         BOOL(root,"teletext_page_received",info->page!=NULL);
+        BOOL(root,"teletext_index_shortcuts",info->index_shortcuts);
         json_object *links=json_object_new_object();
         for (unsigned i=0;i<G_N_ELEMENTS(teletext_colors);++i)
             if (info->color_pages[i])

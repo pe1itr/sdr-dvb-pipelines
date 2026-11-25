@@ -676,7 +676,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
 | `/control/program/101` | During DVB reception with the embedded player, watch a program using its service ID. Read `programs` (ID, name and provider) and `selected_program` from `/status`. |
 | `/control/teletext/on`, `/control/teletext/off` | Show or hide the current page on the active HDMI output, or in the desktop Teletext window when HDMI is off. HDMI keeps playing audio. Closing it preserves the page selection. Read `teletext_visible` in `/status` for the current window state. |
-| `/control/teletext/color/red` | Follow the current page’s red, green, yellow or blue Fastext link. Read `teletext_color_links` in `/status` for available colors and page numbers. |
+| `/control/teletext/color/red` | Follow the current page’s red, green, yellow or blue Fastext link. Pages without color links can use the first four distinct page references in a dotted index as local shortcuts. Read `teletext_color_links` in `/status` for available colors and page numbers. |
 | `/control/teletext/101` | Open page 100–899 on HDMI or in the desktop Teletext window during DVB reception. Poll `/status` for `teletext_page` and `teletext_page_received`. |
 | `/control/preset/2` | Recall saved slot 1–6. An active receiver stops before loading the preset. Send start to resume. |
 | `/control/mode/dvb-t` | Select DVB-T, DVB-T2, DVB-S, DVB-S2 or DAB while stopped. Mode names are case-insensitive. |

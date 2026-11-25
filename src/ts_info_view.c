@@ -43,6 +43,13 @@ static PageRect page_rect(GtkWidget *area) {
     double w=MIN(width,height*4.0/3.0), h=w*3.0/4.0;
     return (PageRect){(width-w)/2,(height-h)/2,w,h};
 }
+/* Keep the full 4:3 raster and its separate Fastext strip inside TV overscan. */
+static PageRect hdmi_page_rect(GtkWidget *area,double *strip) {
+    double width=gtk_widget_get_allocated_width(area),height=gtk_widget_get_allocated_height(area);
+    *strip=MIN(height*.055,width*.08);
+    double w=MIN(width*.90,(height*.90-*strip)*4/3),h=w*3/4;
+    return (PageRect){(width-w)/2,(height-h-*strip)/2,w,h};
+}
 static unsigned page_link_at(TsInfoView *v, double x, double y) {
     PageRect r=page_rect(v->page);
     if (!v->snapshot.page || x<r.x || y<r.y+r.h*24/25 || x>=r.x+r.w || y>=r.y+r.h) return 0;
@@ -55,9 +62,14 @@ static void color_clicked(GtkButton *button, gpointer data) {
     if (page) gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),page);
 }
 static gboolean click_page(GtkWidget *area, GdkEventButton *event, gpointer data) {
-    (void)area;
     TsInfoView *v=data;
-    unsigned number=page_link_at(v,event->x,event->y);
+    unsigned number=0;
+    if (area==v->hdmi_page) {
+        double strip;
+        PageRect r=hdmi_page_rect(area,&strip);
+        if (event->x>=r.x && event->x<r.x+r.w && event->y>=r.y+r.h && event->y<r.y+r.h+strip)
+            number=v->snapshot.color_pages[(int)((event->x-r.x)*4/r.w)];
+    } else number=page_link_at(v,event->x,event->y);
     if (event->button!=1 || !number) return FALSE;
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),number);
     return TRUE;
@@ -72,14 +84,27 @@ static gboolean page_tooltip(GtkWidget *area, gint x, gint y, gboolean keyboard,
     gtk_tooltip_set_text(tooltip,text);
     return TRUE;
 }
+static void draw_raster(cairo_t *cr,GBytes *frame,int width,int height,PageRect r) {
+    cairo_surface_t *surface=cairo_image_surface_create_for_data(
+        (unsigned char *)g_bytes_get_data(frame,NULL),CAIRO_FORMAT_RGB24,width,height,width*4);
+    cairo_save(cr);
+    cairo_translate(cr,r.x,r.y);
+    cairo_scale(cr,r.w/width,r.h/height);
+    cairo_set_source_surface(cr,surface,0,0);
+    cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_NEAREST);
+    cairo_paint(cr);
+    cairo_restore(cr);
+    cairo_surface_destroy(surface);
+}
 static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     TsInfoView *v=data; TsInfoSnapshot *s=&v->snapshot;
-    PageRect r=page_rect(area);
+    double strip=0;
+    PageRect r=area==v->hdmi_page ? hdmi_page_rect(area,&strip) : page_rect(area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) {
         if (area==v->hdmi_page) {
             char message[64];
-            g_snprintf(message,sizeof(message),"Wachten op teletekstpagina %u",s->page_number ? s->page_number : 100);
+            g_snprintf(message,sizeof(message),"Waiting for Teletext page %u",s->page_number ? s->page_number : 100);
             PangoLayout *layout=gtk_widget_create_pango_layout(area,message);
             PangoFontDescription *font=pango_font_description_from_string("Sans Bold");
             pango_font_description_set_absolute_size(font,MAX(14,r.h/24)*PANGO_SCALE);
@@ -101,20 +126,22 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     if (!frame) frame=s->page;
     /* Keep a TV-shaped page even if a layout allocates a different aspect.
      * UI controls never consume rows or alter character proportions. */
-    cairo_surface_t *surface=cairo_image_surface_create_for_data(
-        (unsigned char *)g_bytes_get_data(frame,NULL),CAIRO_FORMAT_RGB24,s->width,s->height,s->width*4);
-    cairo_save(cr);
-    cairo_translate(cr,r.x,r.y);
-    cairo_scale(cr,r.w/s->width,r.h/s->height); cairo_set_source_surface(cr,surface,0,0);
-    cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_NEAREST);
-    cairo_paint(cr); cairo_restore(cr); cairo_surface_destroy(surface);
+    draw_raster(cr,frame,s->width,s->height,r);
+    if (area==v->hdmi_page && s->fastext_row) {
+        double h=r.h/25;
+        PageRect footer={r.x,r.y+r.h+(strip-h)/2,r.w,h};
+        draw_raster(cr,s->fastext_row,s->width,s->height/25,footer);
+    }
     return FALSE;
 }
 GtkWidget *ts_info_view_create_hdmi_page(TsInfoView *v) {
     v->hdmi_page=gtk_drawing_area_new();
     g_object_add_weak_pointer(G_OBJECT(v->hdmi_page),(gpointer *)&v->hdmi_page);
     gtk_widget_set_no_show_all(v->hdmi_page,TRUE);
+    gtk_widget_add_events(v->hdmi_page,GDK_BUTTON_PRESS_MASK);
+    g_signal_connect(v->hdmi_page,"button-press-event",G_CALLBACK(click_page),v);
     g_signal_connect(v->hdmi_page,"draw",G_CALLBACK(draw_page),v);
+    gtk_widget_set_visible(v->hdmi_page,gtk_widget_get_visible(v->dialogs[1]));
     return v->hdmi_page;
 }
 
@@ -175,7 +202,8 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         atk_object_set_description(gtk_widget_get_accessible(v->buttons[i]),ready[i] ? "Information available" : "Waiting for information");
     }
     g_free(page_name);
-    gboolean image_changed=force || s->page!=v->snapshot.page || s->page_number!=v->snapshot.page_number;
+    gboolean image_changed=force || s->page!=v->snapshot.page || s->page_number!=v->snapshot.page_number ||
+        memcmp(s->color_pages,v->snapshot.color_pages,sizeof(s->color_pages));
     if (force || s->selected!=v->snapshot.selected || !s->page)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),FALSE);
     ts_info_snapshot_clear(&v->snapshot); v->snapshot=*s; memset(s,0,sizeof(*s));
@@ -211,6 +239,11 @@ static void page_step(GtkButton *button, gpointer data) {
 static void hide_dialog(GtkDialog *dialog, gint response, gpointer data) {
     (void)response; (void)data; gtk_widget_hide(GTK_WIDGET(dialog));
 }
+static void teletext_dialog_hidden(GtkWidget *dialog, gpointer data) {
+    (void)dialog;
+    TsInfoView *v=data;
+    if (v->hdmi_page) gtk_widget_hide(v->hdmi_page);
+}
 static void open_information(GtkButton *button, gpointer data) {
     TsInfoView *v=data;
     v->next_tick=0; ts_info_view_tick(v,v->backend);
@@ -218,6 +251,7 @@ static void open_information(GtkButton *button, gpointer data) {
     GtkWidget *dialog=v->dialogs[index];
     gtk_widget_show_all(dialog);
     gtk_window_present(GTK_WINDOW(dialog));
+    if (index==1 && v->hdmi_page) gtk_widget_show(v->hdmi_page);
 }
 /* Conventional slow Teletext flash: one second, 3/4 on and 1/4 off.
  * Use monotonic time so system-clock adjustments cannot stop the animation. */
@@ -241,6 +275,7 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWi
         gtk_window_set_default_size(GTK_WINDOW(v->dialogs[i]),680,610);
         g_signal_connect(v->dialogs[i],"response",G_CALLBACK(hide_dialog),v);
         g_signal_connect(v->dialogs[i],"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+        if (i==1) g_signal_connect(v->dialogs[i],"hide",G_CALLBACK(teletext_dialog_hidden),v);
         GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(v->dialogs[i]));
         gtk_container_set_border_width(GTK_CONTAINER(content),8); gtk_box_set_spacing(GTK_BOX(content),8);
         GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);

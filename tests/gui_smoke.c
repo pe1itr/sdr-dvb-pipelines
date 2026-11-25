@@ -2495,6 +2495,11 @@ static gboolean exercise(gpointer data) {
             g_assert_cmpint(gtk_widget_get_allocated_height(panel),==,screen.height);
         }
         g_assert_cmpstr(network_control(a,"osd/off",&error),==,"200 OK");
+        gtk_button_clicked(GTK_BUTTON(a->information.buttons[1]));
+        g_assert_true(gtk_widget_get_visible(a->information.dialogs[1]));
+        g_assert_true(gtk_widget_get_visible(a->information.hdmi_page));
+        gtk_dialog_response(GTK_DIALOG(a->information.dialogs[1]),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(a->information.hdmi_page));
         for (unsigned i=0;i<G_N_ELEMENTS(keys);++i) {
             g_assert_cmpstr(network_control(a,"teletext/100",&error),==,"200 OK");
             deadline=g_get_monotonic_time()+G_USEC_PER_SEC;
@@ -2508,6 +2513,27 @@ static gboolean exercise(gpointer data) {
             g_assert_true(gtk_widget_get_visible(a->information.hdmi_page));
             g_assert_false(gtk_widget_get_visible(a->information.dialogs[1]));
             g_assert_true(gtk_widget_get_toplevel(a->information.hdmi_page)==a->video_view.hdmi_window);
+            if (i==0) {
+                GtkAllocation screen={0,0,1280,720};
+                gtk_widget_size_allocate(a->information.hdmi_page,&screen);
+                cairo_surface_t *image=cairo_image_surface_create(CAIRO_FORMAT_RGB24,1280,720);
+                cairo_t *cr=cairo_create(image);
+                gtk_widget_draw(a->information.hdmi_page,cr);
+                cairo_destroy(cr);
+                cairo_surface_flush(image);
+                const guint8 *pixels=cairo_image_surface_get_data(image);
+                int stride=cairo_image_surface_get_stride(image);
+                unsigned ink[4]={0};
+                for (int y=0;y<720;y++) {
+                    const guint32 *row=(const guint32 *)(pixels+y*stride);
+                    for (int x=0;x<1280;x++) {
+                        if (y<36 || y>=684) g_assert_cmpuint(row[x]&0xffffff,==,0);
+                        if (y>=645 && y<684 && x>=240 && x<1040 && (row[x]&0xffffff)) ++ink[(x-240)/200];
+                    }
+                }
+                for (unsigned n=0;n<4;n++) g_assert_cmpuint(ink[n],>,0);
+                cairo_surface_destroy(image);
+            }
             char *encoded=network_status(a);
             json_object *state=json_tokener_parse(encoded);
             json_object *links=json_object_object_get(state,"teletext_color_links");
@@ -2521,7 +2547,7 @@ static gboolean exercise(gpointer data) {
         g_assert_cmpstr(network_control(a,"program/2",&error),==,"200 OK");
         g_assert_cmpstr(network_control(a,"osd/right",&error),==,"200 OK");
         const char *program_text=gtk_label_get_text(GTK_LABEL(a->hdmi_programs));
-        g_assert_true(g_str_has_prefix(program_text,"Programma’s\n▶ 2  "));
+        g_assert_true(g_str_has_prefix(program_text,"Programs\n▶ 2  "));
         g_assert_nonnull(strstr(program_text,"\n1  "));
         g_assert_true(hdmi_monitor(a,0));
         g_assert_null(a->information.hdmi_page);
@@ -2708,7 +2734,7 @@ static gboolean exercise_presets(gpointer data) {
         gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
         gtk_button_clicked(GTK_BUTTON(a->power_button));g_assert_true(a->running);
         if (a->source==SOURCE_AFEDRI) {
-            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_power)),==,"SDR verbindt met Afedri…");
+            g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_power)),==,"Connecting to Afedri…");
             a->afedri_receiving=TRUE;
             power_refresh(a);
         }

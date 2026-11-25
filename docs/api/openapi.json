@@ -281,7 +281,7 @@
       "put": {
         "tags": ["Receiver control"],
         "summary": "Follow a Teletext color link",
-        "description": "Press a Fastext color key during DVB reception to open the destination broadcast for the current page. Read teletext_color_links from GET /status to see the available colors and their destination page numbers.",
+        "description": "Press a Fastext color key during DVB reception to open the destination for the current page. When the broadcaster supplies no color links, the receiver can use up to four page numbers printed in index rows. Read teletext_color_links from GET /status to see the available colors and their destination page numbers.",
         "parameters": [
           {
             "name": "color", "in": "path", "required": true,
@@ -598,6 +598,7 @@
           "hdmi_state": { "type": "string", "enum": ["Off", "No Signal", "Init", "Locked", "Video"] },
           "teletext_visible": { "type": "boolean", "description": "Whether Teletext is visible on HDMI or in the desktop window." },
           "teletext_page": { "type": "integer", "description": "Selected page in the active desktop DVB Teletext viewer." },
+          "teletext_index_shortcuts": { "type": "boolean", "description": "The color keys use printed index entries as local shortcuts." },
           "teletext_color_links": { "type": "object", "description": "Available Fastext keys and their destination page numbers on the current page.", "additionalProperties": { "type": "integer", "minimum": 100, "maximum": 899 } },
           "teletext_page_received": { "type": "boolean", "description": "True when the selected page is available to display." },
           "configured_gpu_ldpc": {

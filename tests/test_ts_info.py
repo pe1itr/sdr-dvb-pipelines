@@ -464,6 +464,25 @@ class InformationTests(unittest.TestCase):
             self.assertEqual(set(snapshot['footer_links']),{0,123,145,167,189})
         self.assertEqual(missing['color_pages'],[0]*4)
 
+    def test_fastext_links_without_visible_footer(self):
+        t=Stream()
+        data=t.pat()+t.pmt()+t.teletext(rows={},fastext=True)+t.teletext(rows={},fastext=True)
+        first,other,cached=self.run_streams(data,'--page=120','--page=100')
+        self.assertEqual(first['color_pages'],[123,145,167,189])
+        self.assertEqual(first['footer_links'],[0]*40)
+        self.assertEqual(other['color_pages'],[0]*4)
+        self.assertEqual(cached['color_pages'],first['color_pages'])
+
+    def test_index_shortcuts_only_without_fastext(self):
+        t=Stream()
+        rows={3:b'Index ..... 100',4:b'News .... 110',5:b'News .... 110',
+              6:b'Call 145',7:b'Sport ........ 120',8:b'More .... 200'}
+        def snapshot(fastext):
+            page=lambda:t.teletext(rows=rows,fastext=fastext)
+            return self.run_streams(t.pat()+t.pmt()+page()+page())[0]
+        self.assertEqual(snapshot(False)['color_pages'],[110,120,200,0])
+        self.assertEqual(snapshot(True)['color_pages'],[123,145,167,189])
+
     def test_page_cache_updates_offscreen_and_clears_on_pid_change(self):
         t=Stream()
         snapshots=self.run_streams(t.pat()+t.pmt()+t.teletext(0x234),
