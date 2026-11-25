@@ -69,6 +69,8 @@ typedef struct {
     int active_preset, pending_preset; /* 1..6, zero means none */
     char *preset_signature;
     StatusHttp *status_http;
+    GtkWidget *network_dialog, *network_label, *network_overlay;
+    guint network_refresh_timer;
     GString *status_log;
     guint64 knucker_sync_bytes;
     gboolean batc_receiver;
@@ -2930,6 +2932,57 @@ static void update_hdmi_menu(App *a) {
     g_string_free(list,TRUE);
 }
 
+static gboolean refresh_network_info(gpointer data) {
+    App *a = data;
+    if (a->network_dialog) {
+        char *text = status_http_network_info(a->status_http);
+        if (g_strcmp0(gtk_label_get_text(GTK_LABEL(a->network_label)), text))
+            gtk_label_set_text(GTK_LABEL(a->network_label), text);
+        if (a->network_overlay)
+            gtk_label_set_text(GTK_LABEL(a->network_overlay), text);
+        g_free(text);
+    }
+    return G_SOURCE_CONTINUE;
+}
+
+static void network_dialog_destroyed(GtkWidget *dialog, gpointer data) {
+    (void)dialog;
+    App *a = data;
+    a->network_dialog = a->network_label = NULL;
+    g_clear_handle_id(&a->network_refresh_timer, g_source_remove);
+    if (a->network_overlay) gtk_widget_hide(a->network_overlay);
+}
+
+static void set_network_info_visible(App *a, gboolean visible) {
+    if (!visible) {
+        if (a->network_dialog) gtk_widget_destroy(a->network_dialog);
+        return;
+    }
+    if (!a->network_dialog) {
+        a->network_dialog = gtk_dialog_new_with_buttons("Network information", GTK_WINDOW(a->window),
+            GTK_DIALOG_DESTROY_WITH_PARENT, "_Close", GTK_RESPONSE_CLOSE, NULL);
+        a->network_label = gtk_label_new(NULL);
+        gtk_label_set_selectable(GTK_LABEL(a->network_label), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(a->network_label), 0);
+        GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(a->network_dialog));
+        gtk_container_set_border_width(GTK_CONTAINER(content), 16);
+        gtk_box_pack_start(GTK_BOX(content), a->network_label, TRUE, TRUE, 0);
+        g_signal_connect_swapped(a->network_dialog, "response", G_CALLBACK(gtk_widget_destroy), a->network_dialog);
+        g_signal_connect(a->network_dialog, "destroy", G_CALLBACK(network_dialog_destroyed), a);
+        a->network_refresh_timer = g_timeout_add_seconds(5, refresh_network_info, a);
+    }
+    refresh_network_info(a);
+    gtk_widget_show_all(a->network_dialog);
+    gtk_window_present(GTK_WINDOW(a->network_dialog));
+    if (a->network_overlay) gtk_widget_show(a->network_overlay);
+}
+
+static void network_info_clicked(GtkButton *button, gpointer data) {
+    (void)button;
+    App *a = data;
+    set_network_info_visible(a, !a->network_dialog);
+}
+
 static gboolean hdmi_monitor(App *a,int monitor) {
     if (!video_view_hdmi_monitor(&a->video_view,monitor)) return FALSE;
     if (!monitor || a->hdmi_menu) return TRUE;
@@ -3006,6 +3059,24 @@ static gboolean hdmi_monitor(App *a,int monitor) {
     g_object_unref(style);
     gtk_overlay_add_overlay(overlay,a->hdmi_menu);
     gtk_widget_show_all(a->hdmi_menu);
+    a->network_overlay = gtk_label_new(NULL);
+    g_object_add_weak_pointer(G_OBJECT(a->network_overlay), (gpointer *)&a->network_overlay);
+    gtk_widget_set_no_show_all(a->network_overlay, TRUE);
+    gtk_widget_set_halign(a->network_overlay, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(a->network_overlay, GTK_ALIGN_CENTER);
+    GtkCssProvider *network_style = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(network_style,
+        "label { color: white; background-color: rgba(0,0,0,0.88); padding: 18px 28px; font: bold 28px Sans; }",
+        -1, NULL);
+    gtk_style_context_add_provider(gtk_widget_get_style_context(a->network_overlay),
+        GTK_STYLE_PROVIDER(network_style), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    g_object_unref(network_style);
+    gtk_overlay_add_overlay(overlay, a->network_overlay);
+    gtk_overlay_set_overlay_pass_through(overlay, a->network_overlay, TRUE);
+    if (a->network_dialog) {
+        refresh_network_info(a);
+        gtk_widget_show(a->network_overlay);
+    }
     return TRUE;
 }
 
@@ -4209,6 +4280,7 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
         status_http_stop(a->status_http);a->status_http=NULL;
         message=g_strdup("Status endpoint disabled");
     }
+    refresh_network_info(a);
     g_key_file_set_boolean(a->config,"status","enabled",enabled);
     gtk_widget_set_sensitive(a->status_endpoint_bind,!enabled);
     gtk_widget_set_sensitive(a->status_endpoint_port,!enabled);
@@ -4945,6 +5017,10 @@ static void gui(App *a, gboolean start_usb) {
     gtk_box_pack_start(GTK_BOX(output_options),a->status_endpoint_item,FALSE,FALSE,0);
     gtk_widget_set_tooltip_text(a->status_endpoint_item,"Enable or disable HTTP status and logs for all receiver modes");
     g_signal_connect(a->status_endpoint_item,"clicked",G_CALLBACK(show_status_endpoint),a);
+    GtkWidget *network_item = gtk_model_button_new();
+    g_object_set(network_item, "text", "Network information…", NULL);
+    gtk_box_pack_start(GTK_BOX(output_options), network_item, FALSE, FALSE, 0);
+    g_signal_connect(network_item, "clicked", G_CALLBACK(network_info_clicked), a);
     gtk_widget_show_all(output_options);
     gtk_menu_button_set_popover(GTK_MENU_BUTTON(output_menu), output_popover);
     GtkWidget *presets_item=gtk_button_new_with_label("Presets");
@@ -5485,6 +5561,13 @@ static const char *network_control(gpointer data,const char *command,const char 
     if (!a->presets || !g_key_file_get_boolean(a->config,"status","control",NULL))
         return control_failure(error,"403 Forbidden","Enable remote control in Output > Status endpoint");
     if (a->closing) return control_failure(error,conflict,"Receiver is closing");
+    if (g_str_has_prefix(command,"network-info/")) {
+        const char *action = command + strlen("network-info/");
+        if (strcmp(action,"on") && strcmp(action,"off"))
+            return control_failure(error,bad,"Expected on or off");
+        set_network_info_visible(a, !strcmp(action,"on"));
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"osd/")) {
         const char *side=command+strlen("osd/");
         if (strcmp(side,"off") && strcmp(side,"left") && strcmp(side,"right"))
@@ -5762,6 +5845,7 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
     BOOL(root,"tsscatterfix_enabled",use_scatter(a));
+    BOOL(root,"network_info_visible",a->network_dialog!=NULL);
     BOOL(root,"eit_overlay_enabled",ts_info_view_eit_visible(&a->information));
     BOOL(root,"hdmi_teletext_visible",hdmi_text);
     BOOL(root,"teletext_visible",hdmi_text || (a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1])));

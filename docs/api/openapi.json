@@ -265,6 +265,20 @@
         }
       }
     },
+    "/control/network-info/{action}": {
+      "put": {
+        "tags": ["Receiver control"],
+        "summary": "Show or hide network information",
+        "description": "Shows the endpoint addresses in the desktop window and on active HDMI output. Closing the window hides both. GET /status reports network_info_visible.",
+        "parameters": [{ "name": "action", "in": "path", "required": true, "description": "Choose the overlay state.", "example": "on", "schema": { "type": "string", "enum": ["on", "off"] } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/200" },
+          "400": { "$ref": "#/components/responses/400" },
+          "403": { "$ref": "#/components/responses/403" },
+          "409": { "$ref": "#/components/responses/409" }
+        }
+      }
+    },
     "/control/eit/{action}": {
       "put": {
         "tags": ["Receiver control"],
@@ -623,6 +637,7 @@
           "hdmi_monitor": { "type": "integer", "description": "Display number starting at 1, or zero when off." },
           "hdmi_osd": { "type": "string", "enum": ["left", "right", "off"] },
           "tsscatterfix_enabled": { "type": "boolean" },
+          "network_info_visible": { "type": "boolean" },
           "eit_overlay_enabled": { "type": "boolean" },
           "hdmi_teletext_visible": { "type": "boolean" },
           "hdmi_state": { "type": "string", "enum": ["Off", "No Signal", "Init", "Locked", "Video"] },

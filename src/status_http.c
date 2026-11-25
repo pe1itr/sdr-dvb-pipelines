@@ -1,5 +1,13 @@
+#define _DEFAULT_SOURCE
 #include "status_http.h"
 #include "api_docs.h"
+#ifdef G_OS_WIN32
+#include <iphlpapi.h>
+#else
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#endif
 #include <string.h>
 #include <json-c/json.h>
 
@@ -11,6 +19,8 @@ struct StatusHttp {
     StatusHttpSnapshot snapshot, constellation;
     StatusHttpControl control;
     gpointer data;
+    GInetAddress *bind_ip;
+    gboolean accepts_ipv4;
     guint16 port;
 };
 typedef struct {
@@ -117,11 +127,82 @@ static gboolean incoming(GSocketService *service,GSocketConnection *connection,G
     s->clients=g_list_prepend(s->clients,c);c->timer=g_timeout_add_seconds(3,expired,c);
     read_request(c);return TRUE;
 }
+static void listener_event(GSocketListener *listener, GSocketListenerEvent event,
+                           GSocket *socket, gpointer data) {
+    (void)listener;
+    if (event == G_SOCKET_LISTENER_LISTENED)
+        ((StatusHttp *)data)->accepts_ipv4 = g_socket_speaks_ipv4(socket);
+}
+
+static void append_interface(GString *text, StatusHttp *s, const char *name,
+                             struct sockaddr *address, gsize size) {
+    if (!address || (address->sa_family != AF_INET && address->sa_family != AF_INET6)) return;
+    GSocketAddress *socket_address = g_socket_address_new_from_native(address, size);
+    if (!socket_address) return;
+    GInetAddress *ip = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(socket_address));
+    gboolean wildcard = g_inet_address_get_is_any(s->bind_ip);
+    gboolean ipv4 = g_inet_address_get_family(ip) == G_SOCKET_FAMILY_IPV4;
+    gboolean matches = wildcard
+        ? (ipv4 ? s->accepts_ipv4 : g_inet_address_get_family(s->bind_ip) == G_SOCKET_FAMILY_IPV6)
+        : g_inet_address_equal(s->bind_ip, ip);
+    if (matches && !g_inet_address_get_is_any(ip) && !(wildcard && g_inet_address_get_is_loopback(ip))) {
+        char *literal = g_inet_address_to_string(ip);
+        if (text->len) g_string_append_c(text, '\n');
+        g_string_append_printf(text, "%s   %s%s%s:%u", name, ipv4 ? "" : "[", literal,
+                               ipv4 ? "" : "]", s->port);
+        if (g_inet_address_get_is_loopback(ip)) g_string_append(text, " (this computer only)");
+        if (!ipv4 && g_inet_address_get_is_link_local(ip)) g_string_append(text, " (link-local)");
+        g_free(literal);
+    }
+    g_object_unref(socket_address);
+}
+
+char *status_http_network_info(StatusHttp *s) {
+    if (!s) return g_strdup("Status endpoint is disabled");
+    GString *text = g_string_new(NULL);
+#ifdef G_OS_WIN32
+    ULONG size = 15000, result;
+    IP_ADAPTER_ADDRESSES *adapters = NULL;
+    do {
+        adapters = g_realloc(adapters, size);
+        result = GetAdaptersAddresses(AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                      GAA_FLAG_SKIP_DNS_SERVER, NULL, adapters, &size);
+    } while (result == ERROR_BUFFER_OVERFLOW);
+    if (result == NO_ERROR) {
+        for (IP_ADAPTER_ADDRESSES *a = adapters; a; a = a->Next) {
+            if (a->OperStatus != IfOperStatusUp) continue;
+            char *name = g_utf16_to_utf8((const gunichar2 *)a->FriendlyName, -1, NULL, NULL, NULL);
+            for (IP_ADAPTER_UNICAST_ADDRESS *u = a->FirstUnicastAddress; u; u = u->Next)
+                append_interface(text, s, name ? name : a->AdapterName, u->Address.lpSockaddr,
+                                 u->Address.iSockaddrLength);
+            g_free(name);
+        }
+    }
+    g_free(adapters);
+#else
+    struct ifaddrs *interfaces;
+    if (getifaddrs(&interfaces) == 0) {
+        for (struct ifaddrs *a = interfaces; a; a = a->ifa_next) {
+            if (!(a->ifa_flags & IFF_UP) || !a->ifa_addr) continue;
+            char *name = g_utf8_make_valid(a->ifa_name, -1);
+            append_interface(text, s, name, a->ifa_addr, a->ifa_addr->sa_family == AF_INET
+                             ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6));
+            g_free(name);
+        }
+        freeifaddrs(interfaces);
+    }
+#endif
+    if (!text->len) g_string_append(text, "No active network address found for this endpoint");
+    return g_string_free(text, FALSE);
+}
+
 StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,gpointer data,GError **error) {
     GInetAddress *ip=g_inet_address_new_from_string(address);
     if (!ip) {g_set_error_literal(error,G_IO_ERROR,G_IO_ERROR_INVALID_ARGUMENT,"Status bind address must be a numeric IPv4 or IPv6 address");return NULL;}
     StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;s->control=control;
-    GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;g_object_unref(ip);
+    GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;
+    s->bind_ip=ip;
+    g_signal_connect(s->service,"event",G_CALLBACK(listener_event),s);
     gboolean ok=g_socket_listener_add_address(G_SOCKET_LISTENER(s->service),bind,G_SOCKET_TYPE_STREAM,
         G_SOCKET_PROTOCOL_TCP,NULL,&effective,error);g_object_unref(bind);
     if (!ok) {status_http_stop(s);return NULL;}
@@ -134,5 +215,6 @@ void status_http_stop(StatusHttp *s) {
     g_socket_service_stop(s->service);g_socket_listener_close(G_SOCKET_LISTENER(s->service));
     g_signal_handlers_disconnect_by_data(s->service,s);
     for (GList *l=s->clients;l;l=l->next) {Client *c=l->data;c->server=NULL;g_cancellable_cancel(c->cancel);}
+    g_clear_object(&s->bind_ip);
     g_list_free(s->clients);g_object_unref(s->service);g_free(s);
 }

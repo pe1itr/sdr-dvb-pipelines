@@ -225,6 +225,11 @@ class ReceiverControlTests(unittest.TestCase):
         self.assertEqual((state['hdmi_monitor'], state['hdmi_state']), (1, 'No Signal'))
         put('hdmi/off')
         self.assertEqual(self.get()[1]['hdmi_state'], 'Off')
+        self.assertFalse(state['network_info_visible'])
+        for action in ('on', 'on', 'off', 'off'):
+            put('network-info/' + action)
+            self.assertEqual(self.get()[1]['network_info_visible'], action == 'on')
+        put('network-info/invalid', 400)
         put('osd/left', 409)
         put('osd/x', 400)
         put('hdmi/9999', 400)

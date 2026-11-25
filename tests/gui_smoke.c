@@ -2862,6 +2862,58 @@ static gboolean exercise_moon(gpointer data) {
     gtk_main_quit(); return G_SOURCE_REMOVE;
 }
 
+static gboolean exercise_network_info(gpointer data) {
+    App *a = data;
+    const char *error = NULL;
+    GtkWidget *options = gtk_widget_get_parent(a->status_endpoint_item);
+    GList *items = gtk_container_get_children(GTK_CONTAINER(options));
+    GtkButton *menu_item = NULL;
+    for (GList *item = items; item; item = item->next) {
+        char *label = NULL;
+        g_object_get(item->data, "text", &label, NULL);
+        if (!g_strcmp0(label, "Network information…")) menu_item = GTK_BUTTON(item->data);
+        g_free(label);
+    }
+    g_list_free(items);
+    g_assert_nonnull(menu_item);
+    gtk_button_clicked(menu_item);
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->network_label)), ==, "Status endpoint is disabled");
+    g_assert_true(hdmi_monitor(a, 1));
+    g_assert_true(gtk_widget_get_visible(a->network_overlay));
+    gtk_button_clicked(menu_item);
+    g_assert_null(a->network_dialog);
+    g_assert_false(gtk_widget_get_visible(a->network_overlay));
+
+    a->status_http = status_http_start("127.0.0.1", 0, network_status, network_constellation,
+                                       network_control, a, NULL);
+    g_assert_nonnull(a->status_http);
+    g_key_file_set_boolean(a->config, "status", "control", TRUE);
+    g_assert_cmpstr(network_control(a, "network-info/on", &error), ==, "200 OK");
+    GtkWidget *dialog = a->network_dialog;
+    g_assert_cmpstr(network_control(a, "network-info/on", &error), ==, "200 OK");
+    g_assert_true(a->network_dialog == dialog);
+    char *expected = g_strdup_printf("127.0.0.1:%u (this computer only)", status_http_port(a->status_http));
+    const char *popup = gtk_label_get_text(GTK_LABEL(a->network_label));
+    g_assert_nonnull(strstr(popup, expected));
+    g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->network_overlay)), ==, popup);
+    g_free(expected);
+    g_assert_true(hdmi_monitor(a, 0));
+    g_assert_true(hdmi_monitor(a, 1));
+    g_assert_true(gtk_widget_get_visible(a->network_overlay));
+    gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_CLOSE);
+    g_assert_null(a->network_dialog);
+    g_assert_false(gtk_widget_get_visible(a->network_overlay));
+    g_assert_cmpstr(network_control(a, "network-info/on", &error), ==, "200 OK");
+    g_assert_cmpstr(network_control(a, "network-info/off", &error), ==, "200 OK");
+    g_assert_cmpstr(network_control(a, "network-info/off", &error), ==, "200 OK");
+    g_assert_null(a->network_dialog);
+    g_assert_false(gtk_widget_get_visible(a->network_overlay));
+    status_http_stop(a->status_http);
+    a->status_http = NULL;
+    gtk_main_quit();
+    return G_SOURCE_REMOVE;
+}
+
 int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--test-bonding")) {gtk_init(&argc,&argv);exercise_bonding();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=bonding")) return dvbt_bonding_main(argc-1,argv+1);
@@ -2872,7 +2924,8 @@ int main(int argc, char **argv) {
         return dvbt_backend_main(argc-1, argv+1);
     gboolean preset_test=argc==3 && !strcmp(argv[1],"--test-presets");
     gboolean moon_test=argc==3 && !strcmp(argv[1],"--test-moon");
-    if (preset_test || moon_test) {--argc;++argv;}
+    gboolean network_test=argc==3 && !strcmp(argv[1],"--test-network-info");
+    if (preset_test || moon_test || network_test) {--argc;++argv;}
     g_assert_cmpint(argc, ==, 2);
     App a = {.sr = 125000, .tune_fd = -1};
     a.config = g_key_file_new();
@@ -2880,7 +2933,7 @@ int main(int argc, char **argv) {
     a.directory = g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS, NULL));
     signal(SIGPIPE, SIG_IGN);
-    g_timeout_add(150, moon_test ? exercise_moon : preset_test ? exercise_presets : exercise, &a);
+    g_timeout_add(150, network_test ? exercise_network_info : moon_test ? exercise_moon : preset_test ? exercise_presets : exercise, &a);
     gui(&a,FALSE);
     g_assert_false(a.running);
     g_assert_cmpint(a.exit_code, ==, 0);

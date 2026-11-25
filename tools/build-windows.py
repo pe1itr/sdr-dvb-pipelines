@@ -156,7 +156,7 @@ def main():
             inputs.append(str(rust_lib))
         print(f"Linking {name}.exe", flush=True)
         subprocess.run(["x86_64-w64-mingw32-g++", "-mcrtdll=ucrt", "-Wl,--stack,16777216", *inputs, "-o", str(build / f"{name}.exe"),
-                        *libs, "-lws2_32", "-luserenv", "-lbcrypt", "-lntdll", "-lwinpthread", "-lsetupapi", "-lole32"], check=True)
+                        *libs, "-lws2_32", "-liphlpapi", "-luserenv", "-lbcrypt", "-lntdll", "-lwinpthread", "-lsetupapi", "-lole32"], check=True)
     print(f"Built native Windows executables in {build}")
 
 
