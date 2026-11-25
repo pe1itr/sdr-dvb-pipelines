@@ -329,7 +329,7 @@ only where applicable; hover over a control for its tooltip.
 | **TSscatterFix** | Enable/disable separate picture reconstruction during DVB reception and show/hide its panel. |
 | **Programs / DAB station list** | Click a DVB programme to switch the embedded player, or a DAB+ station to switch audio. Programs occupies the reconstruction-panel position when TSscatterFix is off. External DVB players select their own programme. |
 | **EIT** | Toggle the programme details window. On HDMI, opening the window also shows the Nu / Straks overlay and its programme progress line. Closing the window hides the overlay. IQ replay uses the recorded sample time. |
-| **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. The button turns green when the service announces teletext. Received pages open from memory and refresh on reception. Use the coloured Fastext links beneath the page to follow broadcast destinations. |
+| **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. The button turns green when the service announces teletext. While waiting for the selected page, the counter shows the latest incoming page number. Received pages open from memory and refresh on reception. Use the coloured Fastext links beneath the page to follow broadcast destinations. |
 | **TII** | In DAB, inspect transmitter IDs and log confirmed observations. Green indicates codes in the latest capture; **✓ Logged** marks an already logged ensemble/code combination. |
 | **USB / FM / FM-DATA** | Toggle the parallel 3 kHz USB, 12.5 kHz FM or 20 kHz flat-audio FM-DATA monitor. Here USB means upper sideband. Only one monitor mode is active at a time. |
 | **TCI** | Configure the monitor's TCI connection, audio output and optional PCM UDP stream. |
@@ -649,6 +649,8 @@ Enable network diagnostics on Linux or Windows with:
 linrad_dvb --status-bind 0.0.0.0 --status-port 8877
 ```
 
+Choose **Output → Network information…** to see the receiver’s endpoint addresses on the desktop and on active HDMI output. Closing the window also hides the HDMI overlay.
+
 Open `http://RECEIVER-IP:8877/docs` for the offline API reference. Expand a route to see parameters, examples and responses. Import `/openapi.json` into Swagger UI or an API client.
 
 Read `http://RECEIVER-IP:8877/status` in a browser, with `curl`, or from PowerShell:
@@ -671,6 +673,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | Path | Action |
 | --- | --- |
 | `/control/hdmi/1`, `/control/hdmi/2`, `/control/hdmi/off` | Open fullscreen DVB playback on the selected display (numbered from 1), or close it. Use the embedded player and select the HDMI audio device in the operating system. The receiver remembers the display at startup. White text on blue shows **No Signal**, **Init** during acquisition, and **Locked** until decoded pictures arrive. Read `hdmi_monitor` and `hdmi_state` in `/status`. |
+| `/control/network-info/on`, `/control/network-info/off` | Show or hide the endpoint addresses on the desktop and active HDMI output. Read `network_info_visible` in `/status`. |
 | `/control/osd/left`, `/control/osd/right`, `/control/osd/off` | Show or hide the HDMI information panel. Read `hdmi_osd` in `/status`. |
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
 | `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
@@ -706,6 +709,19 @@ marked `telemetry_fresh=false`; HTTP 200 means the status was retrieved, not tha
 reception is healthy. The endpoint stays available when reception stops or fails
 in the GUI, until the application closes. With `--run`, it ends when the receiver
 process exits. Errors before application startup remain on stderr.
+
+#### Read received ATV Mosaic messages
+
+With the status endpoint enabled, open `GET /dsmcc/messages` to read ATV Mosaic
+messages received in the past hour, in reception order. This also works with
+DSM-CC UDP output switched off. Each entry contains the original `message`,
+its transport stream `pid`, the reception time `received_unix_ms` and a `cursor`.
+
+Save the response’s `latest_cursor` after processing the entries. On the next
+poll, use it as the value of `after` in `GET /dsmcc/messages?after=<cursor>`.
+If the response reports `gap: true`, the receiver returns all retained entries
+and you may have missed earlier messages. Messages expire one hour after first
+reception. Stopping reception clears the history.
 
 #### Select a program in a DVB transport stream
 
