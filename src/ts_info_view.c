@@ -1,5 +1,6 @@
 #include "ts_info_view.h"
 #include <string.h>
+#include <libzvbi.h>
 
 static char *local_time(gint64 seconds, const char *format) {
     GDateTime *date=g_date_time_new_from_unix_local(seconds);
@@ -72,9 +73,9 @@ static gboolean page_tooltip(GtkWidget *area, gint x, gint y, gboolean keyboard,
     gtk_tooltip_set_text(tooltip,text);
     return TRUE;
 }
-static void draw_raster(cairo_t *cr,GBytes *frame,int width,int height,PageRect r) {
+static void draw_raster(cairo_t *cr,const void *pixels,int width,int height,PageRect r) {
     cairo_surface_t *surface=cairo_image_surface_create_for_data(
-        (unsigned char *)g_bytes_get_data(frame,NULL),CAIRO_FORMAT_RGB24,width,height,width*4);
+        (unsigned char *)pixels,CAIRO_FORMAT_RGB24,width,height,width*4);
     cairo_save(cr);
     cairo_translate(cr,r.x,r.y);
     cairo_scale(cr,r.w/width,r.h/height);
@@ -84,28 +85,29 @@ static void draw_raster(cairo_t *cr,GBytes *frame,int width,int height,PageRect 
     cairo_restore(cr);
     cairo_surface_destroy(surface);
 }
+static void draw_page_counter(cairo_t *cr,unsigned number,PageRect r) {
+    enum { COLUMNS=3, WIDTH=COLUMNS*12, HEIGHT=10 };
+    vbi_page digits={.columns=COLUMNS,.rows=1};
+    for (int x=COLUMNS-1;x>=0;x--) {
+        digits.text[x]=(vbi_char){.unicode='0'+number%10,.foreground=VBI_WHITE,
+                                  .background=VBI_BLACK,.opacity=VBI_OPAQUE};
+        number/=10;
+    }
+    guint8 indexed[WIDTH*HEIGHT];
+    vbi_draw_vt_page_region(&digits,VBI_PIXFMT_PAL8,indexed,WIDTH,0,0,COLUMNS,1,FALSE,TRUE);
+    guint32 pixels[WIDTH*HEIGHT];
+    for (unsigned i=0;i<G_N_ELEMENTS(pixels);i++)
+        pixels[i]=indexed[i]==VBI_WHITE ? 0xffffff : 0;
+    double w=r.w*COLUMNS/40;
+    draw_raster(cr,pixels,WIDTH,HEIGHT,(PageRect){r.x+r.w-w,r.y,w,r.h/25});
+}
 static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     TsInfoView *v=data; TsInfoSnapshot *s=&v->snapshot;
     PageRect r=page_rect(v,area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) {
-        if (s->incoming_page) {
-            char digits[4];
-            g_snprintf(digits,sizeof(digits),"%03u",s->incoming_page);
-            cairo_save(cr);
-            cairo_translate(cr,r.x,r.y);
-            if (r.w>0 && r.h>0) {
-                cairo_scale(cr,r.w/480,r.h/250);
-                cairo_select_font_face(cr,"monospace",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_BOLD);
-                cairo_set_font_size(cr,10);
-                cairo_text_extents_t extents;
-                cairo_text_extents(cr,digits,&extents);
-                cairo_move_to(cr,478-extents.x_advance,9);
-                cairo_set_source_rgb(cr,1,1,1);
-                cairo_show_text(cr,digits);
-            }
-            cairo_restore(cr);
-        }
+        if (s->incoming_page && r.w>0 && r.h>0)
+            draw_page_counter(cr,s->incoming_page,r);
         if (area==v->hdmi_page) {
             char message[64];
             g_snprintf(message,sizeof(message),"Waiting for Teletext page %u",s->page_number ? s->page_number : 100);
@@ -130,7 +132,7 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     if (!frame) frame=s->page;
     /* Keep a TV-shaped page even if a layout allocates a different aspect.
      * UI controls never consume rows or alter character proportions. */
-    draw_raster(cr,frame,s->width,s->height,r);
+    draw_raster(cr,g_bytes_get_data(frame,NULL),s->width,s->height,r);
     return FALSE;
 }
 GtkWidget *ts_info_view_create_hdmi_page(TsInfoView *v) {
