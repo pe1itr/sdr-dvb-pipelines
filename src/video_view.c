@@ -635,6 +635,11 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
     /* Frame threading holds pictures until more frames arrive. During broken
      * reception those frames may never arrive before Stop closes the stream. */
     const char *args[] = {"--no-video-title-show", "--no-video-deco", "--no-snapshot-preview",
+#ifdef __linux__
+                          /* Prefer VLC's buffered PulseAudio output (also served by
+                           * pipewire-pulse). Keep automatic fallback on other setups. */
+                          "--aout=pulse,any",
+#endif
                           "--avcodec-hw=none", "--avcodec-threads=1",
                           "--no-drop-late-frames", "--no-skip-frames"};
     v->vlc = libvlc_new(G_N_ELEMENTS(args), args);
