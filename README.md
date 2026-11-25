@@ -409,6 +409,8 @@ The independent USB worker supplies the transport stream to the player and
 service selector and sends measured constellation points to the decoder view.
 MER is estimated from the errors of 256 received symbols. D margin subtracts
 the reference threshold for the detected modulation, FEC and frame length.
+See the [MT Express implementation and sources](components/mt_express/README.md)
+for register references and the origin of both meter scales.
 
 On Raspberry Pi (ARM Linux), the **BATC Knucker** demodulates DVB-T in hardware
 and supplies an MPEG transport stream. Obtain `CombiTunerExpress` separately

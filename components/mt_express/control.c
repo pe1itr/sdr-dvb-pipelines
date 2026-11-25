@@ -215,7 +215,7 @@ int mt_lna_gain(libusb_device_handle *d, unsigned input_b, float *gain_db) {
     }
     int closed=demod_byte(d,0xf12a,gate&127);
     if (rc || closed) return rc ? rc : closed;
-    // Approximate the four nominal gain ranges using their endpoints.
+    // Endpoints derived from MiniTioune. See the provenance in README.md.
     // The fine-gain steps are nonlinear. This is an indication in dB.
     static const float low[]={-17.2f,-12.1f,-6.0f,1.85f};
     static const float high[]={-8.1f,-1.6f,4.85f,13.0f};
