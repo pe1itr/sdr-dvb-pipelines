@@ -280,6 +280,7 @@ class ReceiverControlTests(unittest.TestCase):
                          ('DVB-T', 250000, '7/8'))
         put('teletext/off')
         self.assertFalse(self.get()[1]['teletext_visible'])
+        put('tsscatterfix/invalid', 400)
         put('eit/on')
         self.assertTrue(self.get()[1]['eit_overlay_enabled'])
         put('eit/off')
@@ -294,6 +295,11 @@ class ReceiverControlTests(unittest.TestCase):
         put('preset/1', 404)
         put('start')
         self.assertTrue(self.get()[1]['running'])
+        for action in ('on', 'on', 'off', 'off'):
+            put('tsscatterfix/' + action)
+            self.assertEqual(self.get()[1]['tsscatterfix_enabled'], action == 'on')
+        put('tsscatterfix/toggle', 400)
+        self.assertFalse(self.get()[1]['tsscatterfix_enabled'])
         for action, enabled in [('on', True), ('on', True), ('toggle', False), ('toggle', True), ('off', False)]:
             put('eit/' + action)
             self.assertEqual(self.get()[1]['eit_overlay_enabled'], enabled)

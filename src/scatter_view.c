@@ -10,6 +10,28 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         cairo_translate(cr, (w - iw * scale) / 2, (h - ih * scale) / 2);
         cairo_scale(cr, scale, scale);
         gdk_cairo_set_source_pixbuf(cr, v->image, 0, 0); cairo_paint(cr);
+    } else if (widget == v->hdmi_area) {
+        const char *lines[] = {
+            gtk_progress_bar_get_text(GTK_PROGRESS_BAR(v->progress)),
+            gtk_label_get_text(GTK_LABEL(v->phase)),
+            gtk_label_get_text(GTK_LABEL(v->provider)),
+            gtk_label_get_text(GTK_LABEL(v->service)),
+            gtk_label_get_text(GTK_LABEL(v->details))
+        };
+        PangoLayout *layout = gtk_widget_create_pango_layout(widget, NULL);
+        pango_layout_set_width(layout, (w - 16) * PANGO_SCALE);
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+        cairo_set_source_rgb(cr, 1, 1, 1);
+        int y = 8;
+        for (unsigned i = 0; i < G_N_ELEMENTS(lines); i++) {
+            int height;
+            pango_layout_set_text(layout, lines[i], -1);
+            pango_layout_get_pixel_size(layout, NULL, &height);
+            cairo_move_to(cr, 8, y);
+            pango_cairo_show_layout(cr, layout);
+            y += height + 3;
+        }
+        g_object_unref(layout);
     } else {
         PangoLayout *text = gtk_widget_create_pango_layout(widget, "Waiting for recovered image…");
         int tw, th; pango_layout_get_pixel_size(text, &tw, &th);
@@ -18,6 +40,21 @@ static gboolean draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
         pango_cairo_show_layout(cr, text); g_object_unref(text);
     }
     return FALSE;
+}
+
+void scatter_view_add_hdmi_overlay(ScatterView *v, GtkOverlay *overlay) {
+    GtkWidget *area = v->hdmi_area = gtk_drawing_area_new();
+    g_object_add_weak_pointer(G_OBJECT(area), (gpointer *)&v->hdmi_area);
+    gtk_widget_set_size_request(area, 320, 180);
+    gtk_widget_set_halign(area, GTK_ALIGN_END);
+    gtk_widget_set_valign(area, GTK_ALIGN_END);
+    gtk_widget_set_margin_end(area, 12);
+    gtk_widget_set_margin_bottom(area, 12);
+    gtk_widget_set_no_show_all(area, TRUE);
+    gtk_overlay_add_overlay(overlay, area);
+    gtk_overlay_set_overlay_pass_through(overlay, area, TRUE);
+    g_signal_connect(area, "draw", G_CALLBACK(draw), v);
+    g_object_bind_property(v->frame, "visible", area, "visible", G_BINDING_SYNC_CREATE);
 }
 
 static GtkWidget *label(GtkWidget *box) {
@@ -61,6 +98,7 @@ void scatter_view_reset(ScatterView *v) {
     gtk_label_set_text(GTK_LABEL(v->service), "Service: —");
     gtk_label_set_text(GTK_LABEL(v->details), "Headers: — · Keyframes: —");
     gtk_widget_queue_draw(v->area);
+    if (v->hdmi_area) gtk_widget_queue_draw(v->hdmi_area);
 }
 
 static void service_label(GtkWidget *label, const char *title, const char *value) {
@@ -83,6 +121,7 @@ void scatter_view_tick(ScatterView *v, ScatterBackend *s) {
         v->pixels = pixels; pixels = NULL;
         if (v->pixels) v->image = gdk_pixbuf_new_from_bytes(v->pixels, GDK_COLORSPACE_RGB, FALSE, 8, width, height, stride);
         gtk_widget_queue_draw(v->area);
+        if (v->hdmi_area) gtk_widget_queue_draw(v->hdmi_area);
     }
     if (pixels) g_bytes_unref(pixels);
     static const char *phases[] = {"Waiting for service", "Collecting video headers", "Waiting for keyframe",
@@ -101,4 +140,6 @@ void scatter_view_tick(ScatterView *v, ScatterBackend *s) {
     g_snprintf(text, sizeof(text), "Received: %" G_GUINT64_FORMAT " TS packets\nReconstruction attempts: %" G_GUINT64_FORMAT
         "\nSkipped on recovery branch: %" G_GUINT64_FORMAT " bytes", status.packets_received, status.decode_attempts, dropped);
     gtk_widget_set_tooltip_text(v->details, text);
+    if (!v->image && v->hdmi_area && gtk_widget_get_mapped(v->hdmi_area))
+        gtk_widget_queue_draw(v->hdmi_area);
 }

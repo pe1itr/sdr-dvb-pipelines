@@ -2936,6 +2936,7 @@ static gboolean hdmi_monitor(App *a,int monitor) {
     GtkOverlay *overlay=GTK_OVERLAY(a->video_view.hdmi_overlay);
     ts_info_view_add_eit_overlay(&a->information,overlay);
     gtk_overlay_add_overlay(overlay,ts_info_view_create_hdmi_page(&a->information));
+    scatter_view_add_hdmi_overlay(&a->scatter_view,overlay);
     a->hdmi_menu=gtk_revealer_new();
     a->hdmi_menu_label=gtk_label_new("");
     GtkWidget *panel=gtk_box_new(GTK_ORIENTATION_VERTICAL,8);
@@ -5547,6 +5548,15 @@ static const char *network_control(gpointer data,const char *command,const char 
         return "200 OK";
     }
     if (a->stopping) return control_failure(error,conflict,"Wait until the receiver has stopped");
+    if (g_str_has_prefix(command,"tsscatterfix/")) {
+        const char *mode=command+strlen("tsscatterfix/");
+        if (strcmp(mode,"on") && strcmp(mode,"off"))
+            return control_failure(error,bad,"Expected on or off");
+        if (!a->scatter_box || a->standard==4)
+            return control_failure(error,conflict,"TSscatterFix requires DVB mode in the desktop interface");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),!strcmp(mode,"on"));
+        return "200 OK";
+    }
     if (!strcmp(command,"start")) {
         start_pipeline(a);
         power_refresh(a);
@@ -5751,6 +5761,7 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_state",video_view_hdmi_state(&a->video_view));
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
+    BOOL(root,"tsscatterfix_enabled",use_scatter(a));
     BOOL(root,"eit_overlay_enabled",ts_info_view_eit_visible(&a->information));
     BOOL(root,"hdmi_teletext_visible",hdmi_text);
     BOOL(root,"teletext_visible",hdmi_text || (a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1])));

@@ -2466,6 +2466,14 @@ static gboolean exercise(gpointer data) {
         const char *keys[]={"red","green","yellow","blue"};
         const unsigned pages[]={123,145,167,189};
         g_assert_true(hdmi_monitor(a,1));
+        g_assert_cmpstr(network_control(a,"tsscatterfix/on",&error),==,"200 OK");
+        g_assert_true(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->scatter_box)));
+        g_assert_true(gtk_widget_get_visible(a->scatter_view.hdmi_area));
+        g_assert_cmpstr(network_control(a,"tsscatterfix/off",&error),==,"200 OK");
+        g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->scatter_box)));
+        g_assert_false(gtk_widget_get_visible(a->scatter_view.hdmi_area));
+        gtk_button_clicked(GTK_BUTTON(a->scatter_box));
+        g_assert_true(gtk_widget_get_visible(a->scatter_view.hdmi_area));
         gtk_revealer_set_transition_duration(GTK_REVEALER(a->hdmi_menu),0);
         const char *menu_commands[]={"osd/left","osd/right"};
         for (unsigned i=0;i<G_N_ELEMENTS(menu_commands);i++) {

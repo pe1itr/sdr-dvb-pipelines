@@ -251,6 +251,20 @@
         }
       }
     },
+    "/control/tsscatterfix/{action}": {
+      "put": {
+        "tags": ["Receiver control"],
+        "summary": "Switch TSscatterFix recovery on or off",
+        "description": "Operates the desktop TSscatterFix button in DVB mode. Active HDMI output shows recovery progress until an image is available. GET /status reports tsscatterfix_enabled.",
+        "parameters": [{ "name": "action", "in": "path", "required": true, "description": "Choose the overlay state.", "example": "on", "schema": { "type": "string", "enum": ["on", "off"] } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/200" },
+          "400": { "$ref": "#/components/responses/400" },
+          "403": { "$ref": "#/components/responses/403" },
+          "409": { "$ref": "#/components/responses/409" }
+        }
+      }
+    },
     "/control/eit/{action}": {
       "put": {
         "tags": ["Receiver control"],
@@ -608,6 +622,7 @@
           "selected_program": { "type": "integer", "nullable": true, "description": "Service ID selected for playback, or null when none is selected in the current list." },
           "hdmi_monitor": { "type": "integer", "description": "Display number starting at 1, or zero when off." },
           "hdmi_osd": { "type": "string", "enum": ["left", "right", "off"] },
+          "tsscatterfix_enabled": { "type": "boolean" },
           "eit_overlay_enabled": { "type": "boolean" },
           "hdmi_teletext_visible": { "type": "boolean" },
           "hdmi_state": { "type": "string", "enum": ["Off", "No Signal", "Init", "Locked", "Video"] },
