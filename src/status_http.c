@@ -18,6 +18,7 @@ struct StatusHttp {
     GList *clients;
     StatusHttpSnapshot snapshot, constellation;
     StatusHttpControl control;
+    DsmccMessages *messages;
     gpointer data;
     GInetAddress *bind_ip;
     gboolean accepts_ipv4;
@@ -108,6 +109,19 @@ static void received(GObject *object,GAsyncResult *result,gpointer data) {
     else if (!strcmp(parts[1],"/docs"))
         respond_as(c,"200 OK","text/html",api_reference_html,"");
     else if (!strcmp(parts[1],"/openapi.json")) respond(c,"200 OK",api_openapi_json,"");
+    else if (!strcmp(parts[1],"/dsmcc/messages") || g_str_has_prefix(parts[1],"/dsmcc/messages?")) {
+        const char *query=strchr(parts[1],'?');
+        guint64 cursor=0;
+        if (query && (!g_str_has_prefix(query,"?after=") ||
+            !g_ascii_isdigit(query[7]) ||
+            !g_ascii_string_to_unsigned(query+7,10,0,G_MAXINT64,&cursor,NULL))) {
+            respond(c,"400 Bad Request","{\"error\":\"expected a nonnegative after cursor\"}","");
+        } else {
+            json_object *reply=dsmcc_messages_read(c->server->messages,query ? (gint64)cursor : -1);
+            respond(c,"200 OK",json_object_to_json_string_ext(reply,JSON_C_TO_STRING_PLAIN),"");
+            json_object_put(reply);
+        }
+    }
     else if (strcmp(parts[1],"/status") && strcmp(parts[1],"/constellation")) respond(c,"404 Not Found","{\"error\":\"unknown route\"}","");
     else {
         StatusHttpSnapshot snapshot = !strcmp(parts[1],"/constellation") ? c->server->constellation : c->server->snapshot;
@@ -196,10 +210,10 @@ char *status_http_network_info(StatusHttp *s) {
     return g_string_free(text, FALSE);
 }
 
-StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,gpointer data,GError **error) {
+StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,DsmccMessages *messages,gpointer data,GError **error) {
     GInetAddress *ip=g_inet_address_new_from_string(address);
     if (!ip) {g_set_error_literal(error,G_IO_ERROR,G_IO_ERROR_INVALID_ARGUMENT,"Status bind address must be a numeric IPv4 or IPv6 address");return NULL;}
-    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;s->control=control;
+    StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;s->control=control;s->messages=messages;
     GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;
     s->bind_ip=ip;
     g_signal_connect(s->service,"event",G_CALLBACK(listener_event),s);

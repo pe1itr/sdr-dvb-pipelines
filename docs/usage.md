@@ -764,6 +764,22 @@ PAT en PMT worden lokaal gebruikt voor detectie. Een app kan de PID uit de
 TS-header lezen. Bij multicast naar `239.255.42.2:1235` kun je de secties bekijken
 met `tsp -I ip 239.255.42.2:1235 -P tables --all-sections -O drop`.
 
+Met het statusendpoint ingeschakeld kan een app ATV Mosaic-berichten ophalen via
+`GET /dsmcc/messages`, ook als DSM-CC via UDP uitstaat. De ontvanger leest
+`station.json` uit de single-file BIOP-carrousel van Mosaic (één DDB-blok).
+Chat gebruikt `id` (UUID), `from`, `to`, `type: "chat"` en `text`. Voor een
+antwoord gebruikt de ontvanger de uitbreiding `type: "response"` met een eigen UUID
+en `reply_to` met de UUID van de opdracht. Extra JSON-velden blijven beschikbaar.
+
+De eerste GET geeft de berichten uit het afgelopen uur in ontvangstvolgorde. Elk item bevat
+`message`, `pid`, `received_unix_ms` en `cursor`. Bewaar na verwerking de
+`latest_cursor` en vraag vervolgens `GET /dsmcc/messages?after=<cursor>` op.
+`/status` bevat onder `dsmcc` de route en de nieuwste cursor. Een bericht vervalt 60 minuten na de eerste ontvangst. Herhaling van dezelfde UUID
+binnen dat uur verlengt die termijn niet. De berichten staan alleen in het werkgeheugen.
+Stoppen wist ze ook als de applicatie open blijft. Bij een verlopen cursor geeft
+`gap: true` aan dat de app berichten kan hebben gemist; de respons bevat dan
+alle nog bewaarde berichten.
+
 Open in de ontvangende VLC `udp://@:1234`, of in FFplay `udp://0.0.0.0:1234`.
 De externe player bepaalt zelf zijn venstergrootte. De ontvangen MPEG-TS wordt
 ongewijzigd doorgestuurd, zonder hercoderen. TSscatterFix krijgt een parallelle

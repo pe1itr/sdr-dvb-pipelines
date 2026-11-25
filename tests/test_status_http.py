@@ -120,6 +120,18 @@ class StatusTests(unittest.TestCase):
         self.assertIn('--status-stdout', worker)
         self.assertFalse((directory / 'state.json').exists())
 
+    def test_dsmcc_messages(self):
+        status = self.get()[1]['dsmcc']
+        path = status['href']
+        cursor = status['latest_cursor']
+        expected = dict(messages=[], latest_cursor=cursor, gap=False)
+        self.assertEqual(self.get(path), (200, expected))
+        self.assertEqual(self.get(f'{path}?after={cursor}'), (200, expected))
+        self.assertTrue(self.get(path + '?after=1')[1]['gap'])
+        for query in ('after=', 'after=-1', 'after=1.2', 'after=1&after=2', 'since=1'):
+            self.assertEqual(self.get(path + '?' + query)[0], 400)
+        self.assertEqual(self.get(path, 'POST')[0], 405)
+
     def test_offline_api_reference(self):
         code, spec = self.get('/openapi.json')
         self.assertEqual(code, 200)

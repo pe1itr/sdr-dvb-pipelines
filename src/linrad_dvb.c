@@ -69,6 +69,7 @@ typedef struct {
     int active_preset, pending_preset; /* 1..6, zero means none */
     char *preset_signature;
     StatusHttp *status_http;
+    DsmccMessages messages;
     GtkWidget *network_dialog, *network_label, *network_overlay;
     guint network_refresh_timer;
     GString *status_log;
@@ -1153,6 +1154,7 @@ static void finish_if_stopped(App *a) {
     for (int i = 0; i < a->stage_count; ++i) if (a->stages[i].pid) return;
     if (!scatter_backend_done(a->scatter_backend)) return;
     scatter_backend_destroy(a->scatter_backend); a->scatter_backend = NULL;
+    dsmcc_messages_reset(&a->messages);
     if (a->video_view.active) video_view_stop(&a->video_view);
     if (a->tune_fd >= 0) { close(a->tune_fd); a->tune_fd = -1; }
     a->running = a->stopping = FALSE;
@@ -1407,6 +1409,8 @@ static void start_pipeline(App *a) {
                 a->exit_code = 1; goto pipe_error;
             }
         }
+        if (!dsmcc) dsmcc=dsmcc_output_monitor();
+        dsmcc_output_set_messages(dsmcc,&a->messages);
         a->scatter_backend = scatter_backend_start(scatter_pipe[0],
             output_fd >= 0 ? output_fd : pipes[1][1], a->scatter, dsmcc, &error);
         if (!a->scatter_backend) {
@@ -3082,6 +3086,7 @@ static gboolean hdmi_monitor(App *a,int monitor) {
 
 static gboolean decoder_tick(gpointer data) {
     App *a=data;
+    if (a->scatter_backend) dsmcc_messages_expire(&a->messages);
     update_hdmi_menu(a);
     if (a->standard==4) {
         video_view_hdmi_update(&a->video_view,FALSE,FALSE);
@@ -4260,7 +4265,7 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
         const char *bind=gtk_entry_get_text(GTK_ENTRY(a->status_endpoint_bind));
         int port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->status_endpoint_port));
         GError *error=NULL;
-        a->status_http=status_http_start(bind,port,network_status,network_constellation,network_control,a,&error);
+        a->status_http=status_http_start(bind,port,network_status,network_constellation,network_control,&a->messages,a,&error);
         if (!a->status_http) {
             message=g_strdup_printf("Cannot start status endpoint: %s",error->message);
             g_clear_error(&error);enabled=FALSE;
@@ -5816,6 +5821,7 @@ static char *network_constellation(gpointer data) {
 
 static char *network_status(gpointer data) {
     App *a=data;json_object *root=json_object_new_object();
+    json_object_object_add(root,"dsmcc",dsmcc_messages_status(&a->messages));
 #define STR(o,k,v) json_object_object_add(o,k,json_object_new_string(v))
 #define NUM(o,k,v) json_object_object_add(o,k,status_number(v))
 #define BOOL(o,k,v) json_object_object_add(o,k,json_object_new_boolean(v))
@@ -6193,7 +6199,7 @@ int main(int argc, char **argv) {
         if (!status_bind) status_bind=g_key_file_get_string(a.config,"status","bind",NULL);
         if (!status_bind) status_bind=g_strdup("127.0.0.1");
         if (status_port) {
-            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,run ? NULL : network_control,&a,&error);
+            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,run ? NULL : network_control,&a.messages,&a,&error);
             if (!a.status_http) fatal("Cannot start status endpoint: %s",error->message);
             fprintf(stderr,"[status] HTTP listening on %s port %d (/status)\n",status_bind,status_port);
         }
@@ -6219,5 +6225,6 @@ int main(int argc, char **argv) {
     if (a.dab.directory) dab_view_destroy(&a.dab);
     clear_stages(&a); g_key_file_unref(a.config); g_free(a.config_path); g_free(a.directory);
     g_free(config); g_free(standard); g_free(fec); g_free(gi); g_option_context_free(context);
+    dsmcc_messages_clear(&a.messages);
     return a.exit_code;
 }

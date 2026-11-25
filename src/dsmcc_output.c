@@ -9,7 +9,7 @@
 
 /* PAT and PMT section_length is at most 1021. PMTs may share a PID. */
 typedef struct {
-    guint8 bytes[1024];
+    guint8 bytes[4096];
     unsigned used;
     int cc;
 } PsiAssembly;
@@ -25,7 +25,8 @@ struct DsmccOutput {
     guint16 tsid;
     gboolean pat_seen[256];
     PsiAssembly pat;
-    GHashTable *programs, *pmts;
+    GHashTable *programs, *pmts, *sections;
+    DsmccMessages *messages;
     guint32 owners[8192];
     guint8 packet[376], datagram[7*188];
     unsigned used, queued;
@@ -41,6 +42,7 @@ static void program_free(gpointer ptr) {
 static void clear_map(DsmccOutput *out) {
     g_hash_table_remove_all(out->programs);
     g_hash_table_remove_all(out->pmts);
+    g_hash_table_remove_all(out->sections);
     memset(out->owners,0,sizeof(out->owners));
     memset(out->pat_seen,0,sizeof(out->pat_seen));
     out->pat_version=-1;
@@ -65,8 +67,19 @@ DsmccOutput *dsmcc_output_open(const char *host, int port, GError **error) {
         if (fd>=0) close(fd);
         return NULL;
     }
-    DsmccOutput *out=g_new0(DsmccOutput,1);
+    DsmccOutput *out=dsmcc_output_monitor();
     out->fd=fd;
+    return out;
+}
+
+void dsmcc_output_set_messages(DsmccOutput *out, DsmccMessages *messages) {
+    out->messages=messages;
+}
+
+DsmccOutput *dsmcc_output_monitor(void) {
+    DsmccOutput *out=g_new0(DsmccOutput,1);
+    out->fd=-1;
+    out->sections=g_hash_table_new_full(g_direct_hash,g_direct_equal,NULL,g_free);
     out->programs=g_hash_table_new_full(g_direct_hash,g_direct_equal,NULL,program_free);
     out->pmts=g_hash_table_new_full(g_direct_hash,g_direct_equal,NULL,g_free);
     dsmcc_output_reset(out);
@@ -74,7 +87,8 @@ DsmccOutput *dsmcc_output_open(const char *host, int port, GError **error) {
 }
 void dsmcc_output_free(DsmccOutput *out) {
     if (!out) return;
-    close(out->fd);
+    if (out->fd>=0) close(out->fd);
+    g_hash_table_unref(out->sections);
     g_hash_table_unref(out->pmts);
     g_hash_table_unref(out->programs);
     g_free(out);
@@ -134,8 +148,10 @@ static void read_pmt(DsmccOutput *out,unsigned pid,const guint8 *b,unsigned n) {
             found[count++]=es;
         at+=5+len;
     }
-    for (unsigned i=0;i<program->data_pids->len;i++)
-        out->owners[g_array_index(program->data_pids,guint16,i)]--;
+    for (unsigned i=0;i<program->data_pids->len;i++) {
+        unsigned old=g_array_index(program->data_pids,guint16,i);
+        if (!--out->owners[old]) g_hash_table_remove(out->sections,GUINT_TO_POINTER(old));
+    }
     g_array_set_size(program->data_pids,0);
     g_array_append_vals(program->data_pids,found,count);
     for (unsigned i=0;i<count;i++) out->owners[found[i]]++;
@@ -153,11 +169,12 @@ static void sections(DsmccOutput *out,unsigned pid,PsiAssembly *a,const guint8 *
         a->used+=take; p+=take; n-=take;
         if (a->used<3) continue;
         unsigned size=3+(word(a->bytes+1)&0xfff);
-        if (size<12 || size>sizeof(a->bytes)) { a->used=0; return; }
+        if (size<12 || size>(out->owners[pid] ? sizeof(a->bytes) : 1024)) { a->used=0; return; }
         if (size==a->used) {
             const guint8 *b=a->bytes;
             if ((b[1]&0x80) && (b[5]&1) && !psi_mpeg_crc32(b,size)) {
-                if (!pid && !b[0]) read_pat(out,b,size);
+                if (out->owners[pid]) dsmcc_messages_section(out->messages,pid,b,size);
+                else if (!pid && !b[0]) read_pat(out,b,size);
                 else if (pid && b[0]==2) read_pmt(out,pid,b,size);
             }
             a->used=0;
@@ -175,13 +192,21 @@ static void flush(DsmccOutput *out) {
 }
 static void packet(DsmccOutput *out,const guint8 *bytes) {
     unsigned pid=word(bytes+1)&0x1fff;
-    if (out->owners[pid]) {
+    if (out->owners[pid] && out->fd>=0) {
         memcpy(out->datagram+out->queued,bytes,188);
         out->queued+=188;
         if (out->queued==sizeof(out->datagram)) flush(out);
-        return;
     }
     PsiAssembly *a=pid ? g_hash_table_lookup(out->pmts,GUINT_TO_POINTER(pid)) : &out->pat;
+    if (out->owners[pid]) {
+        if (!out->messages) return;
+        a=g_hash_table_lookup(out->sections,GUINT_TO_POINTER(pid));
+        if (!a) {
+            a=g_new0(PsiAssembly,1);
+            a->cc=-1;
+            g_hash_table_insert(out->sections,GUINT_TO_POINTER(pid),a);
+        }
+    }
     if (!a) return;
     TsPacket ts;
     if (!ts_packet_parse(bytes,&ts) || ts.transport_error || ts.scrambling) {

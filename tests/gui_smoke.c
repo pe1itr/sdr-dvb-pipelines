@@ -2885,7 +2885,7 @@ static gboolean exercise_network_info(gpointer data) {
     g_assert_false(gtk_widget_get_visible(a->network_overlay));
 
     a->status_http = status_http_start("127.0.0.1", 0, network_status, network_constellation,
-                                       network_control, a, NULL);
+                                       network_control, &a->messages, a, NULL);
     g_assert_nonnull(a->status_http);
     g_key_file_set_boolean(a->config, "status", "control", TRUE);
     g_assert_cmpstr(network_control(a, "network-info/on", &error), ==, "200 OK");

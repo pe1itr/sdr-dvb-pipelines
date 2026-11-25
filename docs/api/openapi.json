@@ -69,6 +69,91 @@
         }
       }
     },
+    "/dsmcc/messages": {
+      "get": {
+        "tags": [
+          "Diagnostics"
+        ],
+        "summary": "Read received ATV Mosaic messages",
+        "description": "Reads distinct station.json messages received within the past 60 minutes in the current receiver session, independently of UDP forwarding. Repetitions do not extend the window from first reception. Messages are held only in memory and cleared when reception stops. On a cursor gap the response contains all retained entries. Save latest_cursor after processing the response.",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "description": "Return messages received after this cursor. Omit on first connection.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "example": 123
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained messages and continuation cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "latest_cursor",
+                    "gap",
+                    "messages"
+                  ],
+                  "properties": {
+                    "latest_cursor": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    },
+                    "gap": {
+                      "type": "boolean"
+                    },
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "message",
+                          "cursor",
+                          "received_unix_ms",
+                          "pid"
+                        ],
+                        "properties": {
+                          "message": {
+                            "type": "object",
+                            "additionalProperties": true,
+                            "description": "Original station.json message, including sender UUID id, from, to, type and any application fields."
+                          },
+                          "cursor": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                          },
+                          "received_unix_ms": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 0
+                          },
+                          "pid": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query or cursor."
+          }
+        }
+      }
+    },
     "/constellation": {
       "get": {
         "tags": [
@@ -599,6 +684,7 @@
       "Status": {
         "type": "object",
         "properties": {
+          "dsmcc": {"type": "object", "required": ["href", "latest_cursor"], "properties": {"href": {"type": "string", "example": "/dsmcc/messages"}, "latest_cursor": {"type": "integer", "format": "int64", "minimum": 0}}},
           "state": {
             "type": "string",
             "enum": [

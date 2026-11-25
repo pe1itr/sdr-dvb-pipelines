@@ -13,7 +13,11 @@ int main(int argc, char **argv) {
     int output=open(argv[2],O_CREAT|O_TRUNC|O_WRONLY,0600); g_assert_cmpint(output,>=,0);
     GError *error=NULL;
     DsmccOutput *data_out=NULL;
-    if (argc==4) {
+    DsmccMessages messages={0};
+    if (argc==4 && !strcmp(argv[3],"messages")) {
+        data_out=dsmcc_output_monitor();
+        dsmcc_output_set_messages(data_out,&messages);
+    } else if (argc==4) {
         data_out=dsmcc_output_open("127.0.0.1",g_ascii_strtoll(argv[3],NULL,10),&error);
         g_assert_no_error(error); g_assert_nonnull(data_out);
     }
@@ -45,6 +49,12 @@ int main(int argc, char **argv) {
     while (!scatter_backend_done(s) && g_get_monotonic_time()<deadline) g_usleep(1000);
     g_assert_true(scatter_backend_done(s)); g_assert_false(g_atomic_int_get(&s->relay_failed));
     scatter_backend_destroy(s);
+    if (argc==4 && !strcmp(argv[3],"messages")) {
+        json_object *page=dsmcc_messages_read(&messages,-1);
+        g_print("%s\n",json_object_to_json_string(page));
+        json_object_put(page);
+        dsmcc_messages_clear(&messages);
+    }
     char *result; gsize received;
     g_assert_true(g_file_get_contents(argv[2],&result,&received,NULL));
     g_assert_cmpuint(received,==,size*rounds);
