@@ -501,3 +501,11 @@ $(BUILD_DIR)/knucker-receiver.tsv: $(KNUCKER_PRIVATE)/receiver.tsv | $(BUILD_DIR
 	cp $< $@
 endif
 $(BUILD_DIR)/linrad_dvb $(BUILD_DIR)/gui_smoke $(BUILD_DIR)/dab_gui_smoke: components/knucker/status.h
+
+ifneq ($(shell pkg-config --exists libusb-1.0 && echo yes),)
+GTK_CFLAGS += -DHAVE_MT_EXPRESS
+$(BUILD_DIR)/mt_express_rx: components/mt_express/receiver.c components/mt_express/control.c components/mt_express/monitor.c components/mt_express/control.h components/mt_express/monitor.h src/decoder_monitor.h | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -D_POSIX_C_SOURCE=200809L $(filter %.c,$^) -o $@ $(LDFLAGS) -pthread $(shell pkg-config --cflags --libs libusb-1.0) -lm
+
+$(BUILD_DIR)/linrad_dvb: $(BUILD_DIR)/mt_express_rx
+endif

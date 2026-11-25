@@ -160,7 +160,7 @@
           "Diagnostics"
         ],
         "summary": "Read constellation points",
-        "description": "Read the latest I/Q points for the primary DVB-T channel. Check supported and fresh before using the points.",
+        "description": "Read the latest I/Q points for the primary DVB-T channel or MT Express satellite input. Check supported and fresh before using the points.",
         "responses": {
           "200": {
             "description": "Constellation measurement.",

@@ -25,7 +25,7 @@ static gboolean draw_constellation(GtkWidget *widget, cairo_t *cr, gpointer data
     double scale=size/(4*.70710678);
     cairo_set_source_rgb(cr,.65,.65,.65);
     unsigned order=v->active && v->status.constellation_order==8 ? 8 : 4;
-    for (unsigned i=0;i<order;++i) {
+    for (unsigned i=0;i<order && v->status.constellation_order<=8;++i) {
         double angle=2*G_PI*i/order+(order==4 ? G_PI/4 : 0);
         double x=floor(left+size/2+cos(angle)*scale)+.5;
         double y=floor(top+size/2-sin(angle)*scale)+.5;
@@ -208,6 +208,17 @@ static void receive_frames(DecoderView *v) {
         if (n<0) break;
         if (n<8 || frame.status.magic!=DECODER_MONITOR_MAGIC || !v->active) continue;
         if (frame.status.type==DECODER_STATUS && n==sizeof(DecoderStatus)) {
+            if (v->hardware_ts && frame.status.satellite) {
+                /* The USB relay owns TS counters and service lock. The RF
+                 * monitor cannot observe either at its demodulator registers. */
+                unsigned mask=DECODER_TS|DECODER_SERVICE;
+                frame.status.locks=(frame.status.locks & ~mask)|(v->status.locks & mask);
+                frame.status.lock_valid=(frame.status.lock_valid & ~mask)|(v->status.lock_valid & mask);
+                frame.status.packets=v->status.packets;
+                frame.status.written_packets=v->status.written_packets;
+                g_strlcpy(frame.status.service,v->status.service,sizeof(frame.status.service));
+                g_strlcpy(frame.status.provider,v->status.provider,sizeof(frame.status.provider));
+            }
             v->status=frame.status;
             v->status.service[sizeof(v->status.service)-1]=0;
             v->status.provider[sizeof(v->status.provider)-1]=0;
@@ -301,7 +312,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_ok),"caption")),dab ? "FIGs" : (s2 || t2) ? "BCH OK" : "RS OK");
     gtk_label_set_text(GTK_LABEL(g_object_get_data(G_OBJECT(v->rs_errors),"caption")),dab ? "FIB errors" : (s2 || t2) ? "BCH errors" : "RS errors");
     gtk_widget_set_tooltip_text(v->buffer,dab ? "Progress of the current 8-second FIC/TII capture" : t2 ? "Live IQ queue fill level (loss counters above)" : satellite ? "Not reported by this decoder" : "OFDM → FEC queue fill level");
-    if (satellite || t2) {
+    if ((satellite || t2) && !v->hardware_ts) {
         s->lock_valid |= DECODER_SERVICE;
         if (v->service_valid) s->locks |= DECODER_SERVICE; else s->locks &= ~DECODER_SERVICE;
         g_strlcpy(s->service,v->selected_service,sizeof(s->service));
@@ -339,7 +350,7 @@ void decoder_view_tick(DecoderView *v, gboolean active, const char *mode) {
         if (v->hardware_ts) {
             set_value(v->rs_ok,""); set_value(v->rs_errors,""); set_value(v->cc_errors,"");
         }
-        if (satellite) {
+        if (satellite && !v->hardware_ts) {
             measurement(v->rs_ok,"%.0f",s->fec_good); measurement(v->rs_errors,"%.0f",s->fec_bad);
             set_value(v->cc_errors,""); set_value(v->written,"");
         }

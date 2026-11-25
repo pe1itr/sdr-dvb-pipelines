@@ -392,6 +392,17 @@ Airspy HF+ Dual Port (VHF), and Pluto / PlutoSky RX1 via native libiio. Availabl
 frequency range and sample rate; some integrations still need live hardware
 validation. See [receiver setup and test status](docs/receivers.md).
 
+On Linux with libusb-1.0, select **Input → MT Express (Serit FTS-4334)** to
+tune the receiver directly. Set the frequency in kHz (144000–2450000),
+antenna input, DVB-S or DVB-S2, symbol rate and modulation/FEC. Stop reception
+to change tuning, then start again. An AFC search width of zero selects the
+automatic range. Advanced carrier loop and lock threshold controls use raw
+register codes, with −1 restoring the measured defaults. LNB power stays off.
+The independent USB worker supplies the transport stream to the player and
+service selector and sends measured constellation points to the decoder view.
+MER is estimated from the errors of 256 received symbols. D margin subtracts
+the reference threshold for the detected modulation, FEC and frame length.
+
 On Raspberry Pi (ARM Linux), the **BATC Knucker** demodulates DVB-T in hardware
 and supplies an MPEG transport stream. Obtain `CombiTunerExpress` separately
 from BATC's Ryde repository. It requires a 32-bit ARM (armhf) runtime, including

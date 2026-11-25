@@ -32,6 +32,7 @@
 
 #include "iq_view.h"
 #include "decoder_view.h"
+#include "decoder_margin.h"
 #include "video_view.h"
 #include "dvbt_backend.h"
 #include "dvbt_bonding.h"
@@ -58,7 +59,13 @@
 #include "../components/dab/channels.h"
 
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
-       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13, SOURCE_KNUCKER = 14 };
+       SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13,
+#ifdef HAVE_KNUCKER
+       SOURCE_KNUCKER, SOURCE_MT_EXPRESS
+#else
+       SOURCE_MT_EXPRESS, SOURCE_KNUCKER = -2
+#endif
+};
 
 typedef struct { GtkWidget *locator, *azimuth, *elevation, *distance, *doppler; } MoonStationRow;
 typedef struct { GPtrArray *args; GPid pid, group; } Stage;
@@ -77,6 +84,8 @@ typedef struct {
     gboolean batc_receiver;
     char knucker_fft[12], knucker_constellation[12];
     GtkWidget *knucker_program;
+    GtkWidget *mt_mode, *mt_rate, *mt_code, *mt_input, *mt_search, *mt_loop[4];
+    gboolean mt_loading;
     SdrRxStatus sdr_status;
     gint64 sdr_status_time;
     double rtlsdr_readback_hz;
@@ -89,7 +98,7 @@ typedef struct {
     GtkWidget *config_dialog, *hardware, *hardware_stack, *renderer_panel, *renderer_box;
     GtkWidget *hardware_entries[SOURCE_FILE][3], *ip_box, *port_box, *header_box, *center_box;
     GtkWidget *hackrf_amp_box;
-    struct { int standard, sr, fec, gi, constellation; gboolean valid; } before_knucker;
+    struct { int standard, sr, fec, gi, constellation; gboolean valid; } before_hardware_ts;
     GtkWidget *knucker_bw, *knucker_band, *knucker_bw_row, *sr_label, *dashboard, *lower;
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
@@ -169,9 +178,31 @@ static gboolean knucker_source(const App *a) {
     return FALSE;
 #endif
 }
+static gboolean hardware_ts_source(const App *a) {
+    return knucker_source(a) || a->source == SOURCE_MT_EXPRESS;
+}
+static const char *mt_s1_codes[]={"Auto","QPSK 1/2","QPSK 2/3","QPSK 3/4","QPSK 5/6","QPSK 6/7","QPSK 7/8"};
+static const char *mt_s2_codes[]={"Auto","QPSK 1/4","QPSK 1/3","QPSK 2/5","QPSK 1/2","QPSK 3/5","QPSK 2/3",
+    "QPSK 3/4","QPSK 4/5","QPSK 5/6","QPSK 8/9","QPSK 9/10","8PSK 3/5","8PSK 2/3","8PSK 3/4","8PSK 5/6",
+    "8PSK 8/9","8PSK 9/10","16APSK 2/3","16APSK 3/4","16APSK 4/5","16APSK 5/6","16APSK 8/9","16APSK 9/10",
+    "32APSK 3/4","32APSK 4/5","32APSK 5/6","32APSK 8/9","32APSK 9/10"};
+static int mt_setting(App *a,const char *key) {
+    return g_key_file_get_integer(a->config,"mt_express",key,NULL);
+}
+static const char *mt_loop_keys[]={"carrier_alpha","carrier_beta","lock_acquire","lock_release"};
+static int mt_code_index(App *a) {
+    int n=mt_setting(a,a->standard ? "s2_modcod" : "s1_rate");
+    return n>=0 && n<(a->standard ? (int)G_N_ELEMENTS(mt_s2_codes) : (int)G_N_ELEMENTS(mt_s1_codes)) ? n : 0;
+}
+static void mt_load_mode(App *a) {
+    a->standard=mt_setting(a,"standard")==1 ? 0 : 1;
+    a->sr=mt_setting(a,"symbol_rate");
+    a->fec=a->constellation=0;
+    a->gi=3;
+}
 static gboolean valid_fec(App *a, int fec) {
     if (fec < 0 || fec >= (int)G_N_ELEMENTS(fecs)) return FALSE;
-    if (a->standard >= 3 || knucker_source(a)) return fec == 0; /* automatic L1 signalling */
+    if (a->standard >= 3 || hardware_ts_source(a)) return fec == 0; /* automatic L1 signalling */
     if (a->standard == 1) return modcods[a->constellation][fec] != 0;
     if (a->standard == 2) return fec < 3 || !strcmp(fecs[fec], "5/6") || !strcmp(fecs[fec], "7/8");
     return fec < 3;
@@ -181,10 +212,16 @@ static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "
 #ifdef HAVE_KNUCKER
     , "knucker"
 #endif
+#ifdef HAVE_MT_EXPRESS
+    , "mt_express"
+#endif
 };
 static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"
 #ifdef HAVE_KNUCKER
     , "BATC Knucker"
+#endif
+#ifdef HAVE_MT_EXPRESS
+    , "MT Express (Serit FTS-4334)"
 #endif
 };
 static const char *file_formats[] = {"s16", "u8", "cf32"};
@@ -361,7 +398,7 @@ static int knucker_band_index(int hz) {
 }
 
 static gboolean moon_enabled(App *a) {
-    return a->config && a->standard<4 && !knucker_source(a) &&
+    return a->config && a->standard<4 && !hardware_ts_source(a) &&
         g_key_file_get_boolean(a->config,"moon","enabled",NULL);
 }
 
@@ -398,6 +435,18 @@ static const char *moon_problem(App *a) {
 }
 
 static const char *receiver_offset_problem(App *a) {
+    if (a->source==SOURCE_MT_EXPRESS) {
+        double hz=g_key_file_get_double(a->config,"mt_express","frequency",NULL);
+        if (!isfinite(hz) || hz<144e6 || hz>2450e6 || fmod(hz,1000)!=0)
+            return "MT Express frequency must be 144–2450 MHz in whole kHz.";
+        if (a->standard>1 || a->sr<70000 || a->sr>10000000)
+            return "MT Express requires DVB-S/S2 and 70–10000 ksym/s.";
+        int code=mt_code_index(a);
+        if (code<0 || code>(a->standard ? 28 : 6) || mt_setting(a,"input_b")<0 || mt_setting(a,"input_b")>1 ||
+            mt_setting(a,"search_khz")<0 || mt_setting(a,"search_khz")>30000)
+            return "Invalid MT Express input, acquisition range or modulation/code rate.";
+        return NULL;
+    }
     if (moon_enabled(a)) {
         const char *issue=moon_problem(a);
         if (issue) return issue;
@@ -514,7 +563,8 @@ static gboolean s2_narrowband(App *a) { return a->sr <= 333000; }
 
 static void add(Stage *s, const char *arg) { g_ptr_array_add(s->args, g_strdup(arg)); }
 static void add_number(Stage *s, const char *flag, int value) {
-    add(s, flag); g_ptr_array_add(s->args, g_strdup_printf("%d", value));
+    if (flag) add(s, flag);
+    g_ptr_array_add(s->args, g_strdup_printf("%d", value));
 }
 
 static Stage *new_stage(App *a, const char *key) {
@@ -758,7 +808,15 @@ static void build_pipeline(App *a) {
     clear_stages(a);
     a->batc_receiver=FALSE;
     Stage *s;
-    if (knucker_source(a)) {
+    if (a->source==SOURCE_MT_EXPRESS) {
+        s = new_stage(a,"mt_express");
+        int code=mt_code_index(a);
+        add_number(s,NULL,g_key_file_get_double(a->config,"mt_express","frequency",NULL)/1000);
+        add_number(s,NULL,a->sr); add_number(s,NULL,a->standard+1);
+        add_number(s,NULL,a->standard || !code ? code : 1<<(code-1));
+        add_number(s,NULL,mt_setting(a,"input_b")); add_number(s,NULL,mt_setting(a,"search_khz"));
+        for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i) add_number(s,NULL,mt_setting(a,mt_loop_keys[i]));
+    } else if (knucker_source(a)) {
         s = new_stage(a,"knucker");
         a->batc_receiver=TRUE;
 #ifdef HAVE_LOCAL_KNUCKER
@@ -1061,7 +1119,7 @@ static void scatter_refresh(App *a) {
     if (a->gi_box) gtk_widget_set_visible(a->gi_box,a->standard==2);
     if (a->gi_label) gtk_widget_set_visible(a->gi_label,a->standard==2);
     if (a->t2_controls) gtk_widget_set_visible(a->t2_controls,a->standard==3);
-    if (a->s2_controls) gtk_widget_set_visible(a->s2_controls,a->standard==1);
+    if (a->s2_controls) gtk_widget_set_visible(a->s2_controls,a->standard==1 && !hardware_ts_source(a));
     if (a->local_pilot_box) gtk_widget_set_visible(a->local_pilot_box,a->standard==2 && !knucker_source(a));
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
@@ -1167,7 +1225,7 @@ static void finish_if_stopped(App *a) {
         gtk_widget_set_sensitive(a->controls, TRUE);
         gtk_widget_set_sensitive(a->hardware, TRUE);
         gtk_widget_set_sensitive(a->renderer_panel, TRUE);
-        gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || knucker_source(a)));
+        gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || hardware_ts_source(a)));
     }
     if (a->pending_preset && !a->closing) {
         int index=a->pending_preset; a->pending_preset=0; preset_apply(a,index);
@@ -1354,12 +1412,12 @@ static void start_pipeline(App *a) {
         g_free(path); g_free(resolved);
     }
     a->tune_fd = -1;
-    if (a->window && !knucker_source(a)) {
+    if (a->window && !hardware_ts_source(a)) {
         if (!g_unix_open_pipe(tune_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(tune_pipe[1], TRUE, NULL)) goto pipe_error;
     }
     for (; made < (a->standard == 4 || a->renderer == RENDER_FILE ? 1 : 2); ++made)
-        if (!(knucker_source(a) && made==0) && !g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
+        if (!(hardware_ts_source(a) && made==0) && !g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
     if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (nullfd < 0) goto pipe_error;
@@ -1443,7 +1501,7 @@ static void start_pipeline(App *a) {
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
         int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
         if (i == 1) out = a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
-        if (knucker_source(a)) {
+        if (hardware_ts_source(a)) {
             in = i == 0 ? nullfd : pipes[1][0];
             out = i == 0 ? scatter_pipe[1] : nullfd;
             if (i==0 && a->batc_receiver) {
@@ -1458,13 +1516,13 @@ static void start_pipeline(App *a) {
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
         env = g_environ_unsetenv(env, "LINRAD_BOND_CONTROL");
         if (i==1 && a->bond_control) env=g_environ_setenv(env,"LINRAD_BOND_CONTROL",a->bond_control,TRUE);
-        if (!knucker_source(a) && i == 0 && a->usb_receiver)
+        if (!hardware_ts_source(a) && i == 0 && a->usb_receiver)
             env = g_environ_setenv(env,"LINRAD_USB_TAP",usb_receiver_tap_path(a->usb_receiver),TRUE);
-        if (!knucker_source(a) && i == 1 && a->decoder_view.port) {
+        if (!knucker_source(a) && i == (a->source==SOURCE_MT_EXPRESS ? 0 : 1) && a->decoder_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->decoder_view.port);
             env = g_environ_setenv(env, "LINRAD_DECODER_MONITOR_PORT", port, TRUE);
         }
-        if (!knucker_source(a) && i == 0 && a->window && a->iq_view.port) {
+        if (!hardware_ts_source(a) && i == 0 && a->window && a->iq_view.port) {
             char port[16]; g_snprintf(port, sizeof(port), "%d", a->iq_view.port);
             env = g_environ_setenv(env, "LINRAD_IQ_MONITOR_PORT", port, TRUE);
         }
@@ -1494,7 +1552,7 @@ static void start_pipeline(App *a) {
         char *message=g_date_time_format(target,"Waiting to play IQ file at %H:%M:%S");
         status(a,message);
         g_free(message); g_date_time_unref(target);
-    } else if (!a->stopping) status(a, knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
+    } else if (!a->stopping) status(a, a->source==SOURCE_MT_EXPRESS ? "MT Express · acquiring satellite signal" : knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
     if (dab_pipe[0]>=0) close(dab_pipe[0]);
@@ -1513,9 +1571,11 @@ pipe_error:
 
 static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
-    char *text = g_strdup_printf("%s · %s %d%s · FEC %s",
+    char *text = a->source==SOURCE_MT_EXPRESS ? g_strdup_printf("%s · %d sym/s · %s",standards[a->standard],a->sr,
+        (a->standard ? mt_s2_codes : mt_s1_codes)[mt_code_index(a)]) :
+        g_strdup_printf("%s · %s %d%s · FEC %s",
         standards[a->standard], a->standard >= 2 ? "BW" : "Symb/s", a->sr,
-        a->standard >= 2 ? " Hz" : "", (a->standard >= 3 || knucker_source(a)) ? "auto" : fecs[a->fec]);
+        a->standard >= 2 ? " Hz" : "", (a->standard >= 3 || hardware_ts_source(a)) ? "auto" : fecs[a->fec]);
     gtk_label_set_text(GTK_LABEL(a->mode_summary), text); g_free(text);
     scatter_refresh(a);
 }
@@ -1550,7 +1610,7 @@ static void tuning_refresh(App *a) {
     } else gtk_label_set_text(GTK_LABEL(a->gain_display),"Gain —");
     gtk_widget_set_sensitive(a->converter_ranges_button,hardware_source(a));
     gtk_widget_set_sensitive(a->offset_box, a->standard!=4 && hardware_source(a) && !converter_ranges_active(a));
-    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0 && !knucker_source(a));
+    gtk_widget_set_sensitive(a->receiver_offset_box, a->standard!=4 && a->source!=0 && !hardware_ts_source(a));
     gtk_widget_set_sensitive(a->step_box, (a->standard!=4 || dab_free_tuning(a)) && hardware_source(a));
     double rx_offset=receiver_offset(a);
     a->iq_view.receiver_offset=rx_offset;
@@ -1577,6 +1637,13 @@ static void tuning_refresh(App *a) {
             hardware_source(a) && dab_free_tuning(a) ? "DAB: free frequency in Mode; ← / → tunes by the SDR tuning step." :
             hardware_source(a) ? "DAB: select a channel in Mode; ← / → selects the previous / next channel." :
             "DAB: set the IQ input to the selected channel and sample rate; channel labels do not retune Linrad or files.");
+        return;
+    }
+    if (a->source==SOURCE_MT_EXPRESS) {
+        char label[48];
+        g_snprintf(label,sizeof(label),"%.3f MHz",g_key_file_get_double(a->config,"mt_express","frequency",NULL)/1e6);
+        gtk_label_set_text(GTK_LABEL(a->frequency_display),label);
+        gtk_label_set_text(GTK_LABEL(a->frequency_calculation),"Set MT Express tuning in Input while stopped.");
         return;
     }
     if (knucker_source(a)) {
@@ -1806,7 +1873,7 @@ static void gain_step(App *a, int direction) {
 static void filter_changed(GtkWidget *widget, gpointer data);
 static void filter_refresh(App *a) {
     if (!a->filter_box) return;
-    if (knucker_source(a)) {
+    if (hardware_ts_source(a)) {
         gtk_widget_set_sensitive(a->filter_box,FALSE);
         return;
     }
@@ -1831,7 +1898,7 @@ static void filter_refresh(App *a) {
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
 }
 static void filter_apply(App *a, int width, gboolean enabled) {
-    if (knucker_source(a)) return;
+    if (hardware_ts_source(a)) return;
     if (a->stopping) { filter_refresh(a); return; }
     const char *section = sources[a->source];
     if (enabled && a->bond_active && width<140000) {
@@ -2168,7 +2235,7 @@ static void show_reception_log(GtkWidget *widget, gpointer data) {
     if (hardware_source(a)) hz+=g_key_file_get_double(a->config,source,"lo_offset",NULL);
     if (a->standard==4) hz=dab_frequency(a);
     g_ascii_formatd(frequency,sizeof(frequency),"%.0f",hz); g_snprintf(rate,sizeof(rate),"%d",a->sr);
-    const char *fec=(a->standard>=3 || knucker_source(a)) ? "auto" : fecs[a->fec];
+    const char *fec=(a->standard>=3 || hardware_ts_source(a)) ? "auto" : fecs[a->fec];
     if (a->decoder_view.status_time && g_get_monotonic_time()-a->decoder_view.status_time<2*G_USEC_PER_SEC &&
         (a->decoder_view.status.locks & (DECODER_FEC | DECODER_TS)) && a->decoder_view.status.fec[0])
         fec=a->decoder_view.status.fec;
@@ -2336,7 +2403,7 @@ static void usb_source_refresh(App *a) {
     double center=g_key_file_get_double(a->config,section,"frequency",NULL)
         +g_key_file_get_double(a->config,section,"lo_offset",NULL);
     double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
-    usb_receiver_source(a->usb_receiver,center,rate,!knucker_source(a) && a->running && !a->stopping);
+    usb_receiver_source(a->usb_receiver,center,rate,!hardware_ts_source(a) && a->running && !a->stopping);
 }
 static const char *const monitor_api_modes[]={
     [MONITOR_USB]="usb", [MONITOR_FM]="fm", [MONITOR_FM_DATA]="fm-data"
@@ -2508,7 +2575,7 @@ static gboolean tuning_key(GtkWidget *widget, GdkEventKey *event, gpointer data)
 }
 
 static void input_fields_visible(App *a) {
-    gboolean iq=!knucker_source(a);
+    gboolean iq=!hardware_ts_source(a);
     const int iq_rows[]={1,2,5,6,7};
     for (unsigned i=0;i<G_N_ELEMENTS(iq_rows);++i) {
         int row=iq_rows[i];
@@ -2526,43 +2593,86 @@ static void populate_rates(App *a);
 static void populate_fecs(App *a);
 static void standard_changed(GtkWidget *widget, gpointer data);
 
+static void mt_fields_refresh(App *a) {
+    if (!a->mt_mode) return;
+    a->mt_loading=TRUE;
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_mode),a->standard);
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_rate),a->sr);
+    for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_loop[i]),mt_setting(a,mt_loop_keys[i]));
+    gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_search),mt_setting(a,"search_khz"));
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_input),mt_setting(a,"input_b"));
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->mt_code));
+    unsigned count=a->standard ? G_N_ELEMENTS(mt_s2_codes) : G_N_ELEMENTS(mt_s1_codes);
+    for (unsigned i=0;i<count;++i)
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->mt_code),(a->standard ? mt_s2_codes : mt_s1_codes)[i]);
+    gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_code),mt_code_index(a));
+    a->mt_loading=FALSE;
+}
+static void mt_changed(GtkWidget *widget, gpointer data) {
+    App *a=data;
+    if (a->mt_loading || a->running || a->source!=SOURCE_MT_EXPRESS) return;
+    for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i) {
+        if (widget!=a->mt_loop[i]) continue;
+        g_key_file_set_integer(a->config,"mt_express",mt_loop_keys[i],gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget)));
+        refresh_preview(a);
+        return;
+    }
+    if (widget==a->mt_mode) {
+        a->standard=gtk_combo_box_get_active(GTK_COMBO_BOX(widget));
+        g_key_file_set_integer(a->config,"mt_express","standard",a->standard+1);
+        g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),a->standard);
+        g_signal_handlers_unblock_by_func(a->standard_box,standard_changed,a);
+        mt_fields_refresh(a);
+        populate_fecs(a);
+    } else if (widget==a->mt_rate) {
+        a->sr=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget));
+        g_key_file_set_integer(a->config,"mt_express","symbol_rate",a->sr);
+    } else if (widget==a->mt_search)
+        g_key_file_set_integer(a->config,"mt_express","search_khz",gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(widget)));
+    else
+        g_key_file_set_integer(a->config,"mt_express",widget==a->mt_input ? "input_b" :
+            a->standard ? "s2_modcod" : "s1_rate",gtk_combo_box_get_active(GTK_COMBO_BOX(widget)));
+    refresh_preview(a);
+}
 static void source_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     if (a->running) return;
-    int previous_source=a->source;
-    gboolean previous_knucker=knucker_source(a);
+    gboolean previous_ts=hardware_ts_source(a);
     a->source = gtk_combo_box_get_active(GTK_COMBO_BOX(a->source_box));
     gboolean knucker=knucker_source(a);
-    gtk_widget_set_sensitive(a->standard_box,!knucker);
-    if (knucker && widget==a->source_box) {
-        if (previous_source!=SOURCE_KNUCKER) {
-            a->before_knucker.standard=a->standard;
-            a->before_knucker.sr=a->sr;
-            a->before_knucker.fec=a->fec;
-            a->before_knucker.gi=a->gi;
-            a->before_knucker.constellation=a->constellation;
-            a->before_knucker.valid=TRUE;
+    gtk_widget_set_sensitive(a->standard_box,!hardware_ts_source(a));
+    if (hardware_ts_source(a) && widget==a->source_box) {
+        if (!previous_ts) {
+            a->before_hardware_ts.standard=a->standard;
+            a->before_hardware_ts.sr=a->sr;
+            a->before_hardware_ts.fec=a->fec;
+            a->before_hardware_ts.gi=a->gi;
+            a->before_hardware_ts.constellation=a->constellation;
+            a->before_hardware_ts.valid=TRUE;
         }
-        a->standard=2; a->constellation=0; a->fec=0; a->gi=3;
-        a->sr=g_key_file_get_integer(a->config,"knucker","bandwidth",NULL);
+        a->standard=knucker ? 2 : 1; a->constellation=0; a->fec=0; a->gi=3;
+        if (knucker) a->sr=g_key_file_get_integer(a->config,"knucker","bandwidth",NULL);
+        else { mt_load_mode(a); mt_fields_refresh(a); }
         g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
-        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),2);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),a->standard);
         g_signal_handlers_unblock_by_func(a->standard_box,standard_changed,a);
         populate_rates(a); populate_fecs(a);
-    } else if (previous_knucker && !knucker) {
-        if (a->before_knucker.valid) {
-            a->standard=a->before_knucker.standard;
-            a->sr=a->before_knucker.sr;
-            a->constellation=a->before_knucker.constellation;
-            a->fec=a->before_knucker.fec;
-            a->gi=a->before_knucker.gi;
+    } else if (previous_ts && !hardware_ts_source(a)) {
+        if (a->before_hardware_ts.valid) {
+            a->standard=a->before_hardware_ts.standard;
+            a->sr=a->before_hardware_ts.sr;
+            a->constellation=a->before_hardware_ts.constellation;
+            a->fec=a->before_hardware_ts.fec;
+            a->gi=a->before_hardware_ts.gi;
             g_signal_handlers_block_by_func(a->standard_box,standard_changed,a);
             gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),a->standard);
             g_signal_handlers_unblock_by_func(a->standard_box,standard_changed,a);
             g_signal_handlers_block_matched(a->gi_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
             gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),a->gi);
             g_signal_handlers_unblock_matched(a->gi_box,G_SIGNAL_MATCH_DATA,0,0,NULL,NULL,a);
-            a->before_knucker.valid=FALSE;
+            a->before_hardware_ts.valid=FALSE;
         }
         populate_rates(a); populate_fecs(a);
     }
@@ -2574,11 +2684,11 @@ static void source_changed(GtkWidget *widget, gpointer data) {
     gboolean ranges=a->standard!=4 && converter_ranges_active(a);
     gtk_label_set_text(GTK_LABEL(gtk_grid_get_child_at(GTK_GRID(a->hardware),0,4)),
         ranges ? "Receive RF (kHz)" : "SDR / IF (kHz)");
-    if (knucker) {
+    if (hardware_ts_source(a)) {
         if (widget == a->source_box) {
             g_signal_handlers_block_by_func(a->frequency_box,source_changed,a);
             gtk_spin_button_set_digits(GTK_SPIN_BUTTON(a->frequency_box),0);
-            gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),KNUCKER_MIN_KHZ,KNUCKER_MAX_KHZ);
+            gtk_spin_button_set_range(GTK_SPIN_BUTTON(a->frequency_box),knucker ? KNUCKER_MIN_KHZ : 144000,knucker ? KNUCKER_MAX_KHZ : 2450000);
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),
                 g_key_file_get_double(a->config,section,"frequency",NULL)/1000);
             g_signal_handlers_unblock_by_func(a->frequency_box,source_changed,a);
@@ -2635,8 +2745,8 @@ static void source_changed(GtkWidget *widget, gpointer data) {
         }
     }
     input_fields_visible(a);
-    gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || knucker_source(a)));
-    gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE && !knucker_source(a));
+    gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || hardware_ts_source(a)));
+    gtk_widget_set_sensitive(a->format_box, a->source!=SOURCE_FILE && !hardware_ts_source(a));
     if (a->hardware_stack) gtk_stack_set_visible_child_name(GTK_STACK(a->hardware_stack), section);
     if (a->file_path) file_controls_refresh(a);
     tuning_refresh(a);
@@ -2647,7 +2757,7 @@ static void source_changed(GtkWidget *widget, gpointer data) {
 
 static void selection_changed(GtkWidget *widget, gpointer data) {
     App *a = data; (void)widget;
-    if (a->running || knucker_source(a)) return;
+    if (a->running || hardware_ts_source(a)) return;
     char *sr = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(a->sr_box));
     if (!sr) return;
     a->sr = atoi(sr);
@@ -2692,8 +2802,13 @@ static void knucker_bandwidth_changed(GtkWidget *widget, gpointer data) {
 }
 
 static void populate_rates(App *a) {
-    gtk_widget_set_visible(a->sr_box,!knucker_source(a));
+    gtk_widget_set_visible(a->sr_box,!hardware_ts_source(a));
     if (a->knucker_bw_row) gtk_widget_set_visible(a->knucker_bw_row,knucker_source(a));
+    if (a->source==SOURCE_MT_EXPRESS) {
+        gtk_label_set_text(GTK_LABEL(a->sr_label),"MT Express settings in Input");
+        gtk_widget_set_sensitive(a->gi_box,FALSE);
+        return;
+    }
     if (knucker_source(a)) {
         gtk_label_set_text(GTK_LABEL(a->sr_label),"BW (kHz)");
         g_signal_handlers_block_by_func(a->knucker_bw,knucker_bandwidth_changed,a);
@@ -2754,14 +2869,14 @@ static void populate_fecs(App *a) {
     for (int i = 0; i < (int)G_N_ELEMENTS(fecs); ++i) {
         if (!valid_fec(a, i)) continue;
         char *id = g_strdup_printf("%d", i);
-        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, knucker_source(a) ? "auto" : a->standard == 4 ? "auto (FIC)" : a->standard == 3 ? "auto (L1)" : fecs[i]);
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(a->fec_box), id, hardware_ts_source(a) ? "auto" : a->standard == 4 ? "auto (FIC)" : a->standard == 3 ? "auto (L1)" : fecs[i]);
         if (i == a->fec) gtk_combo_box_set_active_id(GTK_COMBO_BOX(a->fec_box), id);
         g_free(id);
     }
-    gtk_widget_set_sensitive(a->fec_box, a->standard < 3 && !knucker_source(a));
+    gtk_widget_set_sensitive(a->fec_box, a->standard < 3 && !hardware_ts_source(a));
     g_signal_handlers_block_by_func(a->constellation_box, constellation_changed, a);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(a->constellation_box));
-    if (knucker_source(a)) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto");
+    if (hardware_ts_source(a)) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto");
     else if (a->standard == 3) gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),"auto (L1)");
     else for (unsigned i=0;i<G_N_ELEMENTS(constellations);++i)
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(a->constellation_box),constellations[i]);
@@ -2770,16 +2885,17 @@ static void populate_fecs(App *a) {
     if (a->t2_plp_box) gtk_widget_set_sensitive(a->t2_plp_box, a->standard == 3);
     if (a->t2_gpu_box) gtk_widget_set_sensitive(a->t2_gpu_box, a->standard == 3);
     if (a->bonding_box) gtk_widget_set_sensitive(a->bonding_box,a->standard==2);
-    gtk_widget_set_sensitive(a->constellation_box, a->standard == 1);
+    gtk_widget_set_sensitive(a->constellation_box, a->standard == 1 && !hardware_ts_source(a));
     if (a->ldpc_mode_box) {
+        gboolean software_s2=a->standard==1 && !hardware_ts_source(a);
         gboolean soft=gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_mode_box))==0;
-        gtk_widget_set_sensitive(a->ldpc_mode_box,a->standard==1);
-        gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && soft);
-        gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && soft);
+        gtk_widget_set_sensitive(a->ldpc_mode_box,software_s2);
+        gtk_widget_set_sensitive(a->ldpc_workers_box,software_s2 && soft);
+        gtk_widget_set_sensitive(a->ldpc_latency_box,software_s2 && soft);
 #ifndef _WIN32
-        gtk_widget_set_sensitive(a->s2_gpu_box,a->standard==1 && soft);
+        gtk_widget_set_sensitive(a->s2_gpu_box,software_s2 && soft);
 #endif
-        gtk_widget_set_sensitive(a->s2_acquisition_box,a->standard==1);
+        gtk_widget_set_sensitive(a->s2_acquisition_box,software_s2);
     }
     g_signal_handlers_unblock_by_func(a->fec_box, selection_changed, a);
 }
@@ -3134,10 +3250,10 @@ static gboolean decoder_tick(gpointer data) {
             ts_info_snapshot_clear(&snapshot);
         }
     }
-    a->decoder_view.hardware_ts=knucker_source(a);
+    a->decoder_view.hardware_ts=hardware_ts_source(a);
     if (a->decoder_view.hardware_ts) {
         DecoderStatus *status=&a->decoder_view.status;
-        if (a->batc_receiver && a->scatter_backend) {
+        if ((a->batc_receiver || a->source==SOURCE_MT_EXPRESS) && a->scatter_backend) {
             ScatterBackend *relay=a->scatter_backend;
             g_mutex_lock(&relay->mutex);
             guint64 packets=relay->received_bytes/188;
@@ -3183,7 +3299,7 @@ static gboolean monitor_tick(gpointer data) {
     if (a->replay_wait_until) replay_countdown_refresh(a);
     presets_refresh(a);
     const char *section = sources[a->source];
-    a->iq_view.active = !knucker_source(a) && a->running && !a->stopping;
+    a->iq_view.active = !hardware_ts_source(a) && a->running && !a->stopping;
     a->iq_view.bandwidth = g_key_file_get_double(a->config, section, "filter_bandwidth", NULL);
     a->iq_view.enabled = g_key_file_get_boolean(a->config, section, "filter_enabled", NULL);
     a->iq_view.receiver_offset = effective_offset(a);
@@ -3238,6 +3354,23 @@ static GtkWidget *spin(GtkWidget *grid, const char *label, int row, double low, 
 
 /* Keep older Linrad-only configuration files usable. */
 static void source_defaults(App *a) {
+#ifdef HAVE_MT_EXPRESS
+    const char *mt_keys[]={"standard","symbol_rate","input_b","s1_rate","s2_modcod","search_khz"};
+    for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i)
+        if (!g_key_file_has_key(a->config,"mt_express",mt_loop_keys[i],NULL))
+            g_key_file_set_integer(a->config,"mt_express",mt_loop_keys[i],-1);
+    const int mt_defaults[]={2,5000000,1,0,0,0};
+    for (unsigned i=0;i<G_N_ELEMENTS(mt_keys);++i)
+        if (!g_key_file_has_key(a->config,"mt_express",mt_keys[i],NULL))
+            g_key_file_set_integer(a->config,"mt_express",mt_keys[i],mt_defaults[i]);
+    if (!g_key_file_has_key(a->config,"mt_express","frequency",NULL))
+        g_key_file_set_double(a->config,"mt_express","frequency",1291e6);
+    char *executable=g_file_read_link("/proc/self/exe",NULL);
+    char *directory=executable ? g_path_get_dirname(executable) : g_strdup("build");
+    char *worker_path=g_build_filename(directory,"mt_express_rx",NULL);
+    g_key_file_set_string(a->config,"paths","mt_express",worker_path);
+    g_free(worker_path); g_free(directory); g_free(executable);
+#endif
 #ifdef HAVE_KNUCKER
     if (!g_key_file_has_key(a->config,"paths","knucker",NULL)) {
 #if defined(HAVE_LOCAL_KNUCKER) && !defined(__arm__) && !defined(__aarch64__)
@@ -3944,6 +4077,25 @@ static void create_config(App *a) {
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->port_box), integer_setting(a, "linrad", "port", 1, 65535));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->header_box), integer_setting(a, "linrad", "header_bytes", 0, 65534));
             gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->center_box), g_key_file_get_double(a->config, "linrad", "frequency", NULL)/1e6);
+        } else if (source==SOURCE_MT_EXPRESS) {
+            a->mt_mode=combo(grid,"Standard",0,standards,2,0);
+            a->mt_input=combo(grid,"Antenna input",1,(const char *[]){"A","B"},2,1);
+            a->mt_rate=spin(grid,"Symbol rate (sym/s)",2,70000,10000000,1000);
+            a->mt_code=combo(grid,"Modulation / FEC",3,NULL,0,-1);
+            a->mt_search=spin(grid,"AFC search ±kHz (0 = automatic)",4,0,30000,1);
+            gtk_grid_attach(GTK_GRID(grid),gtk_label_new("LNB power permanently off"),0,5,2,1);
+            GtkWidget *advanced=gtk_expander_new("Carrier recovery (−1 = default)");
+            GtkWidget *loops=gtk_grid_new();
+            gtk_grid_attach(GTK_GRID(grid),advanced,0,6,2,1);
+            gtk_container_add(GTK_CONTAINER(advanced),loops);
+            const char *labels[]={"Carrier loop alpha code","Carrier loop beta code","Lock acquire threshold","Lock release threshold"};
+            for (unsigned i=0;i<G_N_ELEMENTS(mt_loop_keys);++i) {
+                a->mt_loop[i]=spin(loops,labels[i],i,-1,i<2 ? 63 : 255,1);
+                g_signal_connect(a->mt_loop[i],"value-changed",G_CALLBACK(mt_changed),a);
+            }
+            GtkWidget *fields[]={a->mt_mode,a->mt_input,a->mt_rate,a->mt_code,a->mt_search};
+            for (unsigned i=0;i<G_N_ELEMENTS(fields);++i)
+                g_signal_connect(fields[i],GTK_IS_SPIN_BUTTON(fields[i]) ? "value-changed" : "changed",G_CALLBACK(mt_changed),a);
         } else if (source==SOURCE_KNUCKER) {
             a->knucker_program=entry_field(grid,"Path to CombiTunerExpress binary",0,a,"paths","knucker");
             gtk_entry_set_placeholder_text(GTK_ENTRY(a->knucker_program),"/home/pi/dvbt/CombiTunerExpress");
@@ -4378,7 +4530,7 @@ static void moon_station_refresh(MoonStationRow *row, const char *locator, const
 
 static void moon_view_refresh(App *a) {
     a->moon_view_tick=g_get_monotonic_time();
-    gboolean supported=a->standard<4 && !knucker_source(a);
+    gboolean supported=a->standard<4 && !hardware_ts_source(a);
     gtk_widget_set_sensitive(a->moon_enable,!a->running && supported);
     gtk_widget_set_sensitive(a->moon_dx,!a->running);
     char *rx=g_key_file_get_string(a->config,"logging","my_locator",NULL);
@@ -4699,10 +4851,11 @@ static void ldpc_settings_changed(GtkWidget *widget, gpointer data) {
     g_key_file_set_string(a->config,"leandvb","latency",s2_latency_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->ldpc_latency_box))]);
     g_key_file_set_string(a->config,"leandvb","acquisition",s2_acquisition_modes[gtk_combo_box_get_active(GTK_COMBO_BOX(a->s2_acquisition_box))]);
     g_key_file_set_boolean(a->config,"leandvb","gpu_ldpc",gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->s2_gpu_box)));
-    gtk_widget_set_sensitive(a->ldpc_workers_box,a->standard==1 && !mode);
-    gtk_widget_set_sensitive(a->ldpc_latency_box,a->standard==1 && !mode);
+    gboolean software_s2=a->standard==1 && !hardware_ts_source(a);
+    gtk_widget_set_sensitive(a->ldpc_workers_box,software_s2 && !mode);
+    gtk_widget_set_sensitive(a->ldpc_latency_box,software_s2 && !mode);
 #ifndef _WIN32
-    gtk_widget_set_sensitive(a->s2_gpu_box,a->standard==1 && !mode);
+    gtk_widget_set_sensitive(a->s2_gpu_box,software_s2 && !mode);
 #endif
     if (!a->running) refresh_preview(a);
 }
@@ -4820,7 +4973,7 @@ static void create_mode_renderer(App *a) {
     gtk_grid_attach(GTK_GRID(a->s2_controls),a->s2_gpu_box,0,5,2,1);
     gtk_widget_show_all(a->s2_controls);
     gtk_widget_set_no_show_all(a->s2_controls,TRUE);
-    gtk_widget_set_visible(a->s2_controls,a->standard==1);
+    gtk_widget_set_visible(a->s2_controls,a->standard==1 && !hardware_ts_source(a));
     g_free(ldpc_mode);
     a->t2_controls=gtk_grid_new();
     gtk_grid_set_row_spacing(GTK_GRID(a->t2_controls),8);
@@ -5317,7 +5470,7 @@ static void load_session(App *a) {
         char *value = setting(a, "session", keys[i]);
         *values[i] = choice(value, lists[i], counts[i], keys[i]); g_free(value);
     }
-    a->sr = g_key_file_has_key(a->config, "session", "sr", NULL) ?
+    a->sr = a->source==SOURCE_MT_EXPRESS ? mt_setting(a,"symbol_rate") : g_key_file_has_key(a->config, "session", "sr", NULL) ?
         integer_setting(a, "session", "sr", 1, 100000000) : (a->standard == 4 ? 1536000 : a->standard == 3 ? 8000000 : a->standard == 2 ? 150000 : 125000);
     if (a->standard >= 3) { a->fec=0; a->gi=3; a->constellation=0; }
     if (g_key_file_has_key(a->config, "session", "scatterfix", NULL)) {
@@ -5745,7 +5898,12 @@ static const char *network_control(gpointer data,const char *command,const char 
                 return control_failure(error,bad,"Expected a DAB channel such as 5A or a positive whole frequency in Hz");
             number=dab_channels[channel].hz;
         }
-        if (knucker_source(a)) {
+        if (a->source==SOURCE_MT_EXPRESS) {
+            if (a->running) return control_failure(error,conflict,"Stop MT Express before tuning");
+            if (number<144000000 || number>2450000000LL || number%1000)
+                return control_failure(error,bad,"MT Express requires 144–2450 MHz in whole kHz");
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->frequency_box),number/1000);
+        } else if (knucker_source(a)) {
             if (a->running) return control_failure(error,conflict,"Stop the Knucker before tuning");
             if (number<KNUCKER_MIN_KHZ*1000 || number>KNUCKER_MAX_KHZ*1000 || number%1000)
                 return control_failure(error,bad,knucker_frequency_range);
@@ -5756,6 +5914,7 @@ static const char *network_control(gpointer data,const char *command,const char 
             if (!tune_frequency(a,number,channel>=0)) return control_failure(error,conflict,a->status_message);
         }
     } else {
+        if (a->source==SOURCE_MT_EXPRESS) return control_failure(error,conflict,"Set MT Express acquisition parameters in Input");
         if (a->running) return control_failure(error,conflict,"Stop the receiver before changing decoder settings");
         if (g_str_has_prefix(command,"mode/")) {
             char *name=g_ascii_strup(value,-1);
@@ -5836,7 +5995,7 @@ static char *network_constellation(gpointer data) {
     DecoderView *v = &a->decoder_view;
     json_object *root = json_object_new_object();
     json_object *points = json_object_new_array();
-    gboolean supported=a->standard==2 && !knucker_source(a);
+    gboolean supported=a->source==SOURCE_MT_EXPRESS || (a->standard==2 && !knucker_source(a));
     gint64 stamp = supported ? v->points_time : 0;
     json_object_object_add(root,"standard",json_object_new_string(standards[a->standard]));
     json_object_object_add(root,"supported",json_object_new_boolean(supported));
@@ -5877,11 +6036,19 @@ static char *network_status(gpointer data) {
     STR(root,"state",a->stopping ? "stopping" : a->exit_code ? "error" : a->running ? "running" : "stopped");
     BOOL(root,"running",a->running);NUM(root,"exit_code",a->exit_code);
     STR(root,"message",a->status_message ? a->status_message : "Ready");
-    STR(root,"standard",standards[a->standard]);STR(root,"source",sources[a->source]);NUM(root,"rate",a->sr);
-    if (a->config && (a->standard==1 || a->standard==3))
+    STR(root,"standard",standards[a->standard]);
+    STR(root,"source",sources[a->source]);
+    NUM(root,"rate",a->sr);
+    if (a->config && !hardware_ts_source(a) && (a->standard==1 || a->standard==3))
         BOOL(root,"configured_gpu_ldpc",g_key_file_get_boolean(a->config,a->standard==1 ? "leandvb" : "dvbt2","gpu_ldpc",NULL));
-    if (a->standard==1) STR(root,"configured_constellation",constellations[a->constellation]);
-    STR(root,"configured_fec",a->standard>=3 || knucker_source(a) ? "auto" : fecs[a->fec]);
+    if (a->standard==1 && !hardware_ts_source(a)) STR(root,"configured_constellation",constellations[a->constellation]);
+    if (a->source==SOURCE_MT_EXPRESS) {
+        const char *code=(a->standard ? mt_s2_codes : mt_s1_codes)[mt_code_index(a)];
+        char **parts=g_strsplit(code," ",2);
+        STR(root,"configured_constellation",parts[1] ? parts[0] : a->standard ? "auto" : "QPSK");
+        STR(root,"configured_fec",parts[1] ? parts[1] : "auto");
+        g_strfreev(parts);
+    } else STR(root,"configured_fec",a->standard>=3 || hardware_ts_source(a) ? "auto" : fecs[a->fec]);
     BOOL(root,"control_enabled",a->presets && g_key_file_get_boolean(a->config,"status","control",NULL));
     NUM(root,"hdmi_monitor",a->video_view.hdmi_monitor);
     STR(root,"hdmi_state",video_view_hdmi_state(&a->video_view));
@@ -6024,11 +6191,12 @@ static char *network_status(gpointer data) {
             d=json_object_new_object();DecoderStatus *v=&a->decoder_view.status;
             NUM(d,"locks",v->locks);NUM(d,"lock_valid",v->lock_valid);
             NUM(d,"snr_db",v->snr_db);NUM(d,"mer_db",a->standard==2 ? NAN : v->mer_db);NUM(d,"cfo_hz",v->cfo_hz);
+            if (a->standard<2) NUM(d,"d_margin_db",a->running && !a->stopping && age<2000 && v->satellite==(unsigned)a->standard+1 ? decoder_margin_db(v) : NAN);
             if (a->standard==2) NUM(d,"pilot_lock",v->pilot_lock);
             NUM(d,"rms_dbfs",v->rms_dbfs);NUM(d,"peak_dbfs",v->peak_dbfs);
             NUM(d,"packets",v->packets);NUM(d,"written_packets",v->written_packets);
-            if (knucker_source(a)) {
-                if (!a->batc_receiver) json_object_object_add(d,"sync_discarded_bytes",status_counter(a->knucker_sync_bytes));
+            if (hardware_ts_source(a)) {
+                if (knucker_source(a) && !a->batc_receiver) json_object_object_add(d,"sync_discarded_bytes",status_counter(a->knucker_sync_bytes));
             } else {
                 NUM(d,"rs_ok",v->rs_ok);NUM(d,"rs_uncorrectable",v->rs_uncorrectable);NUM(d,"cc_errors",v->cc_errors);
                 NUM(d,"fec_good",v->fec_good);NUM(d,"fec_bad",v->fec_bad);
@@ -6107,6 +6275,9 @@ int main(int argc, char **argv) {
 #ifdef HAVE_KNUCKER
           ", knucker"
 #endif
+#ifdef HAVE_MT_EXPRESS
+          ", mt_express"
+#endif
           , "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
         {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
@@ -6178,6 +6349,27 @@ int main(int argc, char **argv) {
         g_free(srt_url);
     }
     if (source) a.source = choice(source, sources, G_N_ELEMENTS(sources), "input");
+    if (a.source==SOURCE_MT_EXPRESS) {
+        if (standard && strcmp(standard,"DVB-S") && strcmp(standard,"DVB-S2"))
+            fatal("MT Express supports DVB-S and DVB-S2");
+        mt_load_mode(&a);
+        if (standard) {
+            a.standard=!strcmp(standard,"DVB-S2");
+            g_key_file_set_integer(a.config,"mt_express","standard",a.standard+1);
+        }
+        if (sr!=-1) g_key_file_set_integer(a.config,"mt_express","symbol_rate",sr);
+        if (fec || constellation) {
+            int index=0;
+            if (!fec) fatal("Specify --fec with --constellation for MT Express");
+            if (strcmp(fec,"auto")) {
+                char *name=g_strdup_printf("%s %s",constellation ? constellation : "QPSK",fec);
+                index=choice(name,a.standard ? mt_s2_codes : mt_s1_codes,a.standard ? G_N_ELEMENTS(mt_s2_codes) : G_N_ELEMENTS(mt_s1_codes),"MT Express MODCOD");
+                g_free(name);
+            }
+            g_key_file_set_integer(a.config,"mt_express",a.standard ? "s2_modcod" : "s1_rate",index);
+            g_clear_pointer(&fec,g_free); g_clear_pointer(&constellation,g_free);
+        }
+    }
     if (knucker_source(&a)) {
         if (standard && strcmp(standard,"DVB-T")) fatal("Knucker supports DVB-T only");
         a.standard=2; a.constellation=0; a.fec=0; a.gi=3;
@@ -6218,7 +6410,7 @@ int main(int argc, char **argv) {
     gboolean valid = FALSE;
     for (int i = 0; i < (a.standard >= 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !knucker_source(&a) && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (!valid && !hardware_ts_source(&a) && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
     if (knucker_source(&a)) g_key_file_set_integer(a.config,"knucker","bandwidth",a.sr);
     if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;

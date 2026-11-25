@@ -771,6 +771,18 @@ static void exercise_decoder_view(App *a) {
     g_assert_cmpuint(v->status.constellation_order,==,8);
     g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(v->margin)),==,"+4.3");
     g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->margin)),"#36d866"));
+    v->hardware_ts=TRUE;
+    v->status.packets=5678;
+    v->status.written_packets=5670;
+    v->status.locks|=DECODER_TS;
+    status.packets=status.written_packets=0;
+    status.lock_valid=status.locks=DECODER_OFDM|DECODER_FEC;
+    sendto(sender,&status,sizeof(status),0,(struct sockaddr *)&dest,sizeof(dest));
+    decoder_view_tick(v,TRUE,"DVB-S2");
+    g_assert_cmpuint(v->status.packets,==,5678);
+    g_assert_cmpuint(v->status.written_packets,==,5670);
+    g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(v->lamps[2])),"#36d866"));
+    v->hardware_ts=FALSE;
     /* The reference follows received MODCOD/frame, not a selected GUI FEC. */
     v->status.short_frame=0; v->status.mer_db=8.9;
     decoder_view_tick(v,TRUE,"DVB-S2");
@@ -2023,6 +2035,22 @@ static gboolean exercise(gpointer data) {
     if (phase == 0) {
 #ifdef HAVE_LOCAL_KNUCKER
         exercise_knucker(a);
+#endif
+#ifdef HAVE_MT_EXPRESS
+        int previous_input=a->source, previous_standard=a->standard, previous_rate=a->sr;
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),SOURCE_MT_EXPRESS);
+        g_assert_true(gtk_widget_get_sensitive(a->frequency_box));
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_mode),0);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->mt_code),3);
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(a->mt_rate),125000);
+        g_assert_cmpstr(a->stages[0].args->pdata[2],==,"125000");
+        g_assert_cmpstr(a->stages[0].args->pdata[4],==,"4");
+        g_assert_false(gtk_widget_get_sensitive(a->standard_box));
+        g_assert_null(receiver_offset_problem(a));
+        g_assert_true(g_str_has_suffix(a->stages[0].args->pdata[0],"/mt_express_rx"));
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),previous_input);
+        g_assert_cmpint(a->standard,==,previous_standard);
+        g_assert_cmpint(a->sr,==,previous_rate);
 #endif
         exercise_t2_mode(a);
         exercise_s2_automatic(a);
