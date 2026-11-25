@@ -35,6 +35,7 @@ static void report(const TsInfoSnapshot *s) {
     for (unsigned i=0;i<40;i++) json_object_array_add(footer,json_object_new_int(s->footer_links[i]));
     json_object_object_add(out,"color_pages",colors);
     json_object_object_add(out,"footer_links",footer);
+    json_object_object_add(out,"incoming_page",json_object_new_int(s->incoming_page));
     json_object_object_add(out,"page_number",json_object_new_int(s->page_number));
     json_object_object_add(out,"width",json_object_new_int(s->width));
     json_object_object_add(out,"height",json_object_new_int(s->height));

@@ -22,8 +22,8 @@ struct TsInfoParser {
     vbi_decoder *teletext;
     double teletext_time;
     /* libzvbi owns the decoded pages. Remember which subpage arrived last. */
-    struct { int subno; gint64 received; guint16 links[4]; } latest[800];
-    struct { int pgno, subno; guint16 links[4]; } magazine[8];
+    struct { int subno; gint64 received; guint16 links[4]; gboolean display_row24; } latest[800];
+    struct { int pgno, subno; guint16 links[4]; gboolean display_row24; } magazine[8];
 };
 
 static guint16 u16(const guint8 *p) { return ((guint16)p[0]<<8)|p[1]; }
@@ -40,7 +40,6 @@ static void page_clear(TsInfoSnapshot *s) {
     g_clear_pointer(&s->page_flash_off,g_bytes_unref);
     g_clear_pointer(&s->page_reveal,g_bytes_unref);
     g_clear_pointer(&s->page_reveal_flash_off,g_bytes_unref);
-    g_clear_pointer(&s->fastext_row,g_bytes_unref);
     s->index_shortcuts=FALSE;
     memset(s->color_pages,0,sizeof(s->color_pages));
     memset(s->footer_links,0,sizeof(s->footer_links));
@@ -55,7 +54,6 @@ static void snapshot_copy(TsInfoSnapshot *out, const TsInfoSnapshot *in) {
     *out=*in;
     if (out->pmt_section) g_bytes_ref(out->pmt_section);
     if (out->page) g_bytes_ref(out->page);
-    if (out->fastext_row) g_bytes_ref(out->fastext_row);
     if (out->page_flash_off) g_bytes_ref(out->page_flash_off);
     if (out->page_reveal) g_bytes_ref(out->page_reveal);
     if (out->page_reveal_flash_off) g_bytes_ref(out->page_reveal_flash_off);
@@ -64,6 +62,7 @@ void ts_info_parser_snapshot(TsInfoParser *p, TsInfoSnapshot *out) { snapshot_co
 static void assembly_clear(Assembly *a) { a->used=a->expected=0; a->cc=-1; }
 static void teletext_clear(TsInfoParser *p) {
     if (p->teletext) vbi_decoder_delete(p->teletext);
+    p->state.incoming_page=0;
     memset(p->latest,0,sizeof(p->latest));
     memset(p->magazine,0,sizeof(p->magazine));
     p->teletext=NULL; p->teletext_time=0; assembly_clear(&p->pes);
@@ -428,7 +427,7 @@ static GBytes *teletext_frame(vbi_page *page, unsigned rows, gboolean reveal, gb
     enum { WIDTH=40*12, HEIGHT=25*10 };
     guint8 indexed[WIDTH*HEIGHT];
     unsigned height=rows*10;
-    guint32 *pixels=g_new0(guint32,WIDTH*height);
+    guint32 *pixels=g_new0(guint32,WIDTH*HEIGHT);
     vbi_draw_vt_page_region(page,VBI_PIXFMT_PAL8,indexed,WIDTH,0,0,40,rows,reveal,flash);
     for (unsigned y=0;y<height;y++) for (unsigned x=0;x<WIDTH;x++) {
         const vbi_char *cell=&page->text[(y/10)*page->columns+x/12];
@@ -441,22 +440,7 @@ static GBytes *teletext_frame(vbi_page *page, unsigned rows, gboolean reveal, gb
         if (!(color>>24)) continue;
         pixels[y*WIDTH+x]=((color&255)<<16)|(color&0xff00)|((color>>16)&255);
     }
-    return g_bytes_new_take(pixels,WIDTH*height*4);
-}
-static GBytes *fastext_row(const vbi_page *page,const guint16 numbers[4]) {
-    if (!(numbers[0] || numbers[1] || numbers[2] || numbers[3])) return NULL;
-    vbi_page row=*page;
-    const vbi_color inks[]={VBI_RED,VBI_GREEN,VBI_YELLOW,VBI_BLUE};
-    for (unsigned x=0;x<40;x++)
-        row.text[x]=(vbi_char){.unicode=' ',.opacity=VBI_OPAQUE,.foreground=inks[x/10],.background=VBI_BLACK};
-    for (unsigned i=0;i<4;i++) {
-        if (!numbers[i]) continue;
-        unsigned x=10*i+4;
-        row.text[x].unicode='0'+numbers[i]/100;
-        row.text[x+1].unicode='0'+numbers[i]/10%10;
-        row.text[x+2].unicode='0'+numbers[i]%10;
-    }
-    return teletext_frame(&row,1,FALSE,TRUE);
+    return g_bytes_new_take(pixels,WIDTH*HEIGHT*4);
 }
 static unsigned decimal_page(unsigned bcd) {
     unsigned tens=(bcd>>4)&15, ones=bcd&15;
@@ -466,7 +450,7 @@ static unsigned decimal_page(unsigned bcd) {
 
 /* X/27/0 carries the editorial destinations independently of the row 24
  * labels. libzvbi's formatted nav_link can omit links with no matching label. */
-static void track_editorial_links(TsInfoParser *p,const guint8 *line) {
+static void track_teletext_packet(TsInfoParser *p,const guint8 *line) {
     int address=vbi_unham16p(line);
     if (address<0) return;
     int magazine=address&7;
@@ -475,8 +459,14 @@ static void track_editorial_links(TsInfoParser *p,const guint8 *line) {
         memset(&p->magazine[magazine],0,sizeof(p->magazine[magazine]));
         if (page<0 || low<0 || high<0) return;
         p->magazine[magazine].pgno=(magazine ? magazine : 8)*256+page;
+        unsigned number=decimal_page(p->magazine[magazine].pgno);
+        if (number) p->state.incoming_page=number;
         p->magazine[magazine].subno=((high<<8)|low)&0x3f7f;
-    } else if ((address>>3)==27 && vbi_unham8(line[2])==0 && vbi_unham8(line[39])>=0) {
+    } else if ((address>>3)==27 && vbi_unham8(line[2])==0) {
+        int control=vbi_unham8(line[39]);
+        if (control<0) return;
+        /* EN 300 706 table 14, byte 43 bit 4. */
+        p->magazine[magazine].display_row24=(control&8)!=0;
         for (unsigned i=0;i<4;i++) {
             const guint8 *link=line+3+6*i;
             int page=vbi_unham16p(link), low=vbi_unham16p(link+2), high=vbi_unham16p(link+4);
@@ -550,11 +540,12 @@ static void show_cached_page(TsInfoParser *p) {
         const guint16 *editorial=p->latest[number-100].links;
         if (!(editorial[0] || editorial[1] || editorial[2] || editorial[3]))
             index_shortcuts(&p->state,&page);
-        p->state.fastext_row=fastext_row(&page,p->state.color_pages);
-        p->state.page=teletext_frame(&page,25,FALSE,TRUE);
-        p->state.page_flash_off=teletext_frame(&page,25,FALSE,FALSE);
-        p->state.page_reveal=teletext_frame(&page,25,TRUE,TRUE);
-        p->state.page_reveal_flash_off=teletext_frame(&page,25,TRUE,FALSE);
+        unsigned rows=p->latest[number-100].display_row24 ? 25 : 24;
+        if (rows==24) memset(p->state.footer_links,0,sizeof(p->state.footer_links));
+        p->state.page=teletext_frame(&page,rows,FALSE,TRUE);
+        p->state.page_flash_off=teletext_frame(&page,rows,FALSE,FALSE);
+        p->state.page_reveal=teletext_frame(&page,rows,TRUE,TRUE);
+        p->state.page_reveal_flash_off=teletext_frame(&page,rows,TRUE,FALSE);
         p->state.width=480; p->state.height=250;
         p->state.teletext_received=p->latest[number-100].received;
     }
@@ -567,7 +558,9 @@ static void teletext_event(vbi_event *event, void *data) {
     if (!number) return;
     int mag=(event->ev.ttx_page.pgno>>8)&7;
     guint16 *links=p->latest[number-100].links;
-    if (p->magazine[mag].pgno==event->ev.ttx_page.pgno && p->magazine[mag].subno==event->ev.ttx_page.subno)
+    gboolean matched=p->magazine[mag].pgno==event->ev.ttx_page.pgno && p->magazine[mag].subno==event->ev.ttx_page.subno;
+    p->latest[number-100].display_row24=matched && p->magazine[mag].display_row24;
+    if (matched)
         memcpy(links,p->magazine[mag].links,sizeof(p->magazine[mag].links));
     else memset(links,0,sizeof(p->magazine[mag].links));
     p->latest[number-100].subno=event->ev.ttx_page.subno;
@@ -613,7 +606,7 @@ static void pes_read(TsInfoParser *p) {
         guint8 address_bytes[42];
         memcpy(address_bytes,line.data,sizeof(address_bytes));
         vbi_decode(p->teletext,&line,1,p->teletext_time);
-        track_editorial_links(p,address_bytes);
+        track_teletext_packet(p,address_bytes);
     }
 }
 static void packet_read(TsInfoParser *p, const guint8 *b) {
@@ -775,6 +768,7 @@ void ts_info_backend_select(TsInfoBackend *b, guint16 service) {
         ++b->generation; b->selected=service; queue_clear(b); b->gap=TRUE;
         memset(b->snapshot.events,0,sizeof(b->snapshot.events));
         b->snapshot.eit_received=b->snapshot.teletext_received=0;
+        b->snapshot.incoming_page=0;
         page_clear(&b->snapshot);
         g_clear_pointer(&b->snapshot.pmt_section,g_bytes_unref);
         b->snapshot.pmt_seen=b->snapshot.teletext_announced=FALSE; b->snapshot.selected=service;

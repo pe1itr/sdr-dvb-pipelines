@@ -79,7 +79,7 @@ class Stream:
         body = struct.pack('>HHBB', 42, 1, 1, 0x4e) + (b'' if empty else event)
         return self.table(0x12, section(0x4f if other else 0x4e, service, body, version, number, 1))
 
-    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200, rows=None, national=0, flags=0, unit_id=2, field=1, fastext=False):
+    def teletext(self, page=0x100, message='CLASSIC TELETEXT', pid=0x200, rows=None, national=0, flags=0, unit_id=2, field=1, fastext=False, display_row24=True):
         # Hamming(8,4), odd parity, and DVB transmission bit order.
         ham = [0x15, 0x02, 0x49, 0x5e, 0x64, 0x73, 0x38, 0x2f,
                0xd0, 0xc7, 0x8c, 0x9b, 0xa1, 0xb6, 0xfd, 0xea]
@@ -109,7 +109,7 @@ class Stream:
             fields = [0]
             for target in (0x23, 0x45, 0x67, 0x89, 0xff, 0xff):
                 fields.extend([target & 15, target >> 4, 15, 7, 15, 3])
-            lines.append(address(27) + bytes(ham[n] for n in fields+[8]) + bytes(2))
+            lines.append(address(27) + bytes(ham[n] for n in fields+[15 if display_row24 else 7]) + bytes(2))
         lines.append(header(page+1))  # terminates previous page
         lines += [header(page+1)] * ((-len(lines)) % 3)
         output = b''
@@ -222,7 +222,7 @@ class InformationTests(unittest.TestCase):
         self.assertEqual(self.cell(on,3,3),black)
 
     def test_double_dimensions_and_broadcast_bottom_row(self):
-        on, *_=self.frames({1:b' A', 3:b'\x0dA', 6:b'\x0eA', 9:b'\x0fA', 24:b'BOTTOM ROW'})
+        on, *_=self.frames({1:b' A', 3:b'\x0dA', 6:b'\x0eA', 9:b'\x0fA', 24:b'BOTTOM ROW'},fastext=True)
         normal=self.cell(on,1,1)
         pixels=[normal[y*36:(y+1)*36] for y in range(10)]
         self.assertEqual(self.cell(on,3,1,height=2),b''.join(row*2 for row in pixels))
@@ -454,6 +454,16 @@ class InformationTests(unittest.TestCase):
         result=self.run_streams(initial,'--page=99','--page=-1')
         self.assertEqual([s['page_number'] for s in result],[100,100,100])
 
+    def test_incoming_page_while_waiting(self):
+        t=Stream()
+        # Each fixture closes its page with the header for the following page.
+        states=self.run_streams(t.pat()+t.pmt(),'--page=345',t.teletext(0x211),
+            t.teletext(0x164),t.teletext(0x345), '--page=211', '--gap')
+        self.assertEqual([s['incoming_page'] for s in states],[0,0,212,165,346,346,0])
+        self.assertFalse(any(s['teletext_received'] for s in states[:4]))
+        self.assertTrue(states[4]['teletext_received'])
+        self.assertTrue(states[5]['teletext_received'])
+
     def test_fastext_footer_and_cache(self):
         t=Stream()
         rows={24:b'\x01News  \x02Sport  \x03Weather  \x06More'}
@@ -463,6 +473,12 @@ class InformationTests(unittest.TestCase):
             self.assertEqual(snapshot['color_pages'],[123,145,167,189])
             self.assertEqual(set(snapshot['footer_links']),{0,123,145,167,189})
         self.assertEqual(missing['color_pages'],[0]*4)
+
+    def test_row24_display_flag(self):
+        rows={24:b'123'}
+        for fastext, enabled in ((True, True), (True, False), (False, False)):
+            for frame in self.frames(rows, fastext=fastext, display_row24=enabled):
+                self.assertEqual(any(self.cell(frame,24,0,40)),enabled)
 
     def test_fastext_links_without_visible_footer(self):
         t=Stream()

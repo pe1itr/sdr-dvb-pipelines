@@ -38,20 +38,15 @@ static char *event_text(const TsInfoSnapshot *s) {
     return g_string_free(text,FALSE);
 }
 typedef struct { double x,y,w,h; } PageRect;
-static PageRect page_rect(GtkWidget *area) {
+static PageRect page_rect(TsInfoView *v, GtkWidget *area) {
     double width=gtk_widget_get_allocated_width(area), height=gtk_widget_get_allocated_height(area);
-    double w=MIN(width,height*4.0/3.0), h=w*3.0/4.0;
+    /* Leave an overscan margin on the TV output. */
+    double scale=area==v->hdmi_page ? 0.90 : 1.0;
+    double w=scale*MIN(width,height*4.0/3.0), h=w*3.0/4.0;
     return (PageRect){(width-w)/2,(height-h)/2,w,h};
 }
-/* Keep the full 4:3 raster and its separate Fastext strip inside TV overscan. */
-static PageRect hdmi_page_rect(GtkWidget *area,double *strip) {
-    double width=gtk_widget_get_allocated_width(area),height=gtk_widget_get_allocated_height(area);
-    *strip=MIN(height*.055,width*.08);
-    double w=MIN(width*.90,(height*.90-*strip)*4/3),h=w*3/4;
-    return (PageRect){(width-w)/2,(height-h-*strip)/2,w,h};
-}
-static unsigned page_link_at(TsInfoView *v, double x, double y) {
-    PageRect r=page_rect(v->page);
+static unsigned page_link_at(TsInfoView *v, GtkWidget *area, double x, double y) {
+    PageRect r=page_rect(v,area);
     if (!v->snapshot.page || x<r.x || y<r.y+r.h*24/25 || x>=r.x+r.w || y>=r.y+r.h) return 0;
     return v->snapshot.footer_links[(int)((x-r.x)*40/r.w)];
 }
@@ -63,21 +58,14 @@ static void color_clicked(GtkButton *button, gpointer data) {
 }
 static gboolean click_page(GtkWidget *area, GdkEventButton *event, gpointer data) {
     TsInfoView *v=data;
-    unsigned number=0;
-    if (area==v->hdmi_page) {
-        double strip;
-        PageRect r=hdmi_page_rect(area,&strip);
-        if (event->x>=r.x && event->x<r.x+r.w && event->y>=r.y+r.h && event->y<r.y+r.h+strip)
-            number=v->snapshot.color_pages[(int)((event->x-r.x)*4/r.w)];
-    } else number=page_link_at(v,event->x,event->y);
+    unsigned number=page_link_at(v,area,event->x,event->y);
     if (event->button!=1 || !number) return FALSE;
     gtk_spin_button_set_value(GTK_SPIN_BUTTON(v->page_number),number);
     return TRUE;
 }
 static gboolean page_tooltip(GtkWidget *area, gint x, gint y, gboolean keyboard,
                              GtkTooltip *tooltip, gpointer data) {
-    (void)area;
-    unsigned number=keyboard ? 0 : page_link_at(data,x,y);
+    unsigned number=keyboard ? 0 : page_link_at(data,area,x,y);
     if (!number) return FALSE;
     char text[32];
     g_snprintf(text,sizeof(text),"Open pagina %u",number);
@@ -98,10 +86,26 @@ static void draw_raster(cairo_t *cr,GBytes *frame,int width,int height,PageRect 
 }
 static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     TsInfoView *v=data; TsInfoSnapshot *s=&v->snapshot;
-    double strip=0;
-    PageRect r=area==v->hdmi_page ? hdmi_page_rect(area,&strip) : page_rect(area);
+    PageRect r=page_rect(v,area);
     cairo_set_source_rgb(cr,0,0,0); cairo_paint(cr);
     if (!s->page || s->width<=0 || s->height<=0) {
+        if (s->incoming_page) {
+            char digits[4];
+            g_snprintf(digits,sizeof(digits),"%03u",s->incoming_page);
+            cairo_save(cr);
+            cairo_translate(cr,r.x,r.y);
+            if (r.w>0 && r.h>0) {
+                cairo_scale(cr,r.w/480,r.h/250);
+                cairo_select_font_face(cr,"monospace",CAIRO_FONT_SLANT_NORMAL,CAIRO_FONT_WEIGHT_BOLD);
+                cairo_set_font_size(cr,10);
+                cairo_text_extents_t extents;
+                cairo_text_extents(cr,digits,&extents);
+                cairo_move_to(cr,478-extents.x_advance,9);
+                cairo_set_source_rgb(cr,1,1,1);
+                cairo_show_text(cr,digits);
+            }
+            cairo_restore(cr);
+        }
         if (area==v->hdmi_page) {
             char message[64];
             g_snprintf(message,sizeof(message),"Waiting for Teletext page %u",s->page_number ? s->page_number : 100);
@@ -127,11 +131,6 @@ static gboolean draw_page(GtkWidget *area, cairo_t *cr, gpointer data) {
     /* Keep a TV-shaped page even if a layout allocates a different aspect.
      * UI controls never consume rows or alter character proportions. */
     draw_raster(cr,frame,s->width,s->height,r);
-    if (area==v->hdmi_page && s->fastext_row) {
-        double h=r.h/25;
-        PageRect footer={r.x,r.y+r.h+(strip-h)/2,r.w,h};
-        draw_raster(cr,s->fastext_row,s->width,s->height/25,footer);
-    }
     return FALSE;
 }
 GtkWidget *ts_info_view_create_hdmi_page(TsInfoView *v) {
@@ -203,6 +202,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
     }
     g_free(page_name);
     gboolean image_changed=force || s->page!=v->snapshot.page || s->page_number!=v->snapshot.page_number ||
+        (!s->page && s->incoming_page!=v->snapshot.incoming_page) ||
         memcmp(s->color_pages,v->snapshot.color_pages,sizeof(s->color_pages));
     if (force || s->selected!=v->snapshot.selected || !s->page)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(v->reveal),FALSE);
