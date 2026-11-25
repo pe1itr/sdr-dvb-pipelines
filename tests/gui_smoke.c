@@ -955,7 +955,7 @@ static void exercise_menu_clicks(App *a) {
     GtkWidget *options = gtk_bin_get_child(GTK_BIN(popover));
     GList *items = gtk_container_get_children(GTK_CONTAINER(options));
     g_assert_cmpuint(g_list_length(items), ==, 3);
-    g_assert_true(items->next->data == a->information.buttons[2]);
+    g_assert_true(g_list_nth_data(items,1) == a->information.buttons[2]);
     g_assert_true(g_list_last(items)->data == a->status_endpoint_item);
     gtk_button_clicked(GTK_BUTTON(items->data));
     g_assert_true(gtk_widget_get_visible(a->renderer_dialog));
@@ -2495,6 +2495,23 @@ static gboolean exercise(gpointer data) {
             g_assert_cmpint(gtk_widget_get_allocated_height(panel),==,screen.height);
         }
         g_assert_cmpstr(network_control(a,"osd/off",&error),==,"200 OK");
+        g_assert_cmpstr(network_control(a,"eit/on",&error),==,"200 OK");
+        g_assert_true(gtk_widget_get_visible(a->information.hdmi_eit));
+        g_assert_true(gtk_widget_get_toplevel(a->information.hdmi_eit)==a->video_view.hdmi_window);
+        g_assert_true(gtk_widget_get_visible(a->information.dialogs[0]));
+        gtk_button_clicked(GTK_BUTTON(a->information.buttons[0]));
+        g_assert_false(gtk_widget_get_visible(a->information.dialogs[0]));
+        g_assert_false(gtk_widget_get_visible(a->information.hdmi_eit));
+        gtk_button_clicked(GTK_BUTTON(a->information.buttons[0]));
+        g_assert_true(gtk_widget_get_visible(a->information.hdmi_eit));
+        g_assert_cmpstr(network_control(a,"eit/toggle",&error),==,"200 OK");
+        g_assert_false(gtk_widget_get_visible(a->information.dialogs[0]));
+        g_assert_false(gtk_widget_get_visible(a->information.hdmi_eit));
+        g_assert_cmpstr(network_control(a,"eit/toggle",&error),==,"200 OK");
+        g_assert_true(gtk_widget_get_visible(a->information.dialogs[0]));
+        g_assert_true(gtk_widget_get_visible(a->information.hdmi_eit));
+        gtk_dialog_response(GTK_DIALOG(a->information.dialogs[0]),GTK_RESPONSE_CLOSE);
+        g_assert_false(gtk_widget_get_visible(a->information.hdmi_eit));
         gtk_button_clicked(GTK_BUTTON(a->information.buttons[1]));
         g_assert_true(gtk_widget_get_visible(a->information.dialogs[1]));
         g_assert_true(gtk_widget_get_visible(a->information.hdmi_page));

@@ -2934,6 +2934,7 @@ static gboolean hdmi_monitor(App *a,int monitor) {
     if (!video_view_hdmi_monitor(&a->video_view,monitor)) return FALSE;
     if (!monitor || a->hdmi_menu) return TRUE;
     GtkOverlay *overlay=GTK_OVERLAY(a->video_view.hdmi_overlay);
+    ts_info_view_add_eit_overlay(&a->information,overlay);
     gtk_overlay_add_overlay(overlay,ts_info_view_create_hdmi_page(&a->information));
     a->hdmi_menu=gtk_revealer_new();
     a->hdmi_menu_label=gtk_label_new("");
@@ -3015,6 +3016,7 @@ static gboolean decoder_tick(gpointer data) {
         dab_view_tick(&a->dab,a->running && !a->stopping);scatter_refresh(a);
         return G_SOURCE_CONTINUE;
     }
+    a->information.eit_utc=a->source==SOURCE_FILE ? (gint64)a->moon_sample_utc : g_get_real_time()/G_USEC_PER_SEC;
     ts_info_view_tick(&a->information, a->running && !a->stopping && a->scatter_backend ?
         a->scatter_backend->information : NULL);
     if (!a->stopping) scatter_view_tick(&a->scatter_view, a->scatter_backend);
@@ -5529,6 +5531,16 @@ static const char *network_control(gpointer data,const char *command,const char 
         stop_pipeline(a);
         return a->stopping ? "202 Accepted" : "200 OK";
     }
+    if (g_str_has_prefix(command,"eit/")) {
+        const char *mode=command+strlen("eit/");
+        if (strcmp(mode,"on") && strcmp(mode,"off") && strcmp(mode,"toggle"))
+            return control_failure(error,bad,"Expected on, off or toggle");
+        gboolean enable=!strcmp(mode,"on") || (!strcmp(mode,"toggle") && !ts_info_view_eit_visible(&a->information));
+        if (enable && (a->standard==4 || !a->information.dialogs[0]))
+            return control_failure(error,conflict,"EIT requires the DVB desktop interface");
+        ts_info_view_set_eit_visible(&a->information,enable);
+        return "200 OK";
+    }
     if (!strcmp(command,"teletext/off")) {
         if (a->information.hdmi_page) gtk_widget_hide(a->information.hdmi_page);
         gtk_dialog_response(GTK_DIALOG(a->information.dialogs[1]),GTK_RESPONSE_CLOSE);
@@ -5739,6 +5751,7 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_state",video_view_hdmi_state(&a->video_view));
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
+    BOOL(root,"eit_overlay_enabled",ts_info_view_eit_visible(&a->information));
     BOOL(root,"hdmi_teletext_visible",hdmi_text);
     BOOL(root,"teletext_visible",hdmi_text || (a->information.dialogs[1] && gtk_widget_get_visible(a->information.dialogs[1])));
     if (a->running && !a->stopping && a->standard!=4 && a->information.backend) {

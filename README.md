@@ -328,7 +328,7 @@ only where applicable; hover over a control for its tooltip.
 | **BW** | Enable/bypass the IQ channel filter. The bracket keys adjust its width; DVB-T2 requires the full 8 MHz channel. |
 | **TSscatterFix** | Enable/disable separate picture reconstruction during DVB reception and show/hide its panel. |
 | **Programs / DAB station list** | Click a DVB programme to switch the embedded player, or a DAB+ station to switch audio. Programs occupies the reconstruction-panel position when TSscatterFix is off. External DVB players select their own programme. |
-| **EIT** | Open received programme/event information. |
+| **EIT** | Toggle the programme details window. On HDMI, opening the window also shows the Nu / Straks overlay and its programme progress line. Closing the window hides the overlay. IQ replay uses the recorded sample time. |
 | **Teletext** | Open broadcast teletext; enter a page or use **Vorige**, **Volgende**, **Index (100)** and **Reveal**. The button turns green when the service announces teletext. Received pages open from memory and refresh on reception. Use the coloured Fastext links beneath the page to follow broadcast destinations. |
 | **TII** | In DAB, inspect transmitter IDs and log confirmed observations. Green indicates codes in the latest capture; **✓ Logged** marks an already logged ensemble/code combination. |
 | **USB / FM / FM-DATA** | Toggle the parallel 3 kHz USB, 12.5 kHz FM or 20 kHz flat-audio FM-DATA monitor. Here USB means upper sideband. Only one monitor mode is active at a time. |
@@ -675,6 +675,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
 | `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
 | `/control/program/101` | During DVB reception with the embedded player, watch a program using its service ID. Read `programs` (ID, name and provider) and `selected_program` from `/status`. |
+| `/control/eit/on`, `/control/eit/off`, `/control/eit/toggle` | Open, close or toggle the desktop EIT window and the programme overlay on active HDMI output, just like the EIT button. Read `eit_overlay_enabled` in `/status`. |
 | `/control/teletext/on`, `/control/teletext/off` | Show or hide the current page on the active HDMI output, or in the desktop Teletext window when HDMI is off. HDMI keeps playing audio. Closing it preserves the page selection. Read `teletext_visible` in `/status` for the current window state. |
 | `/control/teletext/color/red` | Follow the current page’s red, green, yellow or blue Fastext link. Pages without color links can use the first four distinct page references in a dotted index as local shortcuts. Read `teletext_color_links` in `/status` for available colors and page numbers. |
 | `/control/teletext/101` | Open page 100–899 on HDMI or in the desktop Teletext window during DVB reception. Poll `/status` for `teletext_page` and `teletext_page_received`. |

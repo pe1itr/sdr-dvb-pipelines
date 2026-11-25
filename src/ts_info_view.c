@@ -146,6 +146,68 @@ GtkWidget *ts_info_view_create_hdmi_page(TsInfoView *v) {
     return v->hdmi_page;
 }
 
+static void refresh_eit_titles(GtkGrid *grid, const TsInfoSnapshot *s) {
+    for (unsigned i=0;i<2;i++) {
+        const TsInfoEvent *event=&s->events[i];
+        const char *title=event->valid ? (*event->title ? event->title : "Titel onbekend") : "—";
+        char *line=g_strdup_printf("%s  %s",i ? "Straks" : "Nu",title);
+        g_strdelimit(line,"\r\n\t",' ');
+        gtk_label_set_text(GTK_LABEL(gtk_grid_get_child_at(grid,i,0)),line);
+        g_free(line);
+    }
+}
+
+static void refresh_eit_time(GtkGrid *grid, const TsInfoEvent *event, gint64 utc) {
+    double fraction=0;
+    if (event->valid && event->start>=0 && event->duration>0 &&
+        utc>=event->start && utc<=event->start+event->duration)
+        fraction=(double)(utc-event->start)/event->duration;
+    GtkProgressBar *bar=GTK_PROGRESS_BAR(gtk_grid_get_child_at(grid,0,1));
+    if (gtk_progress_bar_get_fraction(bar)!=fraction) gtk_progress_bar_set_fraction(bar,fraction);
+}
+
+gboolean ts_info_view_eit_visible(const TsInfoView *v) {
+    return v->dialogs[0] && gtk_widget_get_visible(v->dialogs[0]);
+}
+
+void ts_info_view_set_eit_visible(TsInfoView *v, gboolean visible) {
+    if (!v->dialogs[0] || ts_info_view_eit_visible(v)==visible) return;
+    if (visible) {
+        v->next_tick=0;
+        ts_info_view_tick(v,v->backend);
+        gtk_widget_show_all(v->dialogs[0]);
+        gtk_window_present(GTK_WINDOW(v->dialogs[0]));
+    } else gtk_widget_hide(v->dialogs[0]);
+}
+
+void ts_info_view_add_eit_overlay(TsInfoView *v, GtkOverlay *overlay) {
+    GtkWidget *grid=gtk_grid_new();
+    v->hdmi_eit=grid;
+    g_object_add_weak_pointer(G_OBJECT(grid),(gpointer *)&v->hdmi_eit);
+    gtk_widget_set_name(grid,"eit-hdmi");
+    gtk_style_context_add_class(gtk_widget_get_style_context(grid),"eit-overlay");
+    gtk_widget_set_valign(grid,GTK_ALIGN_END);
+    gtk_grid_set_column_homogeneous(GTK_GRID(grid),TRUE);
+    gtk_grid_set_column_spacing(GTK_GRID(grid),24);
+    gtk_grid_set_row_spacing(GTK_GRID(grid),8);
+    for (int i=0;i<2;i++) {
+        GtkWidget *label=gtk_label_new(NULL);
+        gtk_label_set_xalign(GTK_LABEL(label),i ? 1 : 0);
+        gtk_label_set_ellipsize(GTK_LABEL(label),PANGO_ELLIPSIZE_END);
+        gtk_widget_set_hexpand(label,TRUE);
+        gtk_grid_attach(GTK_GRID(grid),label,i,0,1,1);
+    }
+    GtkWidget *bar=gtk_progress_bar_new();
+    gtk_grid_attach(GTK_GRID(grid),bar,0,1,2,1);
+    gtk_overlay_add_overlay(overlay,grid);
+    gtk_overlay_set_overlay_pass_through(overlay,grid,TRUE);
+    gtk_widget_show_all(grid);
+    gtk_widget_set_no_show_all(grid,TRUE);
+    refresh_eit_titles(GTK_GRID(grid),&v->snapshot);
+    refresh_eit_time(GTK_GRID(grid),&v->snapshot.events[0],v->eit_utc);
+    gtk_widget_set_visible(grid,ts_info_view_eit_visible(v));
+}
+
 static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
     unsigned page=s->page_number ? s->page_number : 100;
     v->updating=TRUE;
@@ -176,6 +238,7 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         v->updating=FALSE;
     }
     if (force || memcmp(s->events,v->snapshot.events,sizeof(s->events))) {
+        if (v->hdmi_eit) refresh_eit_titles(GTK_GRID(v->hdmi_eit),s);
         char *text=event_text(s);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->eit)),text,-1); g_free(text);
     }
@@ -184,6 +247,8 @@ static void update(TsInfoView *v, TsInfoSnapshot *s, gboolean force) {
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(v->pmt)),text,-1);
         g_free(text);
     }
+    if (v->hdmi_eit && ts_info_view_eit_visible(v))
+        refresh_eit_time(GTK_GRID(v->hdmi_eit),&s->events[0],v->eit_utc);
     gboolean ready[2]={s->events[0].valid || s->events[1].valid,s->teletext_announced};
     for (unsigned i=0;i<2;i++) {
         char *status;
@@ -241,6 +306,11 @@ static void page_step(GtkButton *button, gpointer data) {
 static void hide_dialog(GtkDialog *dialog, gint response, gpointer data) {
     (void)response; (void)data; gtk_widget_hide(GTK_WIDGET(dialog));
 }
+static void eit_visibility_changed(GtkWidget *dialog, GParamSpec *spec, gpointer data) {
+    (void)spec;
+    TsInfoView *v=data;
+    if (v->hdmi_eit) gtk_widget_set_visible(v->hdmi_eit,gtk_widget_get_visible(dialog));
+}
 static void teletext_dialog_hidden(GtkWidget *dialog, gpointer data) {
     (void)dialog;
     TsInfoView *v=data;
@@ -248,8 +318,12 @@ static void teletext_dialog_hidden(GtkWidget *dialog, gpointer data) {
 }
 static void open_information(GtkButton *button, gpointer data) {
     TsInfoView *v=data;
+    if (GTK_WIDGET(button)==v->buttons[0]) {
+        ts_info_view_set_eit_visible(v,!ts_info_view_eit_visible(v));
+        return;
+    }
     v->next_tick=0; ts_info_view_tick(v,v->backend);
-    unsigned index=GTK_WIDGET(button)==v->buttons[2] ? 2 : GTK_WIDGET(button)==v->buttons[1] ? 1 : 0;
+    unsigned index=GTK_WIDGET(button)==v->buttons[2] ? 2 : 1;
     GtkWidget *dialog=v->dialogs[index];
     gtk_widget_show_all(dialog);
     gtk_window_present(GTK_WINDOW(dialog));
@@ -277,6 +351,7 @@ void ts_info_view_create(TsInfoView *v, GtkWindow *parent, GtkWidget *bar, GtkWi
         gtk_window_set_default_size(GTK_WINDOW(v->dialogs[i]),680,610);
         g_signal_connect(v->dialogs[i],"response",G_CALLBACK(hide_dialog),v);
         g_signal_connect(v->dialogs[i],"delete-event",G_CALLBACK(gtk_widget_hide_on_delete),NULL);
+        if (!i) g_signal_connect(v->dialogs[i],"notify::visible",G_CALLBACK(eit_visibility_changed),v);
         if (i==1) g_signal_connect(v->dialogs[i],"hide",G_CALLBACK(teletext_dialog_hidden),v);
         GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(v->dialogs[i]));
         gtk_container_set_border_width(GTK_CONTAINER(content),8); gtk_box_set_spacing(GTK_BOX(content),8);
@@ -388,6 +463,7 @@ void ts_info_view_reset(TsInfoView *v) {
     if (v->hdmi_page) gtk_widget_hide(v->hdmi_page);
     v->backend=NULL; v->next_tick=0;
     if (!v->dialogs[0]) return;
+    ts_info_view_set_eit_visible(v,FALSE);
     TsInfoSnapshot s={0}; update(v,&s,TRUE);
 }
 void ts_info_view_destroy(TsInfoView *v) {

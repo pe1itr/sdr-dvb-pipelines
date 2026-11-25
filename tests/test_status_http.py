@@ -280,6 +280,10 @@ class ReceiverControlTests(unittest.TestCase):
                          ('DVB-T', 250000, '7/8'))
         put('teletext/off')
         self.assertFalse(self.get()[1]['teletext_visible'])
+        put('eit/on')
+        self.assertTrue(self.get()[1]['eit_overlay_enabled'])
+        put('eit/off')
+        put('eit/invalid', 400)
         put('teletext/on', 409)
         put('program/0', 400)
         put('program/65536', 400)
@@ -290,6 +294,9 @@ class ReceiverControlTests(unittest.TestCase):
         put('preset/1', 404)
         put('start')
         self.assertTrue(self.get()[1]['running'])
+        for action, enabled in [('on', True), ('on', True), ('toggle', False), ('toggle', True), ('off', False)]:
+            put('eit/' + action)
+            self.assertEqual(self.get()[1]['eit_overlay_enabled'], enabled)
         for page in (100, 899, 101):
             put(f'teletext/{page}')
             state = self.get()[1]
