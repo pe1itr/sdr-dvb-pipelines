@@ -36,6 +36,7 @@ int main(int argc, char **argv) {
                 usb_receiver_set_mode(r,command=='d' ? MONITOR_FM_DATA : command=='f' ? MONITOR_FM : MONITOR_USB);
             if (command=='l') usb_receiver_set_tci_level(r,-18);
             if (command=='g') usb_receiver_set_tci_level(r,0);
+            if (command=='t') usb_receiver_set_tci_only(r,TRUE);
             if (command=='m') usb_receiver_set_muted(r,TRUE);
             if (command=='a') usb_receiver_set_muted(r,FALSE);
             if (command=='e' || command=='x') {

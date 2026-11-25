@@ -15,7 +15,7 @@ struct UsbReceiver {
     char *path, *device;
     GThread *thread;
     GMutex mutex;
-    gint stop, muted;
+    gint stop, muted, tci_only;
     double center, rate, offset;
     float tci_gain;
     gboolean source_active;
@@ -91,6 +91,12 @@ double usb_receiver_frequency(UsbReceiver *r) {
 }
 static double tci_tune(double frequency, void *user) {
     UsbReceiver *r=user; usb_receiver_tune(r,frequency); return usb_receiver_frequency(r);
+}
+gboolean usb_receiver_tci_only(UsbReceiver *r) {
+    return r && g_atomic_int_get(&r->tci_only);
+}
+void usb_receiver_set_tci_only(UsbReceiver *r, gboolean enabled) {
+    g_atomic_int_set(&r->tci_only, !!enabled);
 }
 void usb_receiver_set_muted(UsbReceiver *r, gboolean muted) {
     if (r) g_atomic_int_set(&r->muted,!!muted);
@@ -171,6 +177,7 @@ static void audio(const float *samples, size_t count, void *user) {
     float gain=r->tci_gain;
     g_mutex_unlock(&r->mutex);
     usb_tci_audio(r->tci,samples,count,gain);
+    if (usb_receiver_tci_only(r)) return;
     pcm_udp_audio(r,samples,count);
     if (r->pcm && !usb_receiver_muted(r)) {
         speaker_flush(r);
@@ -179,8 +186,8 @@ static void audio(const float *samples, size_t count, void *user) {
         speaker_flush(r);
     }
 }
-static gpointer receive(gpointer user) {
-    UsbReceiver *r=user;
+static void open_speaker(UsbReceiver *r) {
+    r->speaker_error[0]=0;
     int error=snd_pcm_open(&r->pcm,r->device,SND_PCM_STREAM_PLAYBACK,SND_PCM_NONBLOCK);
     if (error>=0) error=snd_pcm_set_params(r->pcm,SND_PCM_FORMAT_FLOAT,SND_PCM_ACCESS_RW_INTERLEAVED,1,48000,1,60000);
     if (error<0) {
@@ -188,6 +195,10 @@ static gpointer receive(gpointer user) {
         if (r->pcm) snd_pcm_close(r->pcm);
         r->pcm=NULL;
     }
+}
+static gpointer receive(gpointer user) {
+    UsbReceiver *r=user;
+    gboolean speaker_enabled=FALSE;
     UsbDemod *demod=NULL;
     unsigned generation=UINT_MAX;
     uint64_t sequence=0;
@@ -195,6 +206,18 @@ static gpointer receive(gpointer user) {
     UsbTapBlock *copy=g_new(UsbTapBlock,1);
     gboolean was_muted=FALSE;
     while (!g_atomic_int_get(&r->stop)) {
+        gboolean tci_only=usb_receiver_tci_only(r);
+        gboolean want_speaker=!tci_only;
+        if (speaker_enabled != want_speaker) {
+            speaker_enabled=want_speaker;
+            if (speaker_enabled) open_speaker(r);
+            else {
+                if (r->pcm) { snd_pcm_drop(r->pcm); snd_pcm_close(r->pcm); r->pcm=NULL; }
+                r->speaker_used=0;
+                r->speaker_error[0]=0;
+                pcm_udp_reset(r);
+            }
+        }
         gboolean muted=usb_receiver_muted(r);
         if (muted!=was_muted) {
             r->speaker_used=0;
@@ -235,7 +258,7 @@ static gpointer receive(gpointer user) {
         if (now-report>200000) {
             g_mutex_lock(&r->mutex);
             char udp[128]="";
-            if (r->pcm_udp_fd>=0) g_snprintf(udp,sizeof(udp)," · PCM UDP %s:%u (%u send errors)",
+            if (!tci_only && r->pcm_udp_fd>=0) g_snprintf(udp,sizeof(udp)," · PCM UDP %s:%u (%u send errors)",
                 r->pcm_udp_host,ntohs(r->pcm_udp_address.sin_port),r->pcm_udp_errors);
             g_snprintf(r->status,sizeof(r->status),"%s · %u TCI client(s) · %u monitor blocks dropped%s%s%s%s",
                 rate<monitor_min_rate(mode) ? "IQ rate too low for the selected mode" :
@@ -243,7 +266,7 @@ static gpointer receive(gpointer user) {
                     mode==MONITOR_FM ? "Receiving FM · 12.5 kHz" : "Receiving USB · 3 kHz") :
                 "Waiting for IQ · start SDR / file",
                 usb_tci_clients(r->tci),atomic_load_explicit(&r->tap->dropped,memory_order_relaxed),
-                muted ? " · speaker muted (M)" : "",
+                tci_only ? " · TCI audio only" : muted ? " · speaker muted (M)" : "",
                 *r->speaker_error ? " · " : "",r->speaker_error,udp);
             g_mutex_unlock(&r->mutex); report=now;
         }
@@ -272,6 +295,7 @@ void usb_receiver_stop(UsbReceiver *r) {
     g_atomic_int_set(&r->stop,1); g_thread_join(r->thread); r->thread=NULL;
     usb_tci_free(r->tci); r->tci=NULL; g_clear_pointer(&r->device,g_free);
     pcm_udp_reset(r);
+    usb_receiver_set_tci_only(r,FALSE);
 }
 gboolean usb_receiver_running(UsbReceiver *r) { return r && r->thread; }
 void usb_receiver_status(UsbReceiver *r, char *message, size_t size) {

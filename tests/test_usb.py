@@ -489,6 +489,23 @@ class TciTests(unittest.TestCase):
         c.send('modulation:0;')
         c.until_text(b'modulation:0,NFM;')
 
+    def test_tci_only_ignores_speaker_unmute_and_preserves_pcm_settings(self):
+        self.command(b'e')
+        self.udp_audio(2)
+        self.command(b't')
+        c = self.connect()
+        c.send('audio_start:0;')
+        for mode in (b'u', b'f', b'd'):
+            self.command(mode)
+            self.command(b'm')
+            self.command(b'a')
+            self.assert_udp_stopped()
+            _, payload = c.audio()
+            self.assertTrue(any(payload))
+        self.command(b's')
+        self.command(b'r')
+        self.udp_audio(2)
+
     def test_fm_data_requires_48k_on_switch_and_negotiation(self):
         c = self.connect()
         c.send('audio_samplerate:12000;audio_start:0;')

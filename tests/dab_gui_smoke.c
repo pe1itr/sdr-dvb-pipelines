@@ -323,7 +323,7 @@ int main(int argc,char **argv) {
     a.config=g_key_file_new();a.config_path=g_canonicalize_filename(argv[1],NULL);
     a.directory=g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config,a.config_path,0,NULL));
-    a.status_http=status_http_start("127.0.0.1",0,network_status,network_constellation,NULL,&a.messages,&a,NULL);
+    a.status_http=status_http_start("127.0.0.1",0,network_status,network_constellation,NULL,configured_tci_port,&a.messages,&a,NULL);
     g_assert_nonnull(a.status_http);
     g_timeout_add(200,exercise_dab,&a);gui(&a,FALSE);
     status_http_stop(a.status_http);

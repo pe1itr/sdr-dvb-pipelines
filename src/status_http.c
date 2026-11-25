@@ -18,6 +18,7 @@ struct StatusHttp {
     GList *clients;
     StatusHttpSnapshot snapshot, constellation;
     StatusHttpControl control;
+    StatusHttpTciPort tci_port;
     DsmccMessages *messages;
     gpointer data;
     GInetAddress *bind_ip;
@@ -106,8 +107,14 @@ static void received(GObject *object,GAsyncResult *result,gpointer data) {
         }
     }
     else if (strcmp(parts[0],"GET")) respond(c,"405 Method Not Allowed","{\"error\":\"GET required\"}","Allow: GET\r\n");
-    else if (!strcmp(parts[1],"/docs"))
-        respond_as(c,"200 OK","text/html",api_reference_html,"");
+    else if (!strcmp(parts[1],"/docs")) {
+        char port[6];
+        g_snprintf(port, sizeof(port), "%u", (guint)c->server->tci_port(c->server->data));
+        GString *page = g_string_new(api_reference_html);
+        g_string_replace(page, "{{tci_port}}", port, 0);
+        respond_as(c, "200 OK", "text/html", page->str, "");
+        g_string_free(page, TRUE);
+    }
     else if (!strcmp(parts[1],"/openapi.json")) respond(c,"200 OK",api_openapi_json,"");
     else if (!strcmp(parts[1],"/dsmcc/messages") || g_str_has_prefix(parts[1],"/dsmcc/messages?")) {
         const char *query=strchr(parts[1],'?');
@@ -210,12 +217,13 @@ char *status_http_network_info(StatusHttp *s) {
     return g_string_free(text, FALSE);
 }
 
-StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,DsmccMessages *messages,gpointer data,GError **error) {
+StatusHttp *status_http_start(const char *address,guint16 port,StatusHttpSnapshot snapshot,StatusHttpSnapshot constellation,StatusHttpControl control,StatusHttpTciPort tci_port,DsmccMessages *messages,gpointer data,GError **error) {
     GInetAddress *ip=g_inet_address_new_from_string(address);
     if (!ip) {g_set_error_literal(error,G_IO_ERROR,G_IO_ERROR_INVALID_ARGUMENT,"Status bind address must be a numeric IPv4 or IPv6 address");return NULL;}
     StatusHttp *s=g_new0(StatusHttp,1);s->service=g_socket_service_new();s->snapshot=snapshot;s->constellation=constellation;s->data=data;s->control=control;s->messages=messages;
     GSocketAddress *bind=g_inet_socket_address_new(ip,port), *effective=NULL;
     s->bind_ip=ip;
+    s->tci_port=tci_port;
     g_signal_connect(s->service,"event",G_CALLBACK(listener_event),s);
     gboolean ok=g_socket_listener_add_address(G_SOCKET_LISTENER(s->service),bind,G_SOCKET_TYPE_STREAM,
         G_SOCKET_PROTOCOL_TCP,NULL,&effective,error);g_object_unref(bind);

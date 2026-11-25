@@ -673,6 +673,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | Path | Action |
 | --- | --- |
 | `/control/hdmi/1`, `/control/hdmi/2`, `/control/hdmi/off` | Open fullscreen DVB playback on the selected display (numbered from 1), or close it. Use the embedded player and select the HDMI audio device in the operating system. The receiver remembers the display at startup. White text on blue shows **No Signal**, **Init** during acquisition, and **Locked** until decoded pictures arrive. Read `hdmi_monitor` and `hdmi_state` in `/status`. |
+| `/control/monitor/usb`, `/control/monitor/fm`, `/control/monitor/fm-data`, `/control/monitor/off` | Start or switch the parallel monitor for TCI-only audio, or stop it. DVB playback continues on HDMI. Tune through TCI. Read `monitor_mode` and `monitor_speaker_muted` in `/status`. |
 | `/control/network-info/on`, `/control/network-info/off` | Show or hide the endpoint addresses on the desktop and active HDMI output. Read `network_info_visible` in `/status`. |
 | `/control/osd/left`, `/control/osd/right`, `/control/osd/off` | Show or hide the HDMI information panel. Read `hdmi_osd` in `/status`. |
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |

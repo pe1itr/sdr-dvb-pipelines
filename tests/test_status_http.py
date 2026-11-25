@@ -31,6 +31,7 @@ class StatusTests(unittest.TestCase):
                 cfg['paths'][key] = str(ROOT / value)
         cfg['linrad']['sample_rate'] = '2048000'
         cfg['linrad']['port'] = str(free_port())
+        cfg['usb']['tci_port'] = '41023'
         cfg['dab'] = {'audio_device': 'null'}
         self.port = free_port()
         cfg['status'] = {'enabled': 'true', 'bind': '127.0.0.1', 'port': str(self.port)}
@@ -145,6 +146,8 @@ class StatusTests(unittest.TestCase):
         self.assertIn(b'Content-Type: text/html; charset=utf-8', headers)
         self.assertIn(f'Content-Length: {len(body)}'.encode(), headers)
         self.assertIn(b'href="/openapi.json"', body)
+        self.assertIn(b'ws://127.0.0.1:41023', body)
+        self.assertNotIn(b'{{tci_port}}', body)
         for route in spec['paths']:
             self.assertIn(f'<code>{route}</code>'.encode(), body)
         self.assertIn(b'PUT /control/fec/1/2', body)

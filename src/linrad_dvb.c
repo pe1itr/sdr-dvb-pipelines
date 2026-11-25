@@ -2338,6 +2338,9 @@ static void usb_source_refresh(App *a) {
     double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
     usb_receiver_source(a->usb_receiver,center,rate,!knucker_source(a) && a->running && !a->stopping);
 }
+static const char *const monitor_api_modes[]={
+    [MONITOR_USB]="usb", [MONITOR_FM]="fm", [MONITOR_FM_DATA]="fm-data"
+};
 static void monitor_refresh(App *a) {
     a->iq_view.usb_enabled=usb_receiver_running(a->usb_receiver);
     a->iq_view.monitor_mode=usb_receiver_mode(a->usb_receiver);
@@ -4246,6 +4249,10 @@ static void show_my_station(GtkWidget *widget, gpointer data) {
     gtk_window_present(GTK_WINDOW(a->my_station_dialog));
 }
 
+static guint16 configured_tci_port(gpointer data) {
+    return integer_setting(data, "usb", "tci_port", 1, 65535);
+}
+
 static char *network_status(gpointer data);
 static char *network_constellation(gpointer data);
 
@@ -4265,7 +4272,7 @@ static void status_endpoint_toggled(GtkToggleButton *button,gpointer data) {
         const char *bind=gtk_entry_get_text(GTK_ENTRY(a->status_endpoint_bind));
         int port=gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(a->status_endpoint_port));
         GError *error=NULL;
-        a->status_http=status_http_start(bind,port,network_status,network_constellation,network_control,&a->messages,a,&error);
+        a->status_http=status_http_start(bind,port,network_status,network_constellation,network_control,configured_tci_port,&a->messages,a,&error);
         if (!a->status_http) {
             message=g_strdup_printf("Cannot start status endpoint: %s",error->message);
             g_clear_error(&error);enabled=FALSE;
@@ -5566,6 +5573,28 @@ static const char *network_control(gpointer data,const char *command,const char 
     if (!a->presets || !g_key_file_get_boolean(a->config,"status","control",NULL))
         return control_failure(error,"403 Forbidden","Enable remote control in Output > Status endpoint");
     if (a->closing) return control_failure(error,conflict,"Receiver is closing");
+    if (g_str_has_prefix(command,"monitor/")) {
+        const char *value=command+strlen("monitor/");
+        GtkWidget *buttons[]={a->usb_toggle,a->fm_toggle,a->fm_data_toggle};
+        gboolean off=!strcmp(value,"off");
+        guint index=0;
+        while (index<G_N_ELEMENTS(monitor_api_modes) && strcmp(value,monitor_api_modes[index])) ++index;
+        if (!off && index==G_N_ELEMENTS(monitor_api_modes))
+            return control_failure(error,bad,"Expected usb, fm, fm-data or off");
+        if (off && !usb_receiver_running(a->usb_receiver)) return "200 OK";
+        if (off) index=usb_receiver_mode(a->usb_receiver);
+        if (!a->usb_receiver || !buttons[index])
+            return control_failure(error,conflict,"Audio monitor unavailable");
+        gboolean previous=usb_receiver_tci_only(a->usb_receiver);
+        if (!off) usb_receiver_set_tci_only(a->usb_receiver,TRUE);
+        GtkToggleButton *button=GTK_TOGGLE_BUTTON(buttons[index]);
+        gtk_toggle_button_set_active(button,!off);
+        if (!off && !gtk_toggle_button_get_active(button)) {
+            usb_receiver_set_tci_only(a->usb_receiver,previous);
+            return control_failure(error,conflict,gtk_label_get_text(GTK_LABEL(a->usb_status)));
+        }
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"network-info/")) {
         const char *action = command + strlen("network-info/");
         if (strcmp(action,"on") && strcmp(action,"off"))
@@ -5851,6 +5880,9 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
     BOOL(root,"tsscatterfix_enabled",use_scatter(a));
+    gboolean monitor_on=usb_receiver_running(a->usb_receiver);
+    STR(root,"monitor_mode",monitor_on ? monitor_api_modes[usb_receiver_mode(a->usb_receiver)] : "off");
+    BOOL(root,"monitor_speaker_muted",usb_receiver_muted(a->usb_receiver) || usb_receiver_tci_only(a->usb_receiver));
     BOOL(root,"network_info_visible",a->network_dialog!=NULL);
     BOOL(root,"eit_overlay_enabled",ts_info_view_eit_visible(&a->information));
     BOOL(root,"hdmi_teletext_visible",hdmi_text);
@@ -6199,7 +6231,7 @@ int main(int argc, char **argv) {
         if (!status_bind) status_bind=g_key_file_get_string(a.config,"status","bind",NULL);
         if (!status_bind) status_bind=g_strdup("127.0.0.1");
         if (status_port) {
-            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,run ? NULL : network_control,&a.messages,&a,&error);
+            a.status_http=status_http_start(status_bind,status_port,network_status,network_constellation,run ? NULL : network_control,configured_tci_port,&a.messages,&a,&error);
             if (!a.status_http) fatal("Cannot start status endpoint: %s",error->message);
             fprintf(stderr,"[status] HTTP listening on %s port %d (/status)\n",status_bind,status_port);
         }

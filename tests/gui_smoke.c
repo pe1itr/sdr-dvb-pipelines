@@ -954,9 +954,9 @@ static void exercise_menu_clicks(App *a) {
     g_assert_true(gtk_widget_get_visible(GTK_WIDGET(popover)));
     GtkWidget *options = gtk_bin_get_child(GTK_BIN(popover));
     GList *items = gtk_container_get_children(GTK_CONTAINER(options));
-    g_assert_cmpuint(g_list_length(items), ==, 3);
+    g_assert_cmpuint(g_list_length(items), ==, 4);
     g_assert_true(g_list_nth_data(items,1) == a->information.buttons[2]);
-    g_assert_true(g_list_last(items)->data == a->status_endpoint_item);
+    g_assert_true(g_list_nth_data(items,2) == a->status_endpoint_item);
     gtk_button_clicked(GTK_BUTTON(items->data));
     g_assert_true(gtk_widget_get_visible(a->renderer_dialog));
     gtk_dialog_response(GTK_DIALOG(a->renderer_dialog), GTK_RESPONSE_CLOSE);
@@ -1329,7 +1329,30 @@ static void exercise_usb(App *a) {
     g_assert_true(tuning_key(a->window,&event,a));
     g_assert_false(usb_receiver_running(a->usb_receiver));
     g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->usb_toggle)));
+    gboolean control_enabled=g_key_file_get_boolean(a->config,"status","control",NULL);
+    g_key_file_set_boolean(a->config,"status","control",TRUE);
+    const char *error=NULL;
+    g_assert_cmpstr(network_control(a,"monitor/usb",&error),==,"409 Conflict");
+    g_assert_false(usb_receiver_tci_only(a->usb_receiver));
     close(fd);
+    gboolean video_muted=a->video_view.muted;
+    const char *commands[]={"monitor/usb","monitor/fm","monitor/fm-data","monitor/fm-data"};
+    for (unsigned i=0;i<G_N_ELEMENTS(commands);++i) {
+        g_assert_cmpstr(network_control(a,commands[i],&error),==,"200 OK");
+        g_assert_true(usb_receiver_running(a->usb_receiver));
+        g_assert_true(usb_receiver_tci_only(a->usb_receiver));
+        g_assert_cmpint(a->video_view.muted,==,video_muted);
+    }
+    event.keyval=GDK_KEY_m;
+    for (int i=0;i<2;++i) {
+        g_assert_true(tuning_key(a->window,&event,a));
+        g_assert_true(usb_receiver_tci_only(a->usb_receiver));
+    }
+    g_assert_cmpstr(network_control(a,"monitor/off",&error),==,"200 OK");
+    g_assert_cmpstr(network_control(a,"monitor/off",&error),==,"200 OK");
+    g_assert_false(usb_receiver_tci_only(a->usb_receiver));
+    g_assert_false(usb_receiver_running(a->usb_receiver));
+    g_key_file_set_boolean(a->config,"status","control",control_enabled);
     for (unsigned upper=0;upper<2;++upper) {
         event.keyval=upper ? GDK_KEY_U : GDK_KEY_u;
         g_assert_true(tuning_key(a->window,&event,a));
@@ -2885,7 +2908,7 @@ static gboolean exercise_network_info(gpointer data) {
     g_assert_false(gtk_widget_get_visible(a->network_overlay));
 
     a->status_http = status_http_start("127.0.0.1", 0, network_status, network_constellation,
-                                       network_control, &a->messages, a, NULL);
+                                       network_control, configured_tci_port, &a->messages, a, NULL);
     g_assert_nonnull(a->status_http);
     g_key_file_set_boolean(a->config, "status", "control", TRUE);
     g_assert_cmpstr(network_control(a, "network-info/on", &error), ==, "200 OK");

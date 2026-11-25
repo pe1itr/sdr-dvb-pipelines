@@ -13,5 +13,20 @@ details div { border-top: 1px solid #d8e2e6; padding: 0 1rem } dl { display: gri
 dt { font-weight: bold } dd { margin: 0 } pre { background: #edf3f5; padding: .6rem }
 </style></head><body><main><h1>{{title}}</h1><p>{{intro}}</p>
 <a href="/openapi.json">OpenAPI specification (JSON)</a>
+<section>
+<h2>TCI monitor (WebSocket)</h2>
+<p>Enable <strong>USB</strong>, <strong>FM</strong> or <strong>FM-DATA</strong> to start
+the TCI server. For remote listening, send <code>PUT /control/monitor/usb</code>,
+<code>PUT /control/monitor/fm</code> or <code>PUT /control/monitor/fm-data</code>.
+Monitor audio then goes only to TCI, including when local speakers are unmuted.
+Send <code>PUT /control/monitor/off</code> to end the session. The configured WebSocket port is <strong>{{tci_port}}</strong>.
+Connect a TCI client such as MSHV to this port to listen to monitor audio and tune
+within the IQ spectrum. With the default local bind address, use
+<code>ws://127.0.0.1:{{tci_port}}</code> on the receiver computer.</p>
+<p>To change the TCI port, switch the monitor off and open <strong>TCI</strong>
+(<kbd>Alt+T</kbd>). For a client on your trusted LAN, set <code>tci_bind</code> in
+the INI file’s <code>[usb]</code> section to the receiver’s LAN address and use
+that address in the client.</p>
+</section>
 {{sections}}
 </main></body></html>
