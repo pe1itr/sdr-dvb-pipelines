@@ -10,6 +10,18 @@
 #include <errno.h>
 #include <unistd.h>
 
+static gboolean reject_startup_options;
+libvlc_instance_t *__real_libvlc_new(int argc, const char *const *argv);
+libvlc_instance_t *__wrap_libvlc_new(int argc, const char *const *argv) {
+    for (int i = 0; i < argc; ++i)
+        g_assert_false(g_str_has_prefix(argv[i], "--avcodec-"));
+    if (argc && reject_startup_options) {
+        const char *unsupported[] = {"--unknown-video-smoke-option"};
+        return __real_libvlc_new(1, unsupported);
+    }
+    return __real_libvlc_new(argc, argv);
+}
+
 int __real_libvlc_audio_set_volume(libvlc_media_player_t *player, int volume);
 int __wrap_libvlc_audio_set_volume(libvlc_media_player_t *player, int volume) {
     /* PipeWire can crash on volume changes before its stream is initialized.
@@ -344,6 +356,8 @@ int main(int argc, char **argv) {
     /* Muting before playback must also survive player recreation. */
     video_view_set_muted(&v, TRUE);
     for (int i = 1; i <= 4; ++i) {
+        /* Play one real stream through the default-options fallback. */
+        reject_startup_options = i == 2;
         int fd = open(argv[i], O_RDONLY | O_CLOEXEC); g_assert_cmpint(fd, >=, 0);
         GError *error = NULL;
         ScatterBackend *scatter = NULL;

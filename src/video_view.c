@@ -451,6 +451,10 @@ static gboolean start_player(VideoView *v, guint16 program) {
     if (!media) return FALSE;
     char option[64];
     libvlc_media_add_option(media, ":demux=ts");
+    /* Keep optional decoder settings on the media. VLC rejects unknown
+     * plugin options at instance startup when avcodec is unavailable. */
+    libvlc_media_add_option(media, ":avcodec-hw=none");
+    libvlc_media_add_option(media, ":avcodec-threads=1");
     g_snprintf(option, sizeof(option), ":file-caching=%u", v->caching);
     libvlc_media_add_option(media, option);
     g_snprintf(option, sizeof(option), ":program=%u", program);
@@ -632,19 +636,26 @@ gboolean video_view_start(VideoView *v, int fd, const char *url,
     if (!g_unix_open_pipe(pipefd, FD_CLOEXEC, NULL)) goto fail;
     v->fd = pipefd[0]; v->video_fd = pipefd[1];
     if (!g_unix_set_fd_nonblocking(v->video_fd, TRUE, NULL)) goto fail;
-    /* Frame threading holds pictures until more frames arrive. During broken
-     * reception those frames may never arrive before Stop closes the stream. */
     const char *args[] = {"--no-video-title-show", "--no-video-deco", "--no-snapshot-preview",
 #ifdef __linux__
                           /* Prefer VLC's buffered PulseAudio output (also served by
                            * pipewire-pulse). Keep automatic fallback on other setups. */
                           "--aout=pulse,any",
 #endif
-                          "--avcodec-hw=none", "--avcodec-threads=1",
                           "--no-drop-late-frames", "--no-skip-frames"};
     v->vlc = libvlc_new(G_N_ELEMENTS(args), args);
-    if (!v->vlc) goto fail;
-    if (!start_player(v, 0)) goto fail;
+    if (!v->vlc) {
+        /* The installed VLC build decides which startup options it accepts. */
+        libvlc_clearerr();
+        v->vlc = libvlc_new(0, NULL);
+    }
+    if (!v->vlc || !start_player(v, 0)) {
+        const char *detail = libvlc_errmsg();
+        g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot start embedded VLC player: %s",
+                    detail ? detail : "check the VLC installation and plugins");
+        video_view_stop(v);
+        return FALSE;
+    }
 start_relay:
     v->relay = g_thread_new("video-ts-relay", relay_ts, v);
     v->active = TRUE;
@@ -653,7 +664,7 @@ start_relay:
     return TRUE;
 fail:
     g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot start video / UDP output: %s",
-                libvlc_errmsg() ? libvlc_errmsg() : g_strerror(errno));
+                g_strerror(errno));
     video_view_stop(v);
     return FALSE;
 }
