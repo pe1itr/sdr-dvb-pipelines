@@ -1,6 +1,6 @@
 # Linrad DVB
 
-An SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2 and DAB/DAB+**,
+An SDR receiver for **DVB-S, DVB-S2, narrowband DVB-T, 8 MHz DVB-T2, DAB/DAB+ and analog FM-ATV**,
 with a GTK interface for spectrum, waterfall, constellation, decoder status
 and television playback, for amateur DATV, weak-signal DX and broadcast reception.
 
@@ -33,6 +33,7 @@ implementation; the signal meter also takes inspiration from Linrad.
 | DVB-S2 CPU LDPC | Ahmet Inan / xdsopl, adapted by [pabr](https://github.com/pabr/xdsopl-LDPC-pabr) | SIMD selection, batching and worker management |
 | DVB-S2 GPU LDPC | OnAir LDPC code, tables and Vulkan backend; locally optimized kernel | Optional S2 helper, soft-bit conversion, original-input CPU fallback/retry, tests and measurements |
 | DVB-T bonding | [dvb-channel-bonding](components/bonding/README.md) · PE1ITR, component 1.6.0 | Bonding library, receiver merger, partner control and integration |
+| FM-ATV | [atv-receiver-analog](components/fmatv/README.md) · PE1ITR | PAL video, detector monitoring and frame stacking |
 | DAB/DAB+ | [dab-monitor](components/dab/ORIGIN) · PE1ITR | Receiver, audio, data services and DX recovery |
 | TSscatterFix | [TSscatterFix](components/tsscatterfix/README.md) · PE1ITR | Image recovery and application integration |
 
@@ -66,6 +67,7 @@ development are maintained together here.
 
 - [Purpose](#purpose)
 - [Features](#features)
+- [FM-ATV reception](#fm-atv-reception)
 - [Weak-signal and DX reception](#weak-signal-and-dx-reception)
 - [Buttons and everyday controls](#buttons-and-everyday-controls)
 - [Tested computers and practical limits](#tested-computers-and-practical-limits)
@@ -319,10 +321,11 @@ only where applicable; hover over a control for its tooltip.
 | --- | --- |
 | **Input** | Select the SDR, Linrad UDP or an IQ file; configure sample rate, device arguments, gain-related options, tuning step and frequency offsets. Stop reception to change hardware settings. |
 | **Receive frequency (MHz)** | Click the displayed frequency to enter a receive frequency in MHz while reception continues; press Enter or Tune. Accepts a decimal point or comma and includes configured frequency offsets. Direct SDR input only. DAB switches to Free frequency for values outside the channel list. |
-| **Mode** | Select DVB-S/S2/T/T2 or DAB. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 acquisition/CPU/GPU LDPC, DVB-T bonding, DVB-T2 PLP/GPU LDPC, or DAB channel/profile. |
+| **Mode** | Select DVB-S/S2/T/T2, DAB or FM-ATV. Set symbol rate/channel bandwidth, modulation, FEC and guard interval where applicable; choose DVB-S2 acquisition/CPU/GPU LDPC, DVB-T bonding, DVB-T2 PLP/GPU LDPC, or DAB channel/profile. |
 | **Output → Program Map Table (PMT)** | View the streams in each program. |
 | **Output → Status endpoint…** | Configure the HTTP status endpoint. |
 | **Output → Renderer** | Choose embedded or external video, a TS file, UDP or SRT output; configure the additional UDP copy. |
+| **Presets** | Store and label up to ten receiver configurations. Recall them with the buttons below the constellation, arranged in five rows of two. |
 | **Start SDR / Stop SDR** | Start or stop reception. The label changes for Linrad input and IQ-file playback. |
 | **Record IQ** | Start/stop raw sample recording during live reception, with metadata for replay. This is different from saving decoded MPEG-TS through Renderer. |
 | **BW** | Enable/bypass the IQ channel filter. The bracket keys adjust its width; DVB-T2 requires the full 8 MHz channel. |
@@ -588,6 +591,14 @@ SDR/USB, decoding and display costs are additional. See the
 rounding by one integer sample count; response, delay and strong-adjacent-signal
 rejection are checked by `make test-bandfilter test-iq-shift`.
 
+## FM-ATV reception
+
+Tune the analog TV carrier, select **Mode → FM-ATV** and start reception. The internal screen and selected HDMI output show the same 4:3 PAL picture. Under the internal picture, the UTC timestamp appears alongside the callsign and locator configured in **Log → My Station**.
+
+**Service info** shows the current FM detector, sync, colour burst and audio indicators, video SNR, line and raster frequencies, and a received-field counter. A grey lamp means the detector is inactive, blue means it is listening, and green means it has detected a signal. NICAM goes green after valid NICAM frames are received. Changing **BW** during reception updates the detectors as the available bandwidth crosses their thresholds. The [FM-ATV component guide](components/fmatv/README.md) lists the sample-rate and bandwidth requirements for each indicator.
+
+Above 10 MS/s, **Frame stacking** averages the last six PAL fields. Service info shows progress from **0/6** to **6/6**. Receiver Control can toggle stacking and select **FM0** (default), **FM1** or **FM2** during reception.
+
 ## DAB reception
 
 Select **Mode → DAB**, then a Band III channel. The display shows, for example,
@@ -707,6 +718,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
 | `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
 | `/control/program/101` | During DVB reception with the embedded player, watch a program using its service ID. Read `programs` (ID, name and provider) and `selected_program` from `/status`. |
+| `/control/fmatv/framestack/on`, `/control/fmatv/framestack/off` | Toggle six-field stacking above 10 MS/s. Read `fmatv_framestack_enabled` in `/status`. |
 | `/control/fmatv/fmdetector/{mode}` | Select `fm0` (default), `fm1` or `fm2` before or during FM-ATV reception. Read `fmatv_fmdetector` in `/status`. |
 | `/control/tsscatterfix/on`, `/control/tsscatterfix/off` | Operate the TSscatterFix button. While enabled, the lower-right HDMI inset shows recovery progress until the recovered image is available. Read `tsscatterfix_enabled` in `/status`. |
 | `/control/eit/on`, `/control/eit/off`, `/control/eit/toggle` | Open, close or toggle the desktop EIT window and the programme overlay on active HDMI output, just like the EIT button. Read `eit_overlay_enabled` in `/status`. |
@@ -857,7 +869,9 @@ or N2+, use `bash tools/build_odroid_n2.sh --install-deps` for the board setting
 
 The build helper checks headers and link dependencies before building. For
 FM-ATV it checks SDL2 and single-precision FFTW (`fftw3f`). On Debian, Ubuntu
-and Mint, `--install-deps` includes `libsdl2-dev` and `libfftw3-dev`. With
+and Mint, the helper also checks for `vlc-plugin-base`, which supplies runtime
+plugins for the embedded VLC player. `--install-deps` includes this package
+alongside `libsdl2-dev` and `libfftw3-dev`. With
 `--check`, missing dependencies are reported with package commands for the
 detected distribution (APT, DNF, Zypper or Pacman). Missing
 optional drivers produce warnings. Select your receiver in **Input**, choose the
