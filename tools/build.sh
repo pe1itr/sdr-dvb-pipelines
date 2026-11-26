@@ -106,7 +106,7 @@ build_package_help() {
         [pkg-config]=pkg-config [rustc]=rustc [cargo]=cargo [gtk+-3.0]=libgtk-3-dev
         [glib-2.0]=libglib2.0-dev [json-c]=libjson-c-dev [fftw3f]=libfftw3-dev
         [SoapySDR]=libsoapysdr-dev [uhd]=libuhd-dev [alsa]=libasound2-dev
-        [samplerate]=libsamplerate0-dev [sdl2]=libsdl2-dev [libvlc]=libvlc-dev [zvbi-0.2]=libzvbi-dev)
+        [samplerate]=libsamplerate0-dev [sdl2]=libsdl2-dev [libvlc]=libvlc-dev [vlc-plugin-base]=vlc-plugin-base [zvbi-0.2]=libzvbi-dev)
     local -A arch=([cc]=gcc [g++]=gcc [pkg-config]=pkgconf [rustc]=rust [cargo]=rust
         [gtk+-3.0]=gtk3 [glib-2.0]=glib2 [fftw3f]=fftw [SoapySDR]=soapysdr [uhd]=libuhd
         [alsa]=alsa-lib [samplerate]=libsamplerate [zvbi-0.2]=zvbi)
@@ -151,7 +151,7 @@ build_package_help() {
 build_install_apt() {
     local -a prefix=() packages=(build-essential pkg-config libgtk-3-dev libglib2.0-dev
         libjson-c-dev libfftw3-dev libsoapysdr-dev libuhd-dev libboost-system-dev
-        libasound2-dev libsamplerate0-dev libsdl2-dev libvlc-dev libavcodec-dev libavformat-dev
+        libasound2-dev libsamplerate0-dev libsdl2-dev libvlc-dev vlc-plugin-base libavcodec-dev libavformat-dev
         libavutil-dev libswscale-dev libzvbi-dev)
     local compiler
     for compiler in "${CC:-cc}" "${CXX:-g++}"; do
@@ -272,6 +272,14 @@ build_main() (
             missing+=("tool:$program")
         fi
     done
+    if [[ $manager == apt ]]; then
+        if [[ $(dpkg-query -W -f='${db:Status-Status}' vlc-plugin-base 2>/dev/null) == installed ]]; then
+            report OK 'vlc-plugin-base: embedded player runtime plugins installed'
+        else
+            report ERROR 'vlc-plugin-base: runtime plugins for the embedded VLC player missing'
+            missing+=(vlc-plugin-base)
+        fi
+    fi
     local source
     for source in third_party/leansdr/src/apps/leandvb.cc third_party/ldpc/ldpc_tool.cc \
                   components/dvbt/src/dvbt_outer.c components/dvbt2/rust/Cargo.toml \

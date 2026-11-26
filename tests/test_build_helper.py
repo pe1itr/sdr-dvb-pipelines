@@ -20,6 +20,9 @@ with open(os.environ['BUILD_TEST_LOG'], 'a') as out:
 if name in ('rustc', 'cargo'):
     print(name, os.getenv('RUST_VERSION', '1.70.0'))
     sys.exit(0)
+if name == 'dpkg-query':
+    print(os.getenv('VLC_PLUGIN_STATUS', 'installed'))
+    sys.exit(0)
 if name == 'pkg-config':
     if args[-1] == os.getenv('MISSING_LIBRARY'):
         sys.exit(1)
@@ -55,7 +58,7 @@ class BuildEnvironment:
         for name in ('bash', 'dirname', 'uname', 'mktemp', 'rm', 'cat', 'sed', 'awk', 'realpath', 'ln', 'getconf', 'mkdir'):
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ('cc', 'g++', 'clang', 'ccache', 'make', 'pkg-config', 'cargo', 'rustc',
-                     'ffmpeg', 'vlc', 'cvlc', 'ffplay', 'direwolf', 'SoapySDRUtil'):
+                     'dpkg-query', 'ffmpeg', 'vlc', 'cvlc', 'ffplay', 'direwolf', 'SoapySDRUtil'):
             target = self.bin / name
             target.write_text('#!' + sys.executable + '\n' + STUB)
             target.chmod(0o755)
@@ -139,10 +142,22 @@ class BuildHelperTests(unittest.TestCase):
                     text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('APT update', result.stdout)
+                self.assertIn('vlc-plugin-base', next(line for line in result.stdout.splitlines() if line.startswith('APT install')))
                 self.assertIn('libzvbi-dev', result.stdout)
                 self.assertIn('libsdl2-dev', result.stdout)
                 self.assertIn('libfftw3-dev', result.stdout)
                 self.assertTrue(self.fixture.commands('make'))
+
+    def test_ubuntu_missing_vlc_plugins_blocks_build(self):
+        result = subprocess.run([BASH, '-c',
+            'source "$1"; source() { ID=ubuntu; }; build_main',
+            'test', str(ROOT / 'tools/build.sh')], cwd=self.temp.name,
+            env={**self.fixture.env, 'VLC_PLUGIN_STATUS': 'config-files'},
+            text=True, capture_output=True)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn('[ERROR] vlc-plugin-base', result.stdout)
+        self.assertIn('sudo apt install vlc-plugin-base', result.stdout)
+        self.assertFalse(self.fixture.commands('make'))
 
     def test_package_advice(self):
         for distro, command in [('linuxmint ubuntu debian', 'apt install libgtk-3-dev libavformat-dev'),
