@@ -19,6 +19,7 @@ typedef struct {
     double aspect;
     gboolean ready, dirty, local_display;
     gboolean active, muted, analog;
+    gboolean framestack_enabled, framestack_reset; /* Protected by mutex. */
     unsigned analog_flags; /* Last PAL field, protected by mutex. */
     gboolean volume_initialized;
     GThread *relay;

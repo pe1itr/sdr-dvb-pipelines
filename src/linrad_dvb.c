@@ -125,7 +125,7 @@ typedef struct {
     Stage stages[4];
     int stage_count;
     GtkWidget *window, *controls, *standard_box, *sr_box, *fec_box, *gi_box, *gi_label, *constellation_box;
-    GtkWidget *scatter_box, *power_button, *power_label, *status, *preview, *log;
+    GtkWidget *scatter_box, *framestack_box, *power_button, *power_label, *status, *preview, *log;
     GtkWidget *record_button, *reception_button, *reception_dialog;
     GtkWidget *moon_item, *moon_dialog, *moon_dx, *moon_enable, *moon_shift, *moon_time, *moon_echo, *moon_mixer, *moon_cfo, *moon_hint;
     MoonStationRow moon_rows[2];
@@ -1150,6 +1150,21 @@ static gboolean read_log(gint fd, GIOCondition condition, gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static gboolean framestack_available(App *a) {
+    return a->standard==STANDARD_FMATV &&
+        g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL)>10000000;
+}
+
+static void framestack_changed(GtkToggleButton *button, gpointer data) {
+    App *a=data;
+    gboolean enabled=gtk_toggle_button_get_active(button);
+    VideoView *v=&a->video_view;
+    g_mutex_lock(&v->mutex);
+    v->framestack_enabled=enabled;
+    v->framestack_reset=TRUE;
+    g_mutex_unlock(&v->mutex);
+}
+
 static void scatter_refresh(App *a) {
     if (a->gi_box) gtk_widget_set_visible(a->gi_box,a->standard==2);
     if (a->gi_label) gtk_widget_set_visible(a->gi_label,a->standard==2);
@@ -1159,6 +1174,12 @@ static void scatter_refresh(App *a) {
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     gboolean fmatv = a->standard == STANDARD_FMATV;
+    if (a->framestack_box) {
+        gboolean available=framestack_available(a);
+        if (!available) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->framestack_box),FALSE);
+        gtk_widget_set_visible(a->framestack_box,fmatv);
+        gtk_widget_set_sensitive(a->framestack_box,available && !a->stopping);
+    }
     if (a->video_frame) {
         gtk_frame_set_label(GTK_FRAME(a->video_frame), fmatv ? "FM-ATV · PAL" :
             a->video_view.muted ? "Received video · Muted (M)" : "Received video");
@@ -1835,6 +1856,11 @@ static gboolean tune_frequency(App *a, double next, gboolean select_dab_channel)
         do { sent = a->tune_fd < 0 ? -1 : write(a->tune_fd, payload, (size_t)length); }
         while (sent < 0 && a->tune_fd >= 0 && errno == EINTR);
         if (sent != length) { status(a, "Tuning command not sent; try again"); return FALSE; }
+        if (a->standard==STANDARD_FMATV) {
+            g_mutex_lock(&a->video_view.mutex);
+            a->video_view.framestack_reset=TRUE;
+            g_mutex_unlock(&a->video_view.mutex);
+        }
     }
     if (a->scatter_backend) {
         g_atomic_int_set(&a->scatter_backend->reset_dsmcc, TRUE);
@@ -5528,6 +5554,11 @@ static void gui(App *a, gboolean start_usb) {
     atk_object_set_name(gtk_widget_get_accessible(a->scatter_box),"TSscatterFix on/off");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),a->scatter);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->scatter_box,FALSE,FALSE,0);
+    a->framestack_box=gtk_toggle_button_new_with_label("Fram Stacking");
+    gtk_widget_set_name(a->framestack_box,"spectrum-scatter");
+    gtk_widget_set_tooltip_text(a->framestack_box,"Average the last six PAL fields above 10 MS/s.");
+    gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),a->framestack_box,FALSE,FALSE,0);
+    g_signal_connect(a->framestack_box,"toggled",G_CALLBACK(framestack_changed),a);
     ts_info_view_create(&a->information, GTK_WINDOW(a->window), a->iq_view.filter_controls, pmt_item);
     gtk_box_pack_start(GTK_BOX(a->iq_view.filter_controls),bonding_create_button(a),FALSE,FALSE,0);
     a->usb_toggle=gtk_toggle_button_new_with_label("USB");
@@ -6054,6 +6085,15 @@ static const char *network_control(gpointer data,const char *command,const char 
         return "200 OK";
     }
     if (a->stopping) return control_failure(error,conflict,"Wait until the receiver has stopped");
+    if (g_str_has_prefix(command,"fmatv/framestack/")) {
+        const char *action=command+strlen("fmatv/framestack/");
+        if (strcmp(action,"on") && strcmp(action,"off"))
+            return control_failure(error,bad,"Expected on or off");
+        if (!a->framestack_box || !framestack_available(a))
+            return control_failure(error,conflict,"Frame stacking requires FM-ATV above 10 MS/s");
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->framestack_box),!strcmp(action,"on"));
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"tsscatterfix/")) {
         const char *mode=command+strlen("tsscatterfix/");
         if (strcmp(mode,"on") && strcmp(mode,"off"))
@@ -6289,6 +6329,7 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
     BOOL(root,"tsscatterfix_enabled",use_scatter(a));
+    BOOL(root,"fmatv_framestack_enabled",a->framestack_box && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->framestack_box)));
     gboolean monitor_on=usb_receiver_running(a->usb_receiver);
     STR(root,"monitor_mode",monitor_on ? monitor_api_modes[usb_receiver_mode(a->usb_receiver)] : "off");
     BOOL(root,"monitor_fm_squelch_enabled",usb_receiver_fm_squelch(a->usb_receiver));

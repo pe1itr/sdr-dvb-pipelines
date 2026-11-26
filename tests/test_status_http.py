@@ -196,6 +196,7 @@ class ReceiverControlTests(unittest.TestCase):
             cfg['status'].update(enabled='true', control='true', port=str(self.port))
             cfg['session']['renderer'] = 'embedded'
             cfg['linrad']['port'] = str(free_port())
+            cfg['linrad']['sample_rate'] = '12000000'
             config = Path(tmp) / 'test.ini'
             with config.open('w') as out:
                 cfg.write(out)
@@ -257,6 +258,13 @@ class ReceiverControlTests(unittest.TestCase):
         self.assertTrue(state['control_enabled'])
         self.assertEqual(state['presets'][1], {'slot': 2, 'label': 'Test RTL', 'saved': True})
         self.assertEqual(self.get('/control/start')[0], 405)
+        put('fmatv/framestack/on', 409)
+        put('mode/fm-atv')
+        self.assertFalse(self.get()[1]['fmatv_framestack_enabled'])
+        put('fmatv/framestack/invalid', 400)
+        for action in ('on', 'on', 'off', 'off'):
+            put('fmatv/framestack/' + action)
+            self.assertEqual(self.get()[1]['fmatv_framestack_enabled'], action == 'on')
         for mode, bandwidth in [('DAB', 1536000), ('DVB-T2', 8000000)]:
             put('mode/' + mode.lower())
             state = self.get()[1]

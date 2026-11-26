@@ -3074,9 +3074,30 @@ static gboolean exercise_fmatv(gpointer data) {
         g_assert_true(gtk_widget_get_mapped(v->area));
         g_assert_true(gtk_widget_get_mapped(v->hdmi_area));
         g_assert_cmpfloat(v->aspect,==,4./3);
-        gtk_button_clicked(GTK_BUTTON(a->power_button));
+        g_assert_false(gtk_widget_get_visible(a->scatter_box));
+        g_assert_true(gtk_widget_get_mapped(a->framestack_box));
+        gtk_button_clicked(GTK_BUTTON(a->framestack_box));
+        g_assert_true(v->framestack_enabled);
         phase=2;
-    } else if (phase==2 && !a->running) {
+    } else if (phase==2) {
+        VideoView *v=&a->video_view;
+        g_mutex_lock(&v->mutex);
+        gboolean received=!v->framestack_reset;
+        g_mutex_unlock(&v->mutex);
+        if (!received) return G_SOURCE_CONTINUE;
+        g_key_file_set_boolean(a->config,"status","control",TRUE);
+        const char *error=NULL;
+        g_assert_cmpstr(network_control(a,"fmatv/framestack/on",&error),==,"200 OK");
+        g_mutex_lock(&v->mutex);
+        g_assert_false(v->framestack_reset);
+        g_mutex_unlock(&v->mutex);
+        g_assert_cmpstr(network_control(a,"fmatv/framestack/off",&error),==,"200 OK");
+        g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->framestack_box)));
+        g_assert_true(a->running);
+        g_assert_cmpint(v->hdmi_state,==,HDMI_VIDEO);
+        gtk_button_clicked(GTK_BUTTON(a->power_button));
+        phase=3;
+    } else if (phase==3 && !a->running) {
         g_assert_false(a->video_view.ready);
         hdmi_monitor(a,0);
         gtk_main_quit();

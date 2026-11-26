@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "fmatv_view.h"
 #include "aligned_memory.h"
+#include "../components/fmatv/analog/light_stack.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -10,7 +11,11 @@
 static gpointer receive_fields(gpointer opaque) {
     VideoView *v = opaque;
     const size_t size = 4*FMATV_WIDTH*FMATV_HEIGHT;
-    unsigned char *packet = g_malloc(1+size);
+    /* Place the wire flag just before an aligned array of RGB32 pixels. */
+    uint32_t *storage = g_malloc(sizeof(uint32_t)+size);
+    uint32_t *pixels = storage+1;
+    unsigned char *packet = (unsigned char *)pixels-1;
+    LightStack *stack = NULL;
     size_t used = 0;
     while (!g_atomic_int_get(&v->stopping)) {
         struct pollfd p = {.fd=v->source_fd, .events=POLLIN};
@@ -25,14 +30,22 @@ static gpointer receive_fields(gpointer opaque) {
         used += n;
         if (used!=1+size) continue;
         g_mutex_lock(&v->mutex);
-        memcpy(v->frame,packet+1,size);
+        if (v->framestack_enabled) {
+            if (!stack) stack = g_new0(LightStack,1);
+            if (v->framestack_reset) light_stack_reset(stack);
+            light_stack_add(stack,pixels,(uint32_t *)v->frame);
+        } else {
+            memcpy(v->frame,pixels,size);
+        }
+        v->framestack_reset = FALSE;
         v->analog_flags = packet[0];
         v->frame_time = g_get_monotonic_time();
         v->ready = v->dirty = TRUE;
         g_mutex_unlock(&v->mutex);
         used = 0;
     }
-    g_free(packet);
+    g_free(stack);
+    g_free(storage);
     g_atomic_int_set(&v->input_ended,TRUE);
     return NULL;
 }
