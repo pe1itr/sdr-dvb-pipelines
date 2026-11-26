@@ -85,12 +85,16 @@ class BuildHelperTests(unittest.TestCase):
         self.assertEqual(self.fixture.commands('cc')[0]['cwd'], str(ROOT))
 
     def test_required_libraries_and_broken_headers_block_build(self):
-        for env in ({'MISSING_LIBRARY': 'uhd'}, {'FAIL_HEADER': 'vlc/vlc.h'}):
+        for env in ({'MISSING_LIBRARY': 'uhd'}, {'FAIL_HEADER': 'vlc/vlc.h'},
+                    {'MISSING_LIBRARY': 'sdl2'}, {'FAIL_HEADER': 'fftw3.h'}):
             with self.subTest(env=env):
                 self.fixture.env.update(env)
                 result = self.fixture.run()
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn('[ERROR]', result.stdout)
+                if 'sdl2' in env.values() or 'fftw3.h' in env.values():
+                    self.assertIn('FM-ATV', result.stdout)
+                    self.assertIn('development package missing' if 'MISSING_LIBRARY' in env else 'compile/link failed', result.stdout)
                 self.assertFalse(self.fixture.commands('make'))
                 for key in env: self.fixture.env.pop(key)
 
@@ -136,6 +140,8 @@ class BuildHelperTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn('APT update', result.stdout)
                 self.assertIn('libzvbi-dev', result.stdout)
+                self.assertIn('libsdl2-dev', result.stdout)
+                self.assertIn('libfftw3-dev', result.stdout)
                 self.assertTrue(self.fixture.commands('make'))
 
     def test_package_advice(self):

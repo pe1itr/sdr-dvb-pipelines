@@ -306,21 +306,29 @@ C
 int main() { std::thread t([] {}); t.join(); return std::popcount(7u) != 3; }
 CXX
     probe 'DVB-T2 C++20' "${cxx[@]}" "${cppflags[@]}" "${cxxflags[@]}" -std=gnu++20 "$temp/probe.cc" -o "$temp/probe" "${ldflags[@]}" -pthread "${ldlibs[@]}"
-    local module header flags libraries
+    local module header flags libraries probe_body label errors_before
     if command -v pkg-config >/dev/null; then
         while IFS='|' read -r module header; do
+            label=$module
+            probe_body='return 0;'
+            case $module in
+                sdl2) label='sdl2 (FM-ATV receiver threads)'; probe_body='SDL_mutex *m = SDL_CreateMutex(); SDL_DestroyMutex(m); return 0;' ;;
+                fftw3f) label='fftw3f (FM-ATV and IQ filtering)'; probe_body='fftwf_free(fftwf_alloc_real(16)); return 0;' ;;
+            esac
             if ! pkg-config --exists "$module"; then
-                report ERROR "$module: development package missing (custom installation? Add its .pc directory to PKG_CONFIG_PATH)"
+                report ERROR "$label: development package missing (custom installation? Add its .pc directory to PKG_CONFIG_PATH)"
                 missing+=("$module")
                 continue
             fi
             if ! flags=$(pkg-config --cflags "$module") || ! libraries=$(pkg-config --libs "$module"); then
-                report ERROR "$module: cannot read build flags"; continue
+                report ERROR "$label: cannot read build flags"; missing+=("$module"); continue
             fi
             split_words pc_cflags "$flags"
             split_words pc_libs "$libraries"
-            printf '#define _POSIX_C_SOURCE 200809L\n#include <sys/types.h>\n#include <%s>\nint main(void) { return 0; }\n' "$header" >"$temp/probe.c"
-            probe "$module" "${cc[@]}" "${cppflags[@]}" "${cflags[@]}" "${pc_cflags[@]}" "$temp/probe.c" -o "$temp/probe" "${ldflags[@]}" "${pc_libs[@]}" "${ldlibs[@]}"
+            printf '#define _POSIX_C_SOURCE 200809L\n#include <sys/types.h>\n#include <%s>\nint main(void) { %s }\n' "$header" "$probe_body" >"$temp/probe.c"
+            errors_before=$errors
+            probe "$label" "${cc[@]}" "${cppflags[@]}" "${cflags[@]}" "${pc_cflags[@]}" "$temp/probe.c" -o "$temp/probe" "${ldflags[@]}" "${pc_libs[@]}" "${ldlibs[@]}"
+            if ((errors>errors_before)); then missing+=("$module"); fi
         done <<'LIBRARIES'
 gtk+-3.0|gtk/gtk.h
 glib-2.0|glib.h

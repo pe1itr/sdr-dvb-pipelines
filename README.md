@@ -854,7 +854,9 @@ from the extracted source directory to install the required build packages and
 build. Run the script as your normal user. For a 64-bit Ubuntu/Debian ODROID-N2
 or N2+, use `bash tools/build_odroid_n2.sh --install-deps` for the board settings.
 
-The build helper checks headers and link dependencies before building. With
+The build helper checks headers and link dependencies before building. For
+FM-ATV it checks SDL2 and single-precision FFTW (`fftw3f`). On Debian, Ubuntu
+and Mint, `--install-deps` includes `libsdl2-dev` and `libfftw3-dev`. With
 `--check`, missing dependencies are reported with package commands for the
 detected distribution (APT, DNF, Zypper or Pacman). Missing
 optional drivers produce warnings. Select your receiver in **Input**, choose the
