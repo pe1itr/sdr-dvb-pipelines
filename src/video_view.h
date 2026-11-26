@@ -1,6 +1,7 @@
 #ifndef VIDEO_VIEW_H
 #define VIDEO_VIEW_H
 #include <gtk/gtk.h>
+#include "../components/fmatv/fmatv.h"
 #include <vlc/vlc.h>
 
 typedef struct VideoExternalChild VideoExternalChild;
@@ -20,7 +21,9 @@ typedef struct {
     gboolean ready, dirty, local_display;
     gboolean active, muted, analog;
     gboolean framestack_enabled, framestack_reset; /* Protected by mutex. */
-    unsigned analog_flags; /* Last PAL field, protected by mutex. */
+    FmatvFieldInfo analog_info;
+    guint64 analog_fields;
+    unsigned stack_fields; /* Last PAL field, protected by mutex. */
     gboolean volume_initialized;
     GThread *relay;
     gint stopping, relay_failed;

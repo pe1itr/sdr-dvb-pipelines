@@ -148,6 +148,7 @@ typedef struct {
     IQView iq_view;
     DecoderView decoder_view;
     VideoView video_view;
+    FmatvService analog_service;
     GtkWidget *hdmi_menu, *hdmi_menu_label, *hdmi_power, *hdmi_programs, *hdmi_preset_rows[6];
     gint64 hdmi_menu_refresh;
     ScatterView scatter_view;
@@ -1174,6 +1175,8 @@ static void scatter_refresh(App *a) {
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
     gboolean fmatv = a->standard == STANDARD_FMATV;
+    if (a->analog_service.stack)
+        gtk_stack_set_visible_child_name(GTK_STACK(a->analog_service.stack),fmatv ? "fmatv" : "digital");
     if (a->framestack_box) {
         gboolean available=framestack_available(a);
         if (!available) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->framestack_box),FALSE);
@@ -1184,6 +1187,8 @@ static void scatter_refresh(App *a) {
         gtk_frame_set_label(GTK_FRAME(a->video_frame), fmatv ? "FM-ATV · PAL" :
             a->video_view.muted ? "Received video · Muted (M)" : "Received video");
         gtk_widget_set_visible(a->video_view.output_button,!fmatv);
+        gtk_widget_set_visible(a->video_view.notice,!fmatv);
+        gtk_widget_set_visible(a->analog_service.caption,fmatv);
     }
     if (a->controls && a->constellation_box) {
         int rows[] = {1, 2, 4}; /* rate, FEC, constellation */
@@ -3376,15 +3381,32 @@ static gboolean decoder_tick(gpointer data) {
         g_mutex_lock(&v->mutex);
         gboolean fresh=a->running && !a->stopping && v->ready &&
             g_get_monotonic_time()-v->frame_time < 500000;
-        int flags=v->analog_flags;
+        FmatvFieldInfo info=v->analog_info;
+        guint64 fields=v->analog_fields;
+        gboolean stacking=v->framestack_enabled;
+        unsigned stacked=stacking && !v->framestack_reset ? v->stack_fields : 0;
+        unsigned flags=info.detected;
         g_mutex_unlock(&v->mutex);
+        if (a->analog_service.stack) {
+            gboolean running=a->running && !a->stopping;
+            double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
+            unsigned enabled=fmatv_detectors(rate,fmatv_bandwidth(a));
+            if (fields) enabled &= info.enabled;
+            fmatv_service_update(&a->analog_service,running ? enabled | (stacking ? FMATV_STACK : 0) : 0,
+                fresh ? flags : 0,fresh ? &info : NULL,running ? fields : 0,running ? stacked : 0);
+        }
         video_view_hdmi_update(v,fresh,fresh);
-        if (a->running && !a->stopping && v->notice) {
-            const char *notice=!fresh ? "FM0 · Waiting for PAL video" : (flags & FMATV_SYNC) ? ((flags & FMATV_BURST) ?
-                "FM0 · Sync locked · PAL colour burst" : "FM0 · Sync locked · Monochrome") :
-                "FM0 · Acquiring sync";
-            if (strcmp(gtk_label_get_text(GTK_LABEL(v->notice)),notice))
-                gtk_label_set_text(GTK_LABEL(v->notice),notice);
+        gint64 second=g_get_real_time()/G_USEC_PER_SEC;
+        if (a->analog_service.caption && second!=a->analog_service.caption_second) {
+            a->analog_service.caption_second=second;
+            GDateTime *utc=g_date_time_new_from_unix_utc(second);
+            char *stamp=g_date_time_format(utc,"%Y-%m-%d %H:%M:%S UTC");
+            char *call=g_key_file_get_string(a->config,"logging","my_callsign",NULL);
+            char *locator=g_key_file_get_string(a->config,"logging","my_locator",NULL);
+            char *caption=g_strconcat(stamp,call && *call ? "  " : "",call ? call : "",
+                locator && *locator ? "  " : "",locator ? locator : "",NULL);
+            gtk_label_set_text(GTK_LABEL(a->analog_service.caption),caption);
+            g_free(caption); g_free(call); g_free(locator); g_free(stamp); g_date_time_unref(utc);
         }
         if (a->running && !a->stopping && video_view_failed(v)) {
             a->exit_code=1; status(a,"FM-ATV video stream interrupted"); stop_pipeline(a);
@@ -5640,12 +5662,17 @@ static void gui(App *a, gboolean start_usb) {
     gtk_widget_set_margin_bottom(a->status,4);
     gtk_widget_set_size_request(a->status,-1,36);
     gtk_container_add(GTK_CONTAINER(status_frame),a->status);
+    fmatv_service_create(&a->analog_service,a->decoder_view.service_frame);
     gtk_box_pack_start(GTK_BOX(service_column),a->decoder_view.service_frame,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(service_column),status_frame,FALSE,FALSE,0);
     g_object_unref(a->decoder_view.service_frame);
     gtk_box_pack_start(GTK_BOX(receiver_row),decoder,FALSE,FALSE,0);
     GtkWidget *video_column=gtk_box_new(GTK_ORIENTATION_VERTICAL,5);
     GtkWidget *video_frame = video_view_create(&a->video_view);a->video_frame=video_frame;
+    a->analog_service.caption=gtk_label_new("");
+    gtk_label_set_ellipsize(GTK_LABEL(a->analog_service.caption),PANGO_ELLIPSIZE_END);
+    GtkWidget *video_box=gtk_widget_get_parent(a->video_view.notice);
+    gtk_box_pack_start(GTK_BOX(video_box),a->analog_service.caption,FALSE,FALSE,0);
     char *gpu_program = setting(a, "ffplay", "gpu_program"), *gpu_device = setting(a, "ffplay", "gpu_device");
     video_view_set_gpu_player(&a->video_view, gpu_program, gpu_device);
     g_free(gpu_program); g_free(gpu_device);

@@ -3051,10 +3051,28 @@ static gboolean exercise_network_info(gpointer data) {
 static gboolean exercise_fmatv(gpointer data) {
     App *a=data;
     static int ticks, phase;
+    static GtkAllocation service_size, video_size;
+    GtkWidget *analog_page=gtk_stack_get_child_by_name(GTK_STACK(a->analog_service.stack),"fmatv");
     g_assert_cmpint(++ticks,<,150);
     if (!phase) {
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_FILE);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), 0);
+        g_assert_cmpstr(gtk_stack_get_visible_child_name(GTK_STACK(a->analog_service.stack)),==,"digital");
+        /* The original FM-ATV layout used the digital service page with no output button. */
+        gtk_widget_hide(a->video_view.output_button);
+        gtk_widget_hide(analog_page);
+        phase=-1;
+        return G_SOURCE_CONTINUE;
+    } else if (phase==-1) {
+        gtk_widget_get_allocation(a->decoder_view.service_frame,&service_size);
+        gtk_widget_get_allocation(a->video_view.area,&video_size);
+        gtk_widget_show(analog_page);
+        g_key_file_set_string(a->config,"logging","my_callsign","PA0TEST");
+        g_key_file_set_string(a->config,"logging","my_locator","JO21QK");
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), STANDARD_FMATV);
+        g_assert_cmpstr(gtk_stack_get_visible_child_name(GTK_STACK(a->analog_service.stack)),==,"fmatv");
+        decoder_tick(a);
+        g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(a->analog_service.lamps[0])),"#888888"));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         g_assert_true(hdmi_monitor(a,1));
         gtk_button_clicked(GTK_BUTTON(a->power_button));
@@ -3063,7 +3081,7 @@ static gboolean exercise_fmatv(gpointer data) {
     } else if (phase==1 && a->video_view.hdmi_state==HDMI_VIDEO) {
         VideoView *v=&a->video_view;
         g_mutex_lock(&v->mutex);
-        gboolean locked=(v->analog_flags & (FMATV_SYNC|FMATV_BURST))==(FMATV_SYNC|FMATV_BURST);
+        gboolean locked=(v->analog_info.detected & (FMATV_SYNC|FMATV_BURST))==(FMATV_SYNC|FMATV_BURST);
         gboolean colour=FALSE;
         for (unsigned i=0; i<v->width*v->height; i+=19) {
             const guint32 rgb=((guint32 *)v->frame)[i];
@@ -3071,20 +3089,35 @@ static gboolean exercise_fmatv(gpointer data) {
         }
         g_mutex_unlock(&v->mutex);
         if (!locked || !colour) return G_SOURCE_CONTINUE;
+        g_assert_cmpint(gtk_widget_get_allocated_width(a->decoder_view.service_frame),==,service_size.width);
+        g_assert_cmpint(gtk_widget_get_allocated_height(a->decoder_view.service_frame),==,service_size.height);
+        g_assert_cmpint(gtk_widget_get_allocated_width(v->area),==,video_size.width);
+        g_assert_cmpint(gtk_widget_get_allocated_height(v->area),==,video_size.height);
         g_assert_true(gtk_widget_get_mapped(v->area));
         g_assert_true(gtk_widget_get_mapped(v->hdmi_area));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->analog_service.caption))," UTC  PA0TEST  JO21QK"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->analog_service.lamps[2])),"0/6"));
         g_assert_cmpfloat(v->aspect,==,4./3);
         g_assert_false(gtk_widget_get_visible(a->scatter_box));
         g_assert_true(gtk_widget_get_mapped(a->framestack_box));
         gtk_button_clicked(GTK_BUTTON(a->framestack_box));
         g_assert_true(v->framestack_enabled);
+        decoder_tick(a);
+        g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(a->analog_service.lamps[0])),"#36d866"));
+        g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(a->analog_service.lamps[2])),"#4098ef"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->analog_service.values[1])),"Hz"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->analog_service.values[2])),"Hz"));
         phase=2;
     } else if (phase==2) {
         VideoView *v=&a->video_view;
         g_mutex_lock(&v->mutex);
-        gboolean received=!v->framestack_reset;
+        gboolean received=!v->framestack_reset && v->stack_fields==6;
         g_mutex_unlock(&v->mutex);
         if (!received) return G_SOURCE_CONTINUE;
+        decoder_tick(a);
+        g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(a->analog_service.lamps[2])),"#36d866"));
+        g_assert_nonnull(strstr(gtk_label_get_text(GTK_LABEL(a->analog_service.lamps[2])),"6/6"));
+        g_assert_cmpint(atoi(gtk_label_get_text(GTK_LABEL(a->analog_service.values[3]))),>=,6);
         g_key_file_set_boolean(a->config,"status","control",TRUE);
         const char *error=NULL;
         g_assert_cmpstr(network_control(a,"fmatv/framestack/on",&error),==,"200 OK");
