@@ -521,6 +521,12 @@ static gboolean edit_converter_range(gpointer data) {
     int n=gtk_tree_model_iter_n_children(model,NULL);
     switch ((*step)++) {
     case 0:
+        gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,2)),6000000000.);
+        for (int sign=-1;sign<=1;sign+=2) {
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,3)),sign*900000000.);
+            const char *calculation=gtk_label_get_text(GTK_LABEL(gtk_grid_get_child_at(grid,0,4)));
+            g_assert_nonnull(strstr(calculation,sign>0 ? "(+900.000000)" : "(-900.000000)"));
+        }
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,1)),2300000000.);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,2)),2450000000.);
         gtk_spin_button_set_value(GTK_SPIN_BUTTON(gtk_grid_get_child_at(grid,1,3)),90000000.);
@@ -1945,6 +1951,19 @@ static void exercise_t2_mode(App *a) {
     g_assert_cmpint(read(control[0],command,sizeof(command)-1),==,-1);
     g_assert_cmpint(errno,==,EAGAIN);
     g_assert_false(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->filter_box)));
+    a->standard=STANDARD_FMATV;
+    g_key_file_set_integer(a->config,section,"sample_rate",12000000);
+    g_key_file_set_integer(a->config,section,"filter_bandwidth",8000000);
+    filter_step(a,-1);
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 7600000\n");
+    g_key_file_set_integer(a->config,section,"filter_bandwidth",251000);
+    filter_step(a,-1);
+    memset(command,0,sizeof(command));
+    g_assert_cmpint(read(control[0],command,sizeof(command)-1),>,0);
+    g_assert_cmpstr(command,==,"bandwidth 250000\n");
+    a->standard=3;
     close(control[0]); close(control[1]); a->tune_fd=-1; a->running=FALSE;
     g_key_file_set_integer(a->config,section,"sample_rate",saved_rate);
     g_key_file_set_integer(a->config,section,"filter_bandwidth",saved_width);
@@ -2037,6 +2056,19 @@ static gboolean exercise(gpointer data) {
     static int phase, ticks;
     g_assert_cmpint(++ticks, <, 100);
     if (phase == 0) {
+        int original_mode = a->standard;
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), STANDARD_FMATV);
+        show_mode(NULL,a);
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->mode_summary)), ==, "FM-ATV");
+        g_assert_true(gtk_widget_get_mapped(a->video_frame));
+        g_assert_false(gtk_widget_get_visible(a->fec_box));
+        g_assert_false(gtk_widget_get_sensitive(a->power_button));
+        g_assert_cmpint(a->stage_count, ==, 0);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), original_mode);
+        gtk_widget_hide(a->mode_dialog);
+        g_assert_cmpstr(gtk_frame_get_label(GTK_FRAME(a->video_frame)), !=, "FM-ATV · PAL");
+        g_assert_true(gtk_widget_get_visible(a->video_frame));
+        g_assert_true(gtk_widget_get_sensitive(a->power_button));
 #ifdef HAVE_LOCAL_KNUCKER
         exercise_knucker(a);
 #endif
@@ -3015,6 +3047,44 @@ static gboolean exercise_network_info(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+/* The config supplies a PAL colour IQ recording at least one second long. */
+static gboolean exercise_fmatv(gpointer data) {
+    App *a=data;
+    static int ticks, phase;
+    g_assert_cmpint(++ticks,<,150);
+    if (!phase) {
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box), SOURCE_FILE);
+        gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box), STANDARD_FMATV);
+        g_assert_true(gtk_widget_get_sensitive(a->power_button));
+        g_assert_true(hdmi_monitor(a,1));
+        gtk_button_clicked(GTK_BUTTON(a->power_button));
+        g_assert_true(a->running);
+        phase=1;
+    } else if (phase==1 && a->video_view.hdmi_state==HDMI_VIDEO) {
+        VideoView *v=&a->video_view;
+        g_mutex_lock(&v->mutex);
+        gboolean locked=(v->analog_flags & (FMATV_SYNC|FMATV_BURST))==(FMATV_SYNC|FMATV_BURST);
+        gboolean colour=FALSE;
+        for (unsigned i=0; i<v->width*v->height; i+=19) {
+            const guint32 rgb=((guint32 *)v->frame)[i];
+            if (abs((int)(rgb&255)-(int)((rgb>>16)&255))>40) { colour=TRUE; break; }
+        }
+        g_mutex_unlock(&v->mutex);
+        if (!locked || !colour) return G_SOURCE_CONTINUE;
+        g_assert_true(gtk_widget_get_mapped(v->area));
+        g_assert_true(gtk_widget_get_mapped(v->hdmi_area));
+        g_assert_cmpfloat(v->aspect,==,4./3);
+        gtk_button_clicked(GTK_BUTTON(a->power_button));
+        phase=2;
+    } else if (phase==2 && !a->running) {
+        g_assert_false(a->video_view.ready);
+        hdmi_monitor(a,0);
+        gtk_main_quit();
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
+}
+
 int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--test-bonding")) {gtk_init(&argc,&argv);exercise_bonding();return 0;}
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=bonding")) return dvbt_bonding_main(argc-1,argv+1);
@@ -3023,10 +3093,12 @@ int main(int argc, char **argv) {
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr")) return leansdr_backend_main(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--decoder-worker=dvbt"))
         return dvbt_backend_main(argc-1, argv+1);
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=fmatv")) return fmatv_worker(argc-1,argv+1);
+    gboolean fmatv_test=argc==3 && !strcmp(argv[1],"--test-fmatv");
     gboolean preset_test=argc==3 && !strcmp(argv[1],"--test-presets");
     gboolean moon_test=argc==3 && !strcmp(argv[1],"--test-moon");
     gboolean network_test=argc==3 && !strcmp(argv[1],"--test-network-info");
-    if (preset_test || moon_test || network_test) {--argc;++argv;}
+    if (fmatv_test || preset_test || moon_test || network_test) {--argc;++argv;}
     g_assert_cmpint(argc, ==, 2);
     App a = {.sr = 125000, .tune_fd = -1};
     a.config = g_key_file_new();
@@ -3034,7 +3106,7 @@ int main(int argc, char **argv) {
     a.directory = g_path_get_dirname(a.config_path);
     g_assert_true(g_key_file_load_from_file(a.config, a.config_path, G_KEY_FILE_KEEP_COMMENTS, NULL));
     signal(SIGPIPE, SIG_IGN);
-    g_timeout_add(150, network_test ? exercise_network_info : moon_test ? exercise_moon : preset_test ? exercise_presets : exercise, &a);
+    g_timeout_add(fmatv_test ? 50 : 150, fmatv_test ? exercise_fmatv : network_test ? exercise_network_info : moon_test ? exercise_moon : preset_test ? exercise_presets : exercise, &a);
     gui(&a,FALSE);
     g_assert_false(a.running);
     g_assert_cmpint(a.exit_code, ==, 0);

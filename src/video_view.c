@@ -24,7 +24,7 @@ static void output_controls(VideoView *v) {
     const char *label = v->external ? "Terug in venster" : "Extern op GPU";
     if (g_strcmp0(gtk_button_get_label(GTK_BUTTON(v->output_button)), label))
         gtk_button_set_label(GTK_BUTTON(v->output_button), label);
-    gtk_widget_set_sensitive(v->output_button, !v->hdmi_window && v->active && v->local_display &&
+    gtk_widget_set_sensitive(v->output_button, !v->analog && !v->hdmi_window && v->active && v->local_display &&
         !g_atomic_int_get(&v->stopping) && !g_atomic_int_get(&v->input_ended));
 }
 
@@ -441,7 +441,7 @@ void video_view_stop(VideoView *v) {
     if (v->vlc) { libvlc_release(v->vlc); v->vlc = NULL; }
     if (v->source_fd >= 0) { close(v->source_fd); v->source_fd = -1; }
     if (v->udp_fd >= 0) { close(v->udp_fd); v->udp_fd = -1; }
-    v->active = FALSE; v->program = 0;
+    v->analog = v->active = FALSE; v->program = 0;
     if (v->output_button) output_controls(v);
     if (v->notice) gtk_label_set_text(GTK_LABEL(v->notice), "");
 }
@@ -507,7 +507,7 @@ static void external_setup(gpointer unused) {
 }
 
 gboolean video_view_set_external(VideoView *v, gboolean external, GError **error) {
-    if (!v->active || !v->local_display || g_atomic_int_get(&v->stopping) ||
+    if (v->analog || !v->active || !v->local_display || g_atomic_int_get(&v->stopping) ||
         g_atomic_int_get(&v->input_ended)) {
         g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_FAILED,
             "Schakelen kan tijdens ontvangst met de ingebouwde speler.");

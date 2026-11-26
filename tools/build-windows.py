@@ -36,6 +36,7 @@ def main():
         words = shlex.split(subprocess.check_output(["pkg-config", f"--define-variable=prefix={sdk}", option, *modules], env=env, text=True))
         return [re.sub(r"^(-[IL])(?:[A-Za-z]:[^ ]*)?/ucrt64(?=/|$)", lambda m: m[1] + str(sdk), word) for word in words]
     cflags, libs = pkg("--cflags"), pkg("--libs")
+    libs.append("-lSDL2")
     # New Boost makes System header-only; UHD's .pc still names its old library.
     if not (sdk / "lib/libboost_system.dll.a").exists():
         libs = [word for word in libs if word != "-lboost_system"]
@@ -50,6 +51,7 @@ def main():
     gui_sources = [f"src/{name}.{'cc' if name in cpp else 'c'}" for name in gui]
     gui_sources += ["third_party/leansdr/src/apps/leandvb.cc"]
     moon_sources = ["components/moon/moon.c", "third_party/astronomy/astronomy.c"]
+    gui_sources += ["src/fmatv_view.c", "components/fmatv/worker.c", *map(str, Path("components/fmatv/analog").glob("*.c"))]
     gui_sources += moon_sources
     gui_sources += [str(p) for p in Path("components/bonding/src").glob("*.c")]
     gui_sources += [str(p) for p in Path("components/dvbt/src").glob("*.c") if p.name != "main.c"]
@@ -109,6 +111,8 @@ def main():
         compiler = "x86_64-w64-mingw32-g++" if source.endswith((".cc", ".cpp")) else "x86_64-w64-mingw32-gcc"
         flags = ["-std=gnu++20"] if compiler.endswith("g++") else ["-std=gnu11"]
         flags += ["-I" + str(build / "generated")]
+        if source.startswith("components/fmatv/analog/"):
+            flags += ["-DLINRAD_WIN32_IMPLEMENTATION", "-I" + str(sdk / "include/SDL2")]
         if source.startswith("components/dvbt2/") or source == "src/dvbt2_backend.cc":
             # Match OnAir's Release build and our Linux CXXFLAGS: the OFDM/FEC
             # hot loops need -O3's inlining/vectorization at broadcast rates.

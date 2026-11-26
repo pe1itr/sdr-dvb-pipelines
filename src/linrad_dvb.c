@@ -46,6 +46,7 @@
 #include "srt_output.h"
 #include "reception_log.h"
 #include "dab_view.h"
+#include "fmatv_view.h"
 #include "status_http.h"
 #include "sdr_rx_status.h"
 #if defined(__linux__) && (defined(__arm__) || defined(__aarch64__) || defined(HAVE_LOCAL_KNUCKER))
@@ -158,7 +159,8 @@ typedef struct {
     GtkWidget *pcm_udp_enabled, *pcm_udp_host, *pcm_udp_port;
 } App;
 
-static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2", "DAB"};
+enum { STANDARD_FMATV = 5 };
+static const char *standards[] = {"DVB-S", "DVB-S2", "DVB-T", "DVB-T2", "DAB", [STANDARD_FMATV] = FMATV_NAME};
 static const char *teletext_colors[] = {"red", "green", "yellow", "blue"};
 static const char *constellations[] = {"QPSK", "8PSK"};
 static const char *s2_latency_modes[] = {"auto", "low", "throughput"};
@@ -228,13 +230,13 @@ static const char *file_formats[] = {"s16", "u8", "cf32"};
 static gboolean hardware_source(App *a) { return a->source>0 && a->source<SOURCE_FILE; }
 enum { RENDER_CVLC, RENDER_VLC, RENDER_FFPLAY, RENDER_CUSTOM, RENDER_FILE, RENDER_EMBEDDED, RENDER_UDP, RENDER_SRT };
 static const char *renderers[] = {"cvlc", "vlc", "ffplay", "custom", "mpegts", "embedded", "udp", "srt"};
-static gboolean internal_player(App *a) { return a->standard != 4 && (a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP); }
+static gboolean internal_player(App *a) { return a->standard < 4 && (a->renderer == RENDER_EMBEDDED || a->renderer == RENDER_UDP); }
 static gboolean udp_output(App *a) {
-    return a->standard != 4 && (a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
+    return a->standard < 4 && (a->renderer == RENDER_UDP || (a->renderer == RENDER_EMBEDDED &&
         g_key_file_get_boolean(a->config, "renderer", "udp_enabled", NULL)));
 }
 static const char *ffplay_args = "-hide_banner -loglevel warning -autoexit -f mpegts";
-static gboolean use_scatter(App *a) { return a->standard != 4 && a->scatter; }
+static gboolean use_scatter(App *a) { return a->standard < 4 && a->scatter; }
 static const int airspyr2_rates[] = {2500000, 10000000};
 static const int sat_rates[] = {35000, 66000, 125000, 250000, 333000, 500000, 1000000, 1500000, 2000000, 4000000, 5000000};
 static const int dab_rates[] = {1536000};
@@ -343,7 +345,16 @@ static void store_dab_tuning(App *a) {
     else g_key_file_set_double(a->config,sources[a->source],"frequency",rf);
 }
 
-static double channel_bandwidth(App *a) { return a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
+static double fmatv_bandwidth(App *a) {
+    const char *section=sources[a->source];
+    double rate=g_key_file_get_double(a->config,section,"sample_rate",NULL);
+    double width=MIN(18000000, rx_usable_bandwidth(section,rate)-2*fabs(receiver_offset(a)));
+    if (g_key_file_get_boolean(a->config,section,"filter_enabled",NULL))
+        width=MIN(width,g_key_file_get_double(a->config,section,"filter_bandwidth",NULL));
+    return floor(width);
+}
+
+static double channel_bandwidth(App *a) { return a->standard==STANDARD_FMATV ? fmatv_bandwidth(a) : a->standard == 4 ? 1536000 : a->standard >= 2 ? a->sr : a->sr*1.35; }
 static gboolean bonding_enabled(App *a) {
     return a->standard==2 && !g_key_file_get_boolean(a->config,"dvbt","disable_bonding",NULL);
 }
@@ -700,6 +711,17 @@ static void build_iq_stages(App *a) {
             fatal("IQ filter width must be between max(10, sample-rate/256) and 0.95*sample-rate");
         add_number(s, "--filter-bandwidth", width);
     }
+    if (a->standard==STANDARD_FMATV) {
+        s=&a->stages[a->stage_count++];
+        s->args=g_ptr_array_new_with_free_func(g_free);
+        char *self=g_file_read_link("/proc/self/exe",NULL);
+        if (!self) fatal("Cannot locate the built-in FM-ATV receiver");
+        add(s,self); g_free(self);
+        add(s,"--decoder-worker=fmatv"); add_number(s,NULL,sample_rate);
+        add_number(s,NULL,fmatv_bandwidth(a)); add(s,format); add(s,filter_section);
+        g_free(format); g_free(ip);
+        return;
+    }
     if (a->standard == 4) {
         s=new_stage(a,"dab");
         add(s,"--state-dir");add(s,a->dab.directory);add(s,"--status-stdout");
@@ -793,8 +815,17 @@ static void build_iq_stages(App *a) {
     g_free(format); g_free(ip);
 }
 
+static const char *pipeline_problem(App *a) {
+    if (a->standard==STANDARD_FMATV && !hardware_ts_source(a)) {
+        double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
+        if (rate<5000000 || rate>64000000) return "FM-ATV needs a wideband IQ input (5–64 MS/s). Select 20 MS/s for PAL colour.";
+        if (fmatv_bandwidth(a)<FMATV_MIN_BANDWIDTH_HZ) return "FM-ATV: increase the IQ filter bandwidth or disable the filter.";
+    }
+    return receiver_offset_problem(a);
+}
+
 static void build_pipeline(App *a) {
-    const char *problem=receiver_offset_problem(a);
+    const char *problem=pipeline_problem(a);
     if (problem) fatal("%s",problem);
     if (!valid_fec(a, a->fec)) fatal("Invalid FEC for the selected standard/constellation");
     if (udp_output(a)) {
@@ -843,7 +874,7 @@ static void build_pipeline(App *a) {
             g_free(dir);
         }
     } else build_iq_stages(a);
-    if (a->standard==4) {
+    if (a->standard>=4) {
         for (int i=0;i<a->stage_count;++i) g_ptr_array_add(a->stages[i].args,NULL);
         return;
     }
@@ -907,6 +938,7 @@ static char *describe(App *a) {
             g_string_append(text, quoted); g_free(quoted);
         }
     }
+    if (a->standard == STANDARD_FMATV) g_string_append(text,"\n  | FM0 · synchronized PAL · internal video / HDMI");
     if (internal_player(a)) {
         g_string_append(text, "\n  | ");
         g_string_append(text, a->renderer == RENDER_UDP ? "UDP output" : "embedded video panel");
@@ -917,7 +949,7 @@ static char *describe(App *a) {
             g_free(host);
         }
     }
-    if (a->standard != 4 && a->renderer == RENDER_FILE) {
+    if (a->standard < 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory), *quoted = g_shell_quote(resolved);
         g_string_append_printf(text, "\n  > %s  (new MPEG-TS file)", quoted);
@@ -1126,17 +1158,32 @@ static void scatter_refresh(App *a) {
     if (a->local_pilot_box) gtk_widget_set_visible(a->local_pilot_box,a->standard==2 && !knucker_source(a));
     if (a->bonding_box) gtk_widget_set_visible(a->bonding_box,a->standard==2 && !knucker_source(a));
     if (a->scatter_view.frame) gtk_widget_set_visible(a->scatter_view.frame, use_scatter(a));
-    if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard!=4 && !use_scatter(a));
+    gboolean fmatv = a->standard == STANDARD_FMATV;
+    if (a->video_frame) {
+        gtk_frame_set_label(GTK_FRAME(a->video_frame), fmatv ? "FM-ATV · PAL" :
+            a->video_view.muted ? "Received video · Muted (M)" : "Received video");
+        gtk_widget_set_visible(a->video_view.output_button,!fmatv);
+    }
+    if (a->controls && a->constellation_box) {
+        int rows[] = {1, 2, 4}; /* rate, FEC, constellation */
+        for (unsigned i = 0; i < G_N_ELEMENTS(rows); ++i) {
+            gtk_widget_set_visible(gtk_grid_get_child_at(GTK_GRID(a->controls),0,rows[i]), !fmatv);
+        }
+        gtk_widget_set_visible(a->sr_box, !fmatv && !hardware_ts_source(a));
+        gtk_widget_set_visible(a->fec_box, !fmatv);
+        gtk_widget_set_visible(a->constellation_box, !fmatv);
+    }
+    if (a->programs.frame) gtk_widget_set_visible(a->programs.frame, a->standard<4 && !use_scatter(a));
     if (a->dab.info) {
         gboolean dab=a->standard==4;
         if (!dab) {a->dab.active=FALSE;gtk_widget_hide(a->dab.tii_dialog);}
         gtk_widget_set_visible(a->dab.image_frame,dab);
         gtk_widget_set_visible(a->dab.stations_frame,dab);gtk_widget_set_visible(a->video_frame,!dab);
         gtk_widget_set_visible(a->dab.tii_button,dab);
-        gtk_widget_set_visible(a->scatter_box,!dab);
+        gtk_widget_set_visible(a->scatter_box,!dab && !fmatv);
         for (unsigned i=0;i<G_N_ELEMENTS(a->information.buttons);++i) {
-            gtk_widget_set_visible(a->information.buttons[i],!dab);
-            if (dab) gtk_widget_hide(a->information.dialogs[i]);
+            gtk_widget_set_visible(a->information.buttons[i],!dab && !fmatv);
+            if (dab || fmatv) gtk_widget_hide(a->information.dialogs[i]);
         }
         gtk_widget_set_visible(a->dab_previous,dab);gtk_widget_set_visible(a->dab_next,dab);
         gtk_widget_set_sensitive(a->dab_previous,!a->stopping && hardware_source(a) && (dab_free_tuning(a) || dab_channel(a)>0));
@@ -1154,7 +1201,7 @@ static void scatter_refresh(App *a) {
         for (unsigned i=0;i<G_N_ELEMENTS(mixer);++i) gtk_widget_set_sensitive(mixer[i],a->standard==4 && a->source==2);
     }
     if (!a->scatter_box) return;
-    gtk_widget_set_sensitive(a->scatter_box, a->standard!=4 && !a->stopping);
+    gtk_widget_set_sensitive(a->scatter_box, a->standard<4 && !a->stopping);
     gtk_widget_set_tooltip_text(a->scatter_box, a->stopping ? "Waiting for reception to stop." :
         a->scatter ? "TSscatterFix on · click to turn off." : "TSscatterFix off · click to turn on.");
 }
@@ -1201,7 +1248,7 @@ static void power_refresh(App *a) {
         "Reception stopped due to an error. Check the status and log; click to restart."};
     if (waiting) replay_countdown_refresh(a);
     else gtk_label_set_text(GTK_LABEL(a->power_label), connecting ? "Stop SDR · connecting Afedri…" : a->source==SOURCE_FILE ? file_labels[state] : labels[state]);
-    const char *problem=a->running ? NULL : receiver_offset_problem(a);
+    const char *problem=a->running ? NULL : pipeline_problem(a);
     gtk_widget_set_tooltip_text(a->power_button, problem ? problem : waiting ? "Waiting for scheduled IQ playback. Click to cancel." : connecting ? "Waiting for confirmed Afedri IQ reception. Click to stop." : tips[state]);
     gtk_widget_set_sensitive(a->power_button, !a->stopping && !problem);
 }
@@ -1305,7 +1352,7 @@ static void child_exit(GPid pid, gint result, gpointer data) {
                 a->drain_timer=g_timeout_add(a->stages[1].pid ? (a->standard==2 && a->sr==40000 ? 30000 : 10000) : 1500,replay_drained,a);
                 gboolean alive=FALSE;
                 for (int j=0; j<a->stage_count; ++j) if (a->stages[j].pid) alive=TRUE;
-                if (!alive && !internal_player(a)) stop_pipeline(a);
+                if (!alive && !internal_player(a) && a->standard!=STANDARD_FMATV) stop_pipeline(a);
             } else stop_pipeline(a);
             break;
         }
@@ -1345,7 +1392,7 @@ static void start_pipeline(App *a) {
         const gint64 minute=60 * G_USEC_PER_SEC;
         replay_start=(g_get_real_time()/minute+1)*minute;
     }
-    const char *problem=receiver_offset_problem(a);
+    const char *problem=pipeline_problem(a);
     if (problem) { a->exit_code=1; status(a,problem); return; }
     a->record_log_used = 0;
     a->afedri_receiving = FALSE;
@@ -1404,7 +1451,7 @@ static void start_pipeline(App *a) {
     }
     int dab_pipe[2]={-1,-1};
     int pipes[2][2]={{-1,-1},{-1,-1}}, scatter_pipe[2] = {-1, -1}, log_pipe[2] = {-1, -1}, tune_pipe[2] = {-1, -1}, made = 0, nullfd = -1, output_fd = -1;
-    if (a->standard != 4 && a->renderer == RENDER_FILE) {
+    if (a->standard < 4 && a->renderer == RENDER_FILE) {
         char *path = setting(a, "renderer", "output_file");
         char *resolved = g_canonicalize_filename(path, a->directory);
         output_fd = open(resolved, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
@@ -1419,7 +1466,7 @@ static void start_pipeline(App *a) {
         if (!g_unix_open_pipe(tune_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(tune_pipe[1], TRUE, NULL)) goto pipe_error;
     }
-    for (; made < (a->standard == 4 || a->renderer == RENDER_FILE ? 1 : 2); ++made)
+    for (; made < (a->standard == 4 || (a->standard < 4 && a->renderer == RENDER_FILE) ? 1 : 2); ++made)
         if (!(hardware_ts_source(a) && made==0) && !g_unix_open_pipe(pipes[made], FD_CLOEXEC, NULL)) goto pipe_error;
     if (!g_unix_open_pipe(scatter_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
     nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
@@ -1440,7 +1487,12 @@ static void start_pipeline(App *a) {
         if (!g_unix_open_pipe(log_pipe, FD_CLOEXEC, NULL)) goto pipe_error;
         if (!g_unix_set_fd_nonblocking(log_pipe[0], TRUE, NULL)) goto pipe_error;
     }
-    if (internal_player(a)) {
+    if (a->standard==STANDARD_FMATV) {
+        GError *error=NULL;
+        if (!fmatv_view_start(&a->video_view,pipes[1][0],&error)) {
+            status(a,error->message); g_clear_error(&error); a->exit_code=1; goto pipe_error;
+        }
+    } else if (internal_player(a)) {
         char *url = NULL, *destination = NULL;
         if (udp_output(a)) {
             char *host = setting(a, "renderer", "udp_host");
@@ -1456,7 +1508,7 @@ static void start_pipeline(App *a) {
             a->exit_code = 1; goto pipe_error;
         }
     }
-    if (a->standard != 4) {
+    if (a->standard < 4) {
         /* Keep the TS relay available so recovery can be toggled live. */
         GError *error = NULL;
         scatter_view_reset(&a->scatter_view);
@@ -1503,7 +1555,7 @@ static void start_pipeline(App *a) {
         int in = i == 0 ? nullfd : pipes[i - 1][0];
         if (i == 0 && tune_pipe[0] >= 0) in = tune_pipe[0];
         int out = i == 1 && a->standard==4 ? nullfd : i == 1 && output_fd >= 0 ? output_fd : i < 2 ? pipes[i][1] : nullfd;
-        if (i == 1) out = a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
+        if (i == 1) out = a->standard==STANDARD_FMATV ? pipes[1][1] : a->standard==4 ? dab_pipe[1] : scatter_pipe[1];
         if (hardware_ts_source(a)) {
             in = i == 0 ? (tune_pipe[0]>=0 ? tune_pipe[0] : nullfd) : pipes[1][0];
             out = i == 0 ? scatter_pipe[1] : nullfd;
@@ -1584,7 +1636,7 @@ pipe_error:
 
 static void refresh_summaries(App *a) {
     if (!a->mode_summary) return;
-    char *text = a->source==SOURCE_MT_EXPRESS ? g_strdup_printf("%s · %d sym/s · %s",standards[a->standard],a->sr,
+    char *text = a->standard == STANDARD_FMATV ? g_strdup(FMATV_NAME) : a->source==SOURCE_MT_EXPRESS ? g_strdup_printf("%s · %d sym/s · %s",standards[a->standard],a->sr,
         (a->standard ? mt_s2_codes : mt_s1_codes)[mt_code_index(a)]) :
         g_strdup_printf("%s · %s %d%s · FEC %s",
         standards[a->standard], a->standard >= 2 ? "BW" : "Symb/s", a->sr,
@@ -1594,7 +1646,7 @@ static void refresh_summaries(App *a) {
 }
 
 static void refresh_preview(App *a) {
-    const char *problem=receiver_offset_problem(a);
+    const char *problem=pipeline_problem(a);
     power_refresh(a);
     if (a->sr_box) gtk_widget_queue_draw(a->sr_box);
     if (problem) {
@@ -1932,6 +1984,9 @@ static void filter_apply(App *a, int width, gboolean enabled) {
     if (enabled && a->bond_active && width<140000) {
         status(a,"Bonding IQ filter must include both channels; widen it or leave it off.");filter_refresh(a);return;
     }
+    if (enabled && a->standard==STANDARD_FMATV && width<FMATV_MIN_BANDWIDTH_HZ) {
+        status(a,"FM-ATV needs at least 250 kHz of IQ bandwidth.");filter_refresh(a);return;
+    }
     if (enabled && a->standard==4 && width<1536000) {
         status(a,"DAB IQ filter must pass at least 1.536 MHz.");filter_refresh(a);return;
     }
@@ -1955,11 +2010,19 @@ static void filter_apply(App *a, int width, gboolean enabled) {
     filter_refresh(a);
     if (!a->running) refresh_preview(a);
 }
+static int mode_filter_minimum(const App *a) {
+    switch (a->standard) {
+    case 3: return 8000000;
+    case 4: return 1536000;
+    case STANDARD_FMATV: return FMATV_MIN_BANDWIDTH_HZ;
+    default: return 0;
+    }
+}
+
 static void filter_changed(GtkWidget *widget, gpointer data) {
     App *a = data; (void)widget;
     int width = g_key_file_get_integer(a->config, sources[a->source], "filter_bandwidth", NULL);
-    if (a->standard == 3) width = MAX(width,8000000);
-    if (a->standard == 4) width = MAX(width,1536000);
+    width = MAX(width,mode_filter_minimum(a));
     filter_apply(a, width, gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->filter_box)));
 }
 static void filter_step(App *a, int direction) {
@@ -1968,8 +2031,9 @@ static void filter_step(App *a, int direction) {
     int rate = integer_setting(a, section, "sample_rate", 1, 100000000);
     int low = MAX(10, (rate+255)/256), high = MAX(low, (int)(rate*.95));
     int width = g_key_file_get_integer(a->config, section, "filter_bandwidth", NULL);
-    if (a->standard >= 3) {
-        low = MAX(low,a->standard==4 ? 1536000 : 8000000);
+    int minimum = mode_filter_minimum(a);
+    if (minimum) {
+        low = MAX(low,minimum);
         if (high < low) { filter_apply(a,low,TRUE); return; }
         width = MAX(width,low);
     }
@@ -2692,11 +2756,27 @@ static void mt_changed(GtkWidget *widget, gpointer data) {
             a->standard ? "s2_modcod" : "s1_rate",gtk_combo_box_get_active(GTK_COMBO_BOX(widget)));
     refresh_preview(a);
 }
+/* Apply FM-ATV defaults on an explicit mode/input change. Subsequent edits
+ * to the input rate (e.g. a narrow monochrome channel) remain available. */
+static void fmatv_input_defaults(App *a) {
+    const char *section=sources[a->source];
+    if (a->standard!=STANDARD_FMATV || !hardware_source(a)) return;
+    int rate=g_key_file_get_integer(a->config,section,"sample_rate",NULL);
+    if ((a->source==1 || a->source==2 || a->source==SOURCE_LIME || a->source==SOURCE_PLUTO) && rate<12000000)
+        g_key_file_set_integer(a->config,section,"sample_rate",20000000);
+    else if ((rx_rsp(section) || a->source==SOURCE_AIRSPYR2) && rate<8000000)
+        g_key_file_set_integer(a->config,section,"sample_rate",a->source==SOURCE_AIRSPYR2 ? 10000000 : 8000000);
+    if (g_key_file_get_double(a->config,section,"filter_bandwidth",NULL)<FMATV_MIN_BANDWIDTH_HZ)
+        g_key_file_set_boolean(a->config,section,"filter_enabled",FALSE);
+}
+
 static void source_changed(GtkWidget *widget, gpointer data) {
     App *a = data;
     if (a->running) return;
+    int previous_source=a->source;
     gboolean previous_ts=hardware_ts_source(a);
     a->source = gtk_combo_box_get_active(GTK_COMBO_BOX(a->source_box));
+    if (previous_source!=a->source) fmatv_input_defaults(a);
     gboolean knucker=knucker_source(a);
     gtk_widget_set_sensitive(a->standard_box,!hardware_ts_source(a));
     if (hardware_ts_source(a) && widget==a->source_box) {
@@ -2858,6 +2938,7 @@ static void knucker_bandwidth_changed(GtkWidget *widget, gpointer data) {
 }
 
 static void populate_rates(App *a) {
+    if (a->standard == STANDARD_FMATV) return;
     gtk_widget_set_visible(a->sr_box,!hardware_ts_source(a));
     if (a->knucker_bw_row) gtk_widget_set_visible(a->knucker_bw_row,knucker_source(a));
     if (a->source==SOURCE_MT_EXPRESS) {
@@ -2991,7 +3072,8 @@ static void standard_changed(GtkWidget *widget, gpointer data) {
         tuning_refresh(a);
     }
     populate_rates(a); populate_fecs(a);
-    if (a->standard==4 && a->source_box) source_changed(a->source_box,a);
+    fmatv_input_defaults(a);
+    if (a->standard>=4 && a->source_box) source_changed(a->source_box,a);
     else if (a->frequency_box && converter_ranges_active(a)) {
         store_converter_tuning(a,configured_channel_hz(a));
         source_changed(a->source_box,a);
@@ -3263,6 +3345,26 @@ static gboolean decoder_tick(gpointer data) {
     App *a=data;
     if (a->scatter_backend) dsmcc_messages_expire(&a->messages);
     update_hdmi_menu(a);
+    if (a->standard==STANDARD_FMATV) {
+        VideoView *v=&a->video_view;
+        g_mutex_lock(&v->mutex);
+        gboolean fresh=a->running && !a->stopping && v->ready &&
+            g_get_monotonic_time()-v->frame_time < 500000;
+        int flags=v->analog_flags;
+        g_mutex_unlock(&v->mutex);
+        video_view_hdmi_update(v,fresh,fresh);
+        if (a->running && !a->stopping && v->notice) {
+            const char *notice=!fresh ? "FM0 · Waiting for PAL video" : (flags & FMATV_SYNC) ? ((flags & FMATV_BURST) ?
+                "FM0 · Sync locked · PAL colour burst" : "FM0 · Sync locked · Monochrome") :
+                "FM0 · Acquiring sync";
+            if (strcmp(gtk_label_get_text(GTK_LABEL(v->notice)),notice))
+                gtk_label_set_text(GTK_LABEL(v->notice),notice);
+        }
+        if (a->running && !a->stopping && video_view_failed(v)) {
+            a->exit_code=1; status(a,"FM-ATV video stream interrupted"); stop_pipeline(a);
+        }
+        return G_SOURCE_CONTINUE;
+    }
     if (a->standard==4) {
         video_view_hdmi_update(&a->video_view,FALSE,FALSE);
         dab_view_tick(&a->dab,a->running && !a->stopping);scatter_refresh(a);
@@ -4019,6 +4121,38 @@ static void hackrf_amp_changed(GtkComboBox *box, gpointer data) {
     refresh_preview(a);
 }
 
+typedef struct {
+    App *app;
+    GtkListStore *model;
+    GtkWidget *label, *fields[3];
+} ConverterPreview;
+
+static void converter_preview_refresh(GtkWidget *edited, gpointer data) {
+    ConverterPreview *p=data;
+    double rf=configured_channel_hz(p->app), shift=receiver_offset(p->app);
+    double lo=0;
+    GtkTreeModel *model=GTK_TREE_MODEL(p->model);
+    GtkTreeIter it;
+    gboolean any=gtk_tree_model_get_iter_first(model,&it);
+    for (gboolean valid=any;valid;valid=gtk_tree_model_iter_next(model,&it)) {
+        gint64 low,high,offset;
+        gtk_tree_model_get(model,&it,0,&low,1,&high,2,&offset,-1);
+        if (rf>=low && rf<=high) { lo=offset; break; }
+    }
+    if (!any && !converter_ranges_active(p->app)) lo=converter_lo(p->app,rf);
+    double low=gtk_spin_button_get_value(GTK_SPIN_BUTTON(p->fields[0]));
+    double high=gtk_spin_button_get_value(GTK_SPIN_BUTTON(p->fields[1]));
+    gboolean draft=edited && rf>=low && rf<=high;
+    if (draft) lo=gtk_spin_button_get_value(GTK_SPIN_BUTTON(p->fields[2]));
+    if (p->app->standard==4 && p->app->source==2 &&
+        g_key_file_get_boolean(p->app->config,"dab","mixer_enabled",NULL)) lo=0;
+    char *text=g_strdup_printf("SDR/IF = receive RF − converter LO − receiver offset\n"
+        "%s%.6f − (%+.6f) − (%+.6f) = %.6f MHz",
+        draft ? "Entered range: " : "",rf/1e6,lo/1e6,shift/1e6,(rf-lo-shift)/1e6);
+    gtk_label_set_text(GTK_LABEL(p->label),text);
+    g_free(text);
+}
+
 static void converter_ranges_clicked(GtkButton *button,gpointer data) {
     (void)button;
     App *a=data;
@@ -4058,12 +4192,19 @@ static void converter_ranges_clicked(GtkButton *button,gpointer data) {
     gtk_dialog_add_button(GTK_DIALOG(dialog),"Remove selected",REMOVE_RANGE);
     GtkWidget *message=gtk_label_new("Outside the listed RF ranges the converter offset is zero.");
     gtk_grid_attach(GTK_GRID(grid),message,0,5,2,1);
+    ConverterPreview preview={a,model,gtk_label_new(NULL),{field[0],field[1],field[2]}};
+    gtk_label_set_xalign(GTK_LABEL(preview.label),0);
+    gtk_grid_attach(GTK_GRID(grid),preview.label,0,4,2,1);
+    for (int i=0;i<3;i++)
+        g_signal_connect(field[i],"value-changed",G_CALLBACK(converter_preview_refresh),&preview);
+    converter_preview_refresh(NULL,&preview);
     gtk_widget_show_all(dialog);
     for (;;) {
         int response=gtk_dialog_run(GTK_DIALOG(dialog));
         if (response==REMOVE_RANGE) {
             if (gtk_tree_selection_get_selected(gtk_tree_view_get_selection(GTK_TREE_VIEW(view)),NULL,&iter))
                 gtk_list_store_remove(model,&iter);
+            converter_preview_refresh(NULL,&preview);
             continue;
         }
         if (response==ADD_RANGE) {
@@ -4086,6 +4227,7 @@ static void converter_ranges_clicked(GtkButton *button,gpointer data) {
             }
             gtk_list_store_insert_with_values(model,&iter,-1,0,row[0],1,row[1],2,row[2],-1);
             gtk_label_set_text(GTK_LABEL(message),"");
+            converter_preview_refresh(NULL,&preview);
             continue;
         }
         if (response==GTK_RESPONSE_APPLY) {
@@ -4916,7 +5058,7 @@ static gboolean apply_renderer(App *a) {
         g_key_file_set_string(a->config, "paths", "custom_renderer", program);
         g_key_file_set_string(a->config, "renderer", "args", args);
     }
-    if (a->standard != 4 && a->renderer == RENDER_FILE) g_key_file_set_string(a->config, "renderer", "output_file", file);
+    if (a->standard < 4 && a->renderer == RENDER_FILE) g_key_file_set_string(a->config, "renderer", "output_file", file);
     gtk_label_set_text(GTK_LABEL(a->renderer_error), "");
     refresh_preview(a); return TRUE;
 }
@@ -5878,7 +6020,7 @@ static const char *network_control(gpointer data,const char *command,const char 
         guint64 monitor = 0;
         if (strcmp(value,"off") && !control_number(value,G_MAXINT,&monitor))
             return control_failure(error,bad,"Expected a one-based monitor number or off");
-        if (monitor && (a->renderer != RENDER_EMBEDDED || a->video_view.external))
+        if (monitor && a->standard!=STANDARD_FMATV && (a->renderer != RENDER_EMBEDDED || a->video_view.external))
             return control_failure(error,conflict,"Select the embedded player for HDMI");
         int previous = a->video_view.hdmi_monitor;
         if (!hdmi_monitor(a,(int)monitor))
@@ -5901,7 +6043,7 @@ static const char *network_control(gpointer data,const char *command,const char 
         if (strcmp(mode,"on") && strcmp(mode,"off") && strcmp(mode,"toggle"))
             return control_failure(error,bad,"Expected on, off or toggle");
         gboolean enable=!strcmp(mode,"on") || (!strcmp(mode,"toggle") && !ts_info_view_eit_visible(&a->information));
-        if (enable && (a->standard==4 || !a->information.dialogs[0]))
+        if (enable && (a->standard>=4 || !a->information.dialogs[0]))
             return control_failure(error,conflict,"EIT requires the DVB desktop interface");
         ts_info_view_set_eit_visible(&a->information,enable);
         return "200 OK";
@@ -5916,7 +6058,7 @@ static const char *network_control(gpointer data,const char *command,const char 
         const char *mode=command+strlen("tsscatterfix/");
         if (strcmp(mode,"on") && strcmp(mode,"off"))
             return control_failure(error,bad,"Expected on or off");
-        if (!a->scatter_box || a->standard==4)
+        if (!a->scatter_box || a->standard>=4)
             return control_failure(error,conflict,"TSscatterFix requires DVB mode in the desktop interface");
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(a->scatter_box),!strcmp(mode,"on"));
         return "200 OK";
@@ -6342,6 +6484,7 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     argv=g_win32_get_command_line();
 #endif
+    if (argc>1 && !strcmp(argv[1],"--decoder-worker=fmatv")) return fmatv_worker(argc-1,argv+1);
     if (argc > 1 && !strcmp(argv[1], "--srt-worker"))
         return srt_output_main(argc-1, argv+1);
     if (argc>1 && !strcmp(argv[1],"--decoder-worker=leansdr"))
@@ -6379,7 +6522,7 @@ int main(int argc, char **argv) {
 #endif
           , "SOURCE"},
         {"config", 'c', 0, G_OPTION_ARG_FILENAME, &config, "Custom configuration file", "FILE"},
-        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2 or DAB", "MODE"},
+        {"standard", 0, 0, G_OPTION_ARG_STRING, &standard, "DVB-S, DVB-S2, DVB-T, DVB-T2, DAB or FM-ATV", "MODE"},
         {"sr", 0, 0, G_OPTION_ARG_INT, &sr, "Symbol rate (35000, 66000, 125000, 250000, 333000, 500000, 1000000, 1500000, 2000000, 4000000, 5000000; DVB-T BW: 35000, 40000, 150000, 250000, 333000, 500000; DVB-T2 BW: 8000000)", "RATE"},
         {"plp", 0, 0, G_OPTION_ARG_INT, &plp, "DVB-T2 PLP ID (-1 = automatic, 0..255 = explicit)", "ID"},
         {"fec", 0, 0, G_OPTION_ARG_STRING, &fec, "FEC supported by the standard/constellation (e.g. 3/4)", "FEC"},
@@ -6484,6 +6627,7 @@ int main(int argc, char **argv) {
         int selected = choice(standard, standards, G_N_ELEMENTS(standards), "standard");
         if (selected != a.standard) {
             a.standard = selected; a.constellation = 0; a.fec = 0;
+            fmatv_input_defaults(&a);
             a.sr = a.standard == 4 ? 1536000 : a.standard == 3 ? 8000000 : a.standard == 2 ? 150000 : 125000;
         }
     }
@@ -6509,7 +6653,7 @@ int main(int argc, char **argv) {
     gboolean valid = FALSE;
     for (int i = 0; i < (a.standard >= 3 ? 1 : a.standard == 2 ? (int)G_N_ELEMENTS(terrestrial_rates) : (int)G_N_ELEMENTS(sat_rates)); ++i)
         if (a.sr == rates[i]) valid = TRUE;
-    if (!valid && !hardware_ts_source(&a) && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
+    if (!valid && a.standard != STANDARD_FMATV && !hardware_ts_source(&a) && !(a.standard < 3 && a.source==SOURCE_FILE && a.sr>0 && a.sr<=100000000)) fatal("Invalid SR %d for %s", a.sr, standards[a.standard]);
     if (knucker_source(&a)) g_key_file_set_integer(a.config,"knucker","bandwidth",a.sr);
     if (scatter && no_scatter) fatal("Choose either --scatterfix or --no-scatterfix");
     if (scatter) a.scatter = TRUE;
@@ -6520,7 +6664,7 @@ int main(int argc, char **argv) {
     if (a.standard!=4 && converter_ranges_active(&a)) store_converter_tuning(&a,configured_channel_hz(&a));
     a.headless = run;
     g_free(source); g_free(iq_file);
-    const char *offset_problem=receiver_offset_problem(&a);
+    const char *offset_problem=pipeline_problem(&a);
     if ((print || run) && offset_problem) fatal("%s",offset_problem);
     if (!offset_problem) build_pipeline(&a);
     if (print) { char *text = describe(&a); puts(text); g_free(text); }

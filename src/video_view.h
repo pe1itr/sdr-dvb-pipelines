@@ -18,7 +18,8 @@ typedef struct {
     unsigned width, height, pitch;
     double aspect;
     gboolean ready, dirty, local_display;
-    gboolean active, muted;
+    gboolean active, muted, analog;
+    unsigned analog_flags; /* Last PAL field, protected by mutex. */
     gboolean volume_initialized;
     GThread *relay;
     gint stopping, relay_failed;

@@ -543,12 +543,12 @@
         "parameters": [
           {
             "name": "mode",
-            "description": "Receiver mode for the selected input. DVB-T, DVB-T2, DVB-S, DVB-S2 and DAB are case-insensitive.",
+            "description": "Receiver mode for the selected input. DVB-T, DVB-T2, DVB-S, DVB-S2, DAB and FM-ATV are case-insensitive. FM-ATV receives analog PAL on the internal display and selected HDMI monitor.",
             "required": true,
             "example": "dvb-t",
             "schema": {
               "type": "string",
-              "pattern": "^([Dd][Vv][Bb]-[TtSs]2?|[Dd][Aa][Bb])$"
+              "pattern": "^([Dd][Vv][Bb]-[TtSs]2?|[Dd][Aa][Bb]|[Ff][Mm]-[Aa][Tt][Vv])$"
             },
             "in": "path"
           }
