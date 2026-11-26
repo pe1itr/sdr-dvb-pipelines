@@ -3,7 +3,7 @@
 #include "../components/fmatv/fmatv.h"
 #include "video_view.h"
 typedef struct {
-    GtkWidget *stack, *lamps[9], *values[4], *caption;
+    GtkWidget *stack, *lamps[9], *values[4], *caption, *detector;
     gint64 caption_second;
 } FmatvService;
 void fmatv_service_create(FmatvService *service, GtkWidget *frame);

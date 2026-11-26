@@ -259,7 +259,13 @@ class ReceiverControlTests(unittest.TestCase):
         self.assertEqual(state['presets'][1], {'slot': 2, 'label': 'Test RTL', 'saved': True})
         self.assertEqual(self.get('/control/start')[0], 405)
         put('fmatv/framestack/on', 409)
+        put('fmatv/fmdetector/fm1', 409)
         put('mode/fm-atv')
+        self.assertEqual(self.get()[1]['fmatv_fmdetector'], 'fm0')
+        for detector in ('fm1', 'fm2', 'fm2', 'fm0'):
+            put('fmatv/fmdetector/' + detector)
+            self.assertEqual(self.get()[1]['fmatv_fmdetector'], detector)
+        put('fmatv/fmdetector/fm3', 400)
         self.assertFalse(self.get()[1]['fmatv_framestack_enabled'])
         put('fmatv/framestack/invalid', 400)
         for action in ('on', 'on', 'off', 'off'):

@@ -32,7 +32,7 @@ static gpointer receive_fields(gpointer opaque) {
         g_mutex_lock(&v->mutex);
         if (v->framestack_enabled) {
             if (!stack) stack = g_new0(LightStack,1);
-            if (v->framestack_reset) light_stack_reset(stack);
+            if (v->framestack_reset || storage->fm_mode!=v->analog_info.fm_mode) light_stack_reset(stack);
             light_stack_add(stack,pixels,(uint32_t *)v->frame);
         } else {
             memcpy(v->frame,pixels,size);
@@ -116,7 +116,7 @@ void fmatv_service_create(FmatvService *service,GtkWidget *frame) {
     GtkWidget *mode=gtk_label_new("FM detector");
     gtk_label_set_xalign(GTK_LABEL(mode),0);
     gtk_grid_attach(GTK_GRID(grid),mode,0,7,1,1);
-    GtkWidget *detector=gtk_label_new("FM0");
+    GtkWidget *detector=service->detector=gtk_label_new("FM0");
     gtk_label_set_xalign(GTK_LABEL(detector),0);
     gtk_grid_attach(GTK_GRID(grid),detector,1,7,2,1);
     fmatv_service_update(service,0,0,NULL,0,0);

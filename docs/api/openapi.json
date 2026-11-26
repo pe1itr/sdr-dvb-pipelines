@@ -336,6 +336,21 @@
         }
       }
     },
+    "/control/fmatv/fmdetector/{mode}": {
+      "put": {
+        "tags": ["Receiver control"],
+        "summary": "Select the FM-ATV detector",
+        "description": "Select before starting or during FM-ATV reception. The selection lasts for this application session and defaults to fm0. GET /status reports the selection in fmatv_fmdetector.",
+        "parameters": [{ "name": "mode", "in": "path", "required": true, "example": "fm1", "description": "FM detector mode.", "schema": { "type": "string", "enum": ["fm0", "fm1", "fm2"] } }],
+        "responses": {
+          "200": { "$ref": "#/components/responses/200" },
+          "400": { "$ref": "#/components/responses/400" },
+          "403": { "$ref": "#/components/responses/403" },
+          "409": { "$ref": "#/components/responses/409" },
+          "500": { "description": "Could not notify the FM-ATV worker." }
+        }
+      }
+    },
     "/control/fmatv/framestack/{action}": {
       "put": {
         "tags": ["Receiver control"],
@@ -764,6 +779,7 @@
           "selected_program": { "type": "integer", "nullable": true, "description": "Service ID selected for playback, or null when none is selected in the current list." },
           "hdmi_monitor": { "type": "integer", "description": "Display number starting at 1, or zero when off." },
           "hdmi_osd": { "type": "string", "enum": ["left", "right", "off"] },
+          "fmatv_fmdetector": { "type": "string", "enum": ["fm0", "fm1", "fm2"] },
           "fmatv_framestack_enabled": { "type": "boolean" },
           "tsscatterfix_enabled": { "type": "boolean" },
           "monitor_mode": { "type": "string", "enum": ["off", "usb", "fm", "fm-data"] },

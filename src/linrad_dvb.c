@@ -107,6 +107,7 @@ typedef struct {
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
     GtkWidget *bonding_box, *bonding_button, *local_pilot_box;
     char *bond_control, *bond_json, *fmatv_control;
+    int fmatv_detector;
     gboolean bond_detected, bond_active, bond_pair;
     double bond_peer_offset;
     DabView dab;
@@ -722,6 +723,7 @@ static void build_iq_stages(App *a) {
         add(s,self); g_free(self);
         add(s,"--decoder-worker=fmatv"); add_number(s,NULL,sample_rate);
         add_number(s,NULL,fmatv_bandwidth(a)); add(s,format); add(s,filter_section);
+        add_number(s,NULL,a->fmatv_detector);
         g_free(format); g_free(ip);
         return;
     }
@@ -941,7 +943,7 @@ static char *describe(App *a) {
             g_string_append(text, quoted); g_free(quoted);
         }
     }
-    if (a->standard == STANDARD_FMATV) g_string_append(text,"\n  | FM0 · synchronized PAL · internal video / HDMI");
+    if (a->standard == STANDARD_FMATV) g_string_append_printf(text,"\n  | FM%d · synchronized PAL · internal video / HDMI",a->fmatv_detector);
     if (internal_player(a)) {
         g_string_append(text, "\n  | ");
         g_string_append(text, a->renderer == RENDER_UDP ? "UDP output" : "embedded video panel");
@@ -2019,6 +2021,12 @@ static void filter_refresh(App *a) {
         "IQ bandpass filter off. Click to turn on. [ and ] adjust the bandwidth.");
     if (a->iq_view.area) gtk_widget_queue_draw(a->iq_view.area);
 }
+static gboolean fmatv_write_settings(App *a,int mode,GError **error) {
+    char settings[32];
+    g_snprintf(settings,sizeof(settings),"%.0f %d",fmatv_bandwidth(a),mode);
+    return g_file_set_contents(a->fmatv_control,settings,-1,error);
+}
+
 static void filter_apply(App *a, int width, gboolean enabled) {
     if (hardware_ts_source(a)) return;
     if (a->stopping) { filter_refresh(a); return; }
@@ -2050,10 +2058,8 @@ static void filter_apply(App *a, int width, gboolean enabled) {
     g_key_file_set_boolean(a->config, section, "filter_enabled", enabled);
     g_key_file_set_integer(a->config, section, "filter_bandwidth", width);
     if (a->running && a->fmatv_control) {
-        char bandwidth[24];
-        g_snprintf(bandwidth,sizeof(bandwidth),"%.0f",fmatv_bandwidth(a));
         GError *error=NULL;
-        if (!g_file_set_contents(a->fmatv_control,bandwidth,-1,&error)) {
+        if (!fmatv_write_settings(a,a->fmatv_detector,&error)) {
             a->exit_code=1; status(a,error->message); g_error_free(error);
             stop_pipeline(a);
         }
@@ -3410,6 +3416,10 @@ static gboolean decoder_tick(gpointer data) {
         if (a->analog_service.stack) {
             gboolean running=a->running && !a->stopping;
             double rate=g_key_file_get_double(a->config,sources[a->source],"sample_rate",NULL);
+            const char *labels[]={"FM0","FM1","FM2"};
+            const char *mode=labels[fresh ? info.fm_mode : a->fmatv_detector];
+            GtkLabel *detector=GTK_LABEL(a->analog_service.detector);
+            if (strcmp(gtk_label_get_text(detector),mode)) gtk_label_set_text(detector,mode);
             unsigned enabled=fmatv_detectors(rate,fmatv_bandwidth(a));
             if (fields) enabled &= info.enabled;
             fmatv_service_update(&a->analog_service,running ? enabled | (stacking ? FMATV_STACK : 0) : 0,
@@ -6132,6 +6142,21 @@ static const char *network_control(gpointer data,const char *command,const char 
         return "200 OK";
     }
     if (a->stopping) return control_failure(error,conflict,"Wait until the receiver has stopped");
+    if (g_str_has_prefix(command,"fmatv/fmdetector/")) {
+        const char *value=command+strlen("fmatv/fmdetector/");
+        if (strcmp(value,"fm0") && strcmp(value,"fm1") && strcmp(value,"fm2"))
+            return control_failure(error,bad,"Expected fm0, fm1 or fm2");
+        if (a->standard!=STANDARD_FMATV)
+            return control_failure(error,conflict,"Select FM-ATV first");
+        int mode=value[2]-'0';
+        if (mode!=a->fmatv_detector) {
+            if (a->running && (!a->fmatv_control || !fmatv_write_settings(a,mode,NULL)))
+                return control_failure(error,"500 Internal Server Error","Cannot update FM detector");
+            a->fmatv_detector=mode;
+            if (!a->running) refresh_preview(a);
+        }
+        return "200 OK";
+    }
     if (g_str_has_prefix(command,"fmatv/framestack/")) {
         const char *action=command+strlen("fmatv/framestack/");
         if (strcmp(action,"on") && strcmp(action,"off"))
@@ -6376,6 +6401,7 @@ static char *network_status(gpointer data) {
     STR(root,"hdmi_osd",hdmi_menu_side(a));
     gboolean hdmi_text=a->information.hdmi_page && gtk_widget_get_visible(a->information.hdmi_page);
     BOOL(root,"tsscatterfix_enabled",use_scatter(a));
+    STR(root,"fmatv_fmdetector",a->fmatv_detector==2 ? "fm2" : a->fmatv_detector==1 ? "fm1" : "fm0");
     BOOL(root,"fmatv_framestack_enabled",a->framestack_box && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(a->framestack_box)));
     gboolean monitor_on=usb_receiver_running(a->usb_receiver);
     STR(root,"monitor_mode",monitor_on ? monitor_api_modes[usb_receiver_mode(a->usb_receiver)] : "off");

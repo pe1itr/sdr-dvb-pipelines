@@ -1,6 +1,8 @@
 # FM-ATV
 
-Select an IQ input, tune the analog television carrier, choose **Mode → FM-ATV** and start reception. The embedded panel and the selected HDMI monitor display the same 4:3 picture. The receiver uses the FM0 detector, adaptive horizontal and vertical synchronization, PAL de-emphasis and automatic colour-burst detection. Each decoded PAL field supplies 640 × 288 pixels. The internal panel reports sync and burst lock.
+Select an IQ input, tune the analog television carrier, choose **Mode → FM-ATV** and start reception. The embedded panel and the selected HDMI monitor display the same 4:3 picture. The receiver defaults to the FM0 detector and uses adaptive horizontal and vertical synchronization, PAL de-emphasis and automatic colour-burst detection. Each decoded PAL field supplies 640 × 288 pixels. The internal panel reports sync and burst lock.
+
+Choose the detector before or during reception using `PUT /control/fmatv/fmdetector/fm0`, `fm1` or `fm2` as the last path segment. FM1 uses the eight-point FFT phase detector. FM2 adds multi-candidate vertical sync to FM1. Service info displays the detector of the current picture, and `GET /status` reports the selected `fmatv_fmdetector`.
 
 On selection, HackRF, B210, Lime and Pluto inputs configured below 12 MS/s switch to 20 MS/s for colour. The video IF uses up to 18 MHz of the available bandwidth. The PAL decoder enables colour at 12 MS/s or more with at least 10 MHz of video IF. Narrower inputs show monochrome. The supported IQ rate is 5–64 MS/s, subject to the SDR limits. Configure the carrier frequency and RF gain in Input. The same decoder accepts IQ recordings via Play file.
 

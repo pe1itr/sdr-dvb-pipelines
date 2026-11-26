@@ -707,6 +707,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | `/control/start`, `/control/stop` | Start or stop reception using the current settings. |
 | `/control/frequency/144600000` | Tune the requested RF frequency in whole Hz. In DAB mode you can also use a Band III channel, e.g. `/control/frequency/5A`. Supports live tuning on inputs that support it in the GUI. |
 | `/control/program/101` | During DVB reception with the embedded player, watch a program using its service ID. Read `programs` (ID, name and provider) and `selected_program` from `/status`. |
+| `/control/fmatv/fmdetector/{mode}` | Select `fm0` (default), `fm1` or `fm2` before or during FM-ATV reception. Read `fmatv_fmdetector` in `/status`. |
 | `/control/tsscatterfix/on`, `/control/tsscatterfix/off` | Operate the TSscatterFix button. While enabled, the lower-right HDMI inset shows recovery progress until the recovered image is available. Read `tsscatterfix_enabled` in `/status`. |
 | `/control/eit/on`, `/control/eit/off`, `/control/eit/toggle` | Open, close or toggle the desktop EIT window and the programme overlay on active HDMI output, just like the EIT button. Read `eit_overlay_enabled` in `/status`. |
 | `/control/teletext/on`, `/control/teletext/off` | Show or hide the current page on the active HDMI output, or in the desktop Teletext window when HDMI is off. HDMI keeps playing audio. Closing it preserves the page selection. Read `teletext_visible` in `/status` for the current window state. |

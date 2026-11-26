@@ -13,7 +13,8 @@ enum {
     FMATV_STACK=256
 };
 typedef struct {
-    uint32_t enabled, detected;
+    uint16_t enabled, fm_mode;
+    uint32_t detected;
     double snr_db, line_hz, raster_hz;
 } FmatvFieldInfo;
 unsigned fmatv_detectors(double rate, double bandwidth);

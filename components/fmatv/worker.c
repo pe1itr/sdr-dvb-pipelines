@@ -20,6 +20,7 @@ typedef struct {
     VideoQuality quality;
     CarrierMonitor *audio;
     unsigned enabled;
+    int fm_mode;
 } Receiver;
 
 static void field(void *opaque, const uint32_t *pixels) {
@@ -28,7 +29,7 @@ static void field(void *opaque, const uint32_t *pixels) {
     int horizontal=d->hsync_updates && d->fields-d->hsync_field<=5 && d->free_period>0;
     int vertical=d->vsync_updates && d->tick-d->vsync_confirmed<d->rate*.1 && d->vsync_period>0;
     FmatvFieldInfo info={
-        .enabled=rx->enabled,
+        .enabled=rx->enabled,.fm_mode=rx->fm_mode,
         .detected=carrier_monitor_detected(rx->audio),
         .line_hz=horizontal ? d->rate/d->free_period : NAN,
         .raster_hz=vertical ? d->rate/d->vsync_period : NAN,
@@ -59,8 +60,11 @@ unsigned fmatv_detectors(double rate,double bandwidth) {
     return flags;
 }
 
-/* Return the next IF width at a block boundary, zero at EOF, or -1 on error. */
-static int receive_band(int rate,int bandwidth,int u8,int hackrf,const char *control) {
+typedef struct { int bandwidth, fm_mode; } Settings;
+
+/* A positive return requests reconfiguration after draining the pending block. */
+static int receive_band(int rate,Settings *settings,int u8,int hackrf,const char *control) {
+    int bandwidth=settings->bandwidth, mode=settings->fm_mode;
     Decoder *d = calloc(1,sizeof(*d));
     IQ *iq = malloc(BLOCK*sizeof(*iq));
     int16_t *raw = malloc(BLOCK*2*sizeof(*raw));
@@ -70,12 +74,14 @@ static int receive_band(int rate,int bandwidth,int u8,int hackrf,const char *con
     Alignment *video = alignment_create_video(rate,bandwidth,deviation,0,BLOCK,color);
     Alignment *guide = alignment_create(rate,guide_bw,deviation,0,BLOCK);
     PalPipeline *pal = color ? pal_pipeline_create() : NULL;
-    Receiver rx={.decoder=d,.enabled=enabled};
+    Receiver rx={.decoder=d,.enabled=enabled,.fm_mode=mode};
     int result = -1;
     if (!d || !iq || !raw || !video || !guide || alignment_set_deemphasis(video)) {
         fprintf(stderr,"[fm-atv] Cannot initialize PAL receiver\n");
         goto done;
     }
+    alignment_set_fm_mode(video,mode,0);
+    alignment_set_fm_mode(guide,mode,0);
     alignment_set_dc_block(video,hackrf);
     alignment_set_dc_block(guide,hackrf);
     if (enabled & FMATV_MONO) {
@@ -86,14 +92,15 @@ static int receive_band(int rate,int bandwidth,int u8,int hackrf,const char *con
     }
     video_quality_init(&rx.quality,rate);
     decoder_init(d,rate,deviation,0,field,&rx);
+    d->multi_candidate_sync = mode==2;
     d->free_sync = 1; /* Adaptive H/V clock, with no independent free-run preview. */
     d->guide_stride = (unsigned)fmax(1,floor(rate/fmax(4e6,2*guide_bw)));
     d->no_guide_raster = 1;
     d->video_deemphasis = 1;
     d->color = color;
     pal_init(&d->pal,rate);
-    fprintf(stderr,"[fm-atv] FM0, adaptive sync, PAL de-emphasis, %d Hz video IF, burst detector %s\n",
-            bandwidth,color ? "on" : "off (monochrome bandwidth)");
+    fprintf(stderr,"[fm-atv] FM%d, adaptive sync, PAL de-emphasis, %d Hz video IF, burst detector %s\n",
+            mode,bandwidth,color ? "on" : "off (monochrome bandwidth)");
     size_t pending = 0, bytes = u8 ? 2 : 4;
     size_t until_check=rate/10;
     for (;;) {
@@ -115,11 +122,16 @@ static int receive_band(int rate,int bandwidth,int u8,int hackrf,const char *con
             char *contents=NULL;
             until_check=rate/10;
             if (g_file_get_contents(control,&contents,NULL,NULL)) {
-                gint64 next=0;
-                gboolean valid=g_ascii_string_to_signed(contents,10,FMATV_MIN_BANDWIDTH_HZ,rate,&next,NULL);
+                gchar **parts=g_strsplit(contents," ",2);
+                gint64 width,detector;
+                gboolean valid=parts[0] && parts[1] &&
+                    g_ascii_string_to_signed(parts[0],10,FMATV_MIN_BANDWIDTH_HZ,rate,&width,NULL) &&
+                    g_ascii_string_to_signed(parts[1],10,0,2,&detector,NULL);
+                g_strfreev(parts);
                 g_free(contents);
-                if (valid && next!=bandwidth) {
-                    result=(int)next;
+                if (valid && (width!=bandwidth || detector!=mode)) {
+                    *settings=(Settings){(int)width,(int)detector};
+                    result=1;
                     break;
                 }
             }
@@ -136,7 +148,9 @@ done:
 }
 
 int fmatv_worker(int argc, char **argv) {
-    if (argc != 5) return 2;
+    if (argc != 5 && argc != 6) return 2;
+    gint64 mode=0;
+    if (argc==6 && !g_ascii_string_to_signed(argv[5],10,0,2,&mode,NULL)) return 2;
     int rate = atoi(argv[1]), bandwidth = atoi(argv[2]);
     int u8 = !strcmp(argv[3], "u8");
     if (rate < 5000000 || rate > 64000000 || bandwidth < FMATV_MIN_BANDWIDTH_HZ || bandwidth > rate ||
@@ -146,8 +160,10 @@ int fmatv_worker(int argc, char **argv) {
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
     const char *control=g_getenv("LINRAD_FMATV_CONTROL");
+    Settings settings={bandwidth,(int)mode};
+    int result;
     do {
-        bandwidth=receive_band(rate,bandwidth,u8,!strcmp(argv[4],"hackrf"),control);
-    } while (bandwidth>0);
-    return bandwidth<0;
+        result=receive_band(rate,&settings,u8,!strcmp(argv[4],"hackrf"),control);
+    } while (result>0);
+    return result<0;
 }
