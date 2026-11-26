@@ -104,7 +104,7 @@ typedef struct {
     GtkWidget *mode_dialog, *renderer_dialog, *diagnostics_dialog, *mode_summary;
     GtkWidget *t2_controls, *t2_plp_box, *t2_gpu_box;
     GtkWidget *bonding_box, *bonding_button, *local_pilot_box;
-    char *bond_control, *bond_json;
+    char *bond_control, *bond_json, *fmatv_control;
     gboolean bond_detected, bond_active, bond_pair;
     double bond_peer_offset;
     DabView dab;
@@ -1303,6 +1303,7 @@ static void finish_if_stopped(App *a) {
         gtk_widget_set_sensitive(a->renderer_panel, TRUE);
         gtk_widget_set_sensitive(a->frequency_box, a->standard!=4 && (hardware_source(a) || hardware_ts_source(a)));
     }
+    if (a->fmatv_control) { g_unlink(a->fmatv_control); g_clear_pointer(&a->fmatv_control,g_free); }
     if (a->pending_preset && !a->closing) {
         int index=a->pending_preset; a->pending_preset=0; preset_apply(a,index);
     }
@@ -1515,6 +1516,11 @@ static void start_pipeline(App *a) {
     }
     if (a->standard==STANDARD_FMATV) {
         GError *error=NULL;
+        if (a->window) {
+            int fd=g_file_open_tmp("linrad-fmatv-XXXXXX",&a->fmatv_control,&error);
+            if (fd<0) { status(a,error->message); g_clear_error(&error); a->exit_code=1; goto pipe_error; }
+            close(fd);
+        }
         if (!fmatv_view_start(&a->video_view,pipes[1][0],&error)) {
             status(a,error->message); g_clear_error(&error); a->exit_code=1; goto pipe_error;
         }
@@ -1605,6 +1611,8 @@ static void start_pipeline(App *a) {
         if (i==0 && a->source==SOURCE_MT_EXPRESS && tune_pipe[0]>=0)
             env=g_environ_setenv(env,"LINRAD_MT_TUNE_PIPE","1",TRUE);
         env = g_environ_unsetenv(env, "LINRAD_USB_TAP");
+        env = g_environ_unsetenv(env, "LINRAD_FMATV_CONTROL");
+        if (i==1 && a->fmatv_control) env=g_environ_setenv(env,"LINRAD_FMATV_CONTROL",a->fmatv_control,TRUE);
         env = g_environ_unsetenv(env, "LINRAD_BOND_CONTROL");
         if (i==1 && a->bond_control) env=g_environ_setenv(env,"LINRAD_BOND_CONTROL",a->bond_control,TRUE);
         if (!hardware_ts_source(a) && i == 0 && a->usb_receiver)
@@ -1646,6 +1654,7 @@ static void start_pipeline(App *a) {
     } else if (!a->stopping) status(a, a->source==SOURCE_MT_EXPRESS ? "MT Express · acquiring satellite signal" : knucker_source(a) ? "Knucker running · acquiring DVB-T" : a->source==SOURCE_FILE ? "Playing IQ file in real time" : "Pipeline running - waiting for/receiving IQ");
     return;
 pipe_error:
+    if (a->fmatv_control) { g_unlink(a->fmatv_control); g_clear_pointer(&a->fmatv_control,g_free); }
     if (dab_pipe[0]>=0) close(dab_pipe[0]);
     if (dab_pipe[1]>=0) close(dab_pipe[1]);
     if (scatter_pipe[0] >= 0) { close(scatter_pipe[0]); close(scatter_pipe[1]); }
@@ -2038,6 +2047,15 @@ static void filter_apply(App *a, int width, gboolean enabled) {
     }
     g_key_file_set_boolean(a->config, section, "filter_enabled", enabled);
     g_key_file_set_integer(a->config, section, "filter_bandwidth", width);
+    if (a->running && a->fmatv_control) {
+        char bandwidth[24];
+        g_snprintf(bandwidth,sizeof(bandwidth),"%.0f",fmatv_bandwidth(a));
+        GError *error=NULL;
+        if (!g_file_set_contents(a->fmatv_control,bandwidth,-1,&error)) {
+            a->exit_code=1; status(a,error->message); g_error_free(error);
+            stop_pipeline(a);
+        }
+    }
     filter_refresh(a);
     if (!a->running) refresh_preview(a);
 }

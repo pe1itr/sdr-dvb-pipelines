@@ -4,6 +4,7 @@
 #include "analog/video_quality.h"
 #include "analog/carrier_monitor.h"
 #include "analog/sound.h"
+#include <glib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -58,16 +59,8 @@ unsigned fmatv_detectors(double rate,double bandwidth) {
     return flags;
 }
 
-int fmatv_worker(int argc, char **argv) {
-    if (argc != 5) return 2;
-    int rate = atoi(argv[1]), bandwidth = atoi(argv[2]);
-    int u8 = !strcmp(argv[3], "u8");
-    if (rate < 5000000 || rate > 64000000 || bandwidth < FMATV_MIN_BANDWIDTH_HZ || bandwidth > rate ||
-        (!u8 && strcmp(argv[3],"s16"))) return 2;
-#ifdef _WIN32
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-#endif
+/* Return the next IF width at a block boundary, zero at EOF, or -1 on error. */
+static int receive_band(int rate,int bandwidth,int u8,int hackrf,const char *control) {
     Decoder *d = calloc(1,sizeof(*d));
     IQ *iq = malloc(BLOCK*sizeof(*iq));
     int16_t *raw = malloc(BLOCK*2*sizeof(*raw));
@@ -78,13 +71,13 @@ int fmatv_worker(int argc, char **argv) {
     Alignment *guide = alignment_create(rate,guide_bw,deviation,0,BLOCK);
     PalPipeline *pal = color ? pal_pipeline_create() : NULL;
     Receiver rx={.decoder=d,.enabled=enabled};
-    int result = 1;
+    int result = -1;
     if (!d || !iq || !raw || !video || !guide || alignment_set_deemphasis(video)) {
         fprintf(stderr,"[fm-atv] Cannot initialize PAL receiver\n");
         goto done;
     }
-    alignment_set_dc_block(video,!strcmp(argv[4],"hackrf"));
-    alignment_set_dc_block(guide,!strcmp(argv[4],"hackrf"));
+    alignment_set_dc_block(video,hackrf);
+    alignment_set_dc_block(guide,hackrf);
     if (enabled & FMATV_MONO) {
         int stereo=!!(enabled & FMATV_AUDIO_702);
         rx.audio=carrier_monitor_create(rate,stereo);
@@ -102,10 +95,11 @@ int fmatv_worker(int argc, char **argv) {
     fprintf(stderr,"[fm-atv] FM0, adaptive sync, PAL de-emphasis, %d Hz video IF, burst detector %s\n",
             bandwidth,color ? "on" : "off (monochrome bandwidth)");
     size_t pending = 0, bytes = u8 ? 2 : 4;
+    size_t until_check=rate/10;
     for (;;) {
         size_t n = fread(raw,1,BLOCK*bytes,stdin);
         if (ferror(stdin) || n%bytes) goto done;
-        if (!n) break;
+        if (!n) { result=0; break; }
         n /= bytes;
         for (size_t i=0; i<n; ++i) {
             if (u8) {
@@ -117,9 +111,21 @@ int fmatv_worker(int argc, char **argv) {
         if (pending) decode(&rx,pal,alignment_previous(video,NULL,NULL),
                                          alignment_previous(guide,NULL,NULL),pending);
         pending = n;
+        if (control && n>=until_check) {
+            char *contents=NULL;
+            until_check=rate/10;
+            if (g_file_get_contents(control,&contents,NULL,NULL)) {
+                gint64 next=0;
+                gboolean valid=g_ascii_string_to_signed(contents,10,FMATV_MIN_BANDWIDTH_HZ,rate,&next,NULL);
+                g_free(contents);
+                if (valid && next!=bandwidth) {
+                    result=(int)next;
+                    break;
+                }
+            }
+        } else if (control) until_check-=n;
     }
     if (pending) decode(&rx,pal,alignment_wait(video),alignment_wait(guide),pending);
-    result = 0;
 done:
     alignment_destroy(guide);
     alignment_destroy(video);
@@ -127,4 +133,21 @@ done:
     pal_pipeline_destroy(pal);
     free(raw); free(iq); free(d);
     return result;
+}
+
+int fmatv_worker(int argc, char **argv) {
+    if (argc != 5) return 2;
+    int rate = atoi(argv[1]), bandwidth = atoi(argv[2]);
+    int u8 = !strcmp(argv[3], "u8");
+    if (rate < 5000000 || rate > 64000000 || bandwidth < FMATV_MIN_BANDWIDTH_HZ || bandwidth > rate ||
+        (!u8 && strcmp(argv[3],"s16"))) return 2;
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    const char *control=g_getenv("LINRAD_FMATV_CONTROL");
+    do {
+        bandwidth=receive_band(rate,bandwidth,u8,!strcmp(argv[4],"hackrf"),control);
+    } while (bandwidth>0);
+    return bandwidth<0;
 }

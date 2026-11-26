@@ -3075,8 +3075,16 @@ static gboolean exercise_fmatv(gpointer data) {
         g_assert_nonnull(strstr(gtk_label_get_label(GTK_LABEL(a->analog_service.lamps[0])),"#888888"));
         g_assert_true(gtk_widget_get_sensitive(a->power_button));
         g_assert_true(hdmi_monitor(a,1));
+        filter_apply(a,8000000,TRUE);
         gtk_button_clicked(GTK_BUTTON(a->power_button));
         g_assert_true(a->running);
+        phase=-2;
+    } else if (phase==-2) {
+        g_mutex_lock(&a->video_view.mutex);
+        gboolean mono=a->video_view.analog_fields && a->video_view.analog_info.enabled==FMATV_SYNC;
+        g_mutex_unlock(&a->video_view.mutex);
+        if (!mono) return G_SOURCE_CONTINUE;
+        filter_apply(a,10500000,TRUE);
         phase=1;
     } else if (phase==1 && a->video_view.hdmi_state==HDMI_VIDEO) {
         VideoView *v=&a->video_view;
