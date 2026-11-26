@@ -6044,6 +6044,12 @@ static const char *network_control(gpointer data,const char *command,const char 
             g_free(name);
             if (index<0) return control_failure(error,bad,"Expected QPSK or 8PSK");
             gtk_combo_box_set_active(GTK_COMBO_BOX(a->constellation_box),index);
+        } else if (g_str_has_prefix(command,"gi/")) {
+            if (a->standard!=2 || hardware_ts_source(a))
+                return control_failure(error,conflict,"Guard interval requires software DVB-T");
+            int gi=find_choice(value,guards,G_N_ELEMENTS(guards));
+            if (gi<0) return control_failure(error,bad,"Expected 1/32, 1/16, 1/8 or auto");
+            gtk_combo_box_set_active(GTK_COMBO_BOX(a->gi_box),gi);
         } else if (g_str_has_prefix(command,"fec/")) {
             gboolean automatic=knucker_source(a) || a->standard>=3;
             int fec=automatic ? (!strcmp(value,"auto") ? 0 : -1) : find_choice(value,fecs,G_N_ELEMENTS(fecs));
@@ -6134,6 +6140,7 @@ static char *network_status(gpointer data) {
         STR(root,"configured_fec",parts[1] ? parts[1] : "auto");
         g_strfreev(parts);
     } else STR(root,"configured_fec",a->standard>=3 || hardware_ts_source(a) ? "auto" : fecs[a->fec]);
+    if (a->standard==2 && !hardware_ts_source(a)) STR(root,"configured_gi",guards[a->gi]);
     BOOL(root,"control_enabled",a->presets && g_key_file_get_boolean(a->config,"status","control",NULL));
     NUM(root,"hdmi_monitor",a->video_view.hdmi_monitor);
     STR(root,"hdmi_state",video_view_hdmi_state(&a->video_view));
