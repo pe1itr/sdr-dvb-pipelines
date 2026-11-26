@@ -216,7 +216,7 @@ static const char *sources[] = {"linrad", "hackrf", "b210", "sdriq", "afedri", "
     , "mt_express"
 #endif
 };
-static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (kinex7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"
+static const char *source_labels[] = {"Linrad (NET input)", "Hackrf One", "B210 (Kintex-7)", "SDR-IQ (RFspace)", "Afedri Net", "RTL-SDR", "FUNcube Pro+", "LimeSDR Mini v1.2", "SDRplay RSP1A", "SDRplay RSP1B", "Airspy HF+ Dual Port (VHF)", "Airspy R2", "Pluto / PlutoSky (RX1)", "File (IQ)"
 #ifdef HAVE_KNUCKER
     , "BATC Knucker"
 #endif

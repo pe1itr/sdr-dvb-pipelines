@@ -359,10 +359,10 @@ int main(int argc, char **argv) {
             }
             if (setenv("UHD_IMAGES_DIR", images, 1)) { perror("UHD_IMAGES_DIR"); goto done; }
         }
-        fprintf(stderr,"[B210 kinex7] Opening UHD receiver; images=%s; args=%s\n", *images ? images : "UHD default", args);
+        fprintf(stderr,"[B210 Kintex-7] Opening UHD receiver; images=%s; args=%s\n", *images ? images : "UHD default", args);
         fflush(stderr);
         U(uhd_usrp_make(&usrp, args));
-        fprintf(stderr,"[B210 kinex7] Device opened; configuring RX channel %zu\n", channel);
+        fprintf(stderr,"[B210 Kintex-7] Device opened; configuring RX channel %zu\n", channel);
         fflush(stderr);
         U(uhd_usrp_set_clock_source(usrp, "internal", 0));
         U(uhd_usrp_set_rx_rate(usrp, rate, channel));
