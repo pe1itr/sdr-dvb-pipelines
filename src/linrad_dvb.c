@@ -59,6 +59,8 @@
 #include "hackrf_gain.h"
 #include "../components/dab/channels.h"
 
+#define PRESET_COUNT 10
+
 enum { SOURCE_AFEDRI = 4, SOURCE_RTLSDR = 5, SOURCE_FCDPP = 6, SOURCE_LIME = 7,
        SOURCE_RSP1A = 8, SOURCE_RSP1B = 9, SOURCE_AIRSPYHF = 10, SOURCE_AIRSPYR2 = 11, SOURCE_PLUTO = 12, SOURCE_FILE = 13,
 #ifdef HAVE_KNUCKER
@@ -73,8 +75,8 @@ typedef struct { GPtrArray *args; GPid pid, group; } Stage;
 typedef struct {
     GKeyFile *config;
     GKeyFile *presets;
-    GtkWidget *preset_buttons[6], *preset_labels[6], *presets_dialog, *preset_message;
-    int active_preset, pending_preset; /* 1..6, zero means none */
+    GtkWidget *preset_buttons[PRESET_COUNT], *preset_labels[PRESET_COUNT], *presets_dialog, *preset_message;
+    int active_preset, pending_preset; /* One-based slot, zero means none */
     char *preset_signature;
     StatusHttp *status_http;
     DsmccMessages messages;
@@ -149,7 +151,7 @@ typedef struct {
     DecoderView decoder_view;
     VideoView video_view;
     FmatvService analog_service;
-    GtkWidget *hdmi_menu, *hdmi_menu_label, *hdmi_power, *hdmi_programs, *hdmi_preset_rows[6];
+    GtkWidget *hdmi_menu, *hdmi_menu_label, *hdmi_power, *hdmi_programs, *hdmi_preset_rows[PRESET_COUNT];
     gint64 hdmi_menu_refresh;
     ScatterView scatter_view;
     TsInfoView information;
@@ -4043,7 +4045,7 @@ static void show_about(GtkWidget *widget, gpointer data) {
         "Provided without warranty. Bundled components retain their own license notices.",NULL);
     about_link(box,"Project source and documentation","https://github.com/pe1itr/sdr-dvb-pipelines");
     about_link(box,"GNU General Public License version 3","https://www.gnu.org/licenses/gpl-3.0.html");
-    about_label(box,"Presets: the six buttons below the constellation load saved receiver settings. "
+    about_label(box,"Presets: the ten buttons below the constellation load saved receiver settings. "
         "Use Presets in the menu to edit their labels and save current settings to each slot. "
         "Selecting a preset stops reception; click Start SDR to receive. A green button marks "
         "the selected preset. Changing settings clears that selection. W still saves the regular INI.",NULL);
@@ -5853,7 +5855,7 @@ static void presets_refresh(App *a) {
         if (!preset_equal(current,a->preset_signature)) a->active_preset=0;
         g_free(current);
     }
-    for (int i=0;i<6;++i) {
+    for (int i=0;i<PRESET_COUNT;++i) {
         char group[24];g_snprintf(group,sizeof(group),"preset%d",i+1);
         char *label=preset_label(a,i+1);gtk_button_set_label(GTK_BUTTON(a->preset_buttons[i]),label);
         if (a->hdmi_menu) {
@@ -5952,7 +5954,7 @@ static void preset_store(GtkButton *button,gpointer data) {
 
 static void presets_response(GtkDialog *dialog,gint response,gpointer data) {
     (void)response;App *a=data;char *backup=g_key_file_to_data(a->presets,NULL,NULL);
-    for (int i=0;i<6;++i) {
+    for (int i=0;i<PRESET_COUNT;++i) {
         char group[24];g_snprintf(group,sizeof(group),"preset%d",i+1);
         g_key_file_set_string(a->presets,group,"label",gtk_entry_get_text(GTK_ENTRY(a->preset_labels[i])));
     }
@@ -5971,7 +5973,7 @@ static void show_presets(GtkWidget *widget,gpointer data) {
             "Selecting a preset stops reception; click Start SDR to receive.\n"
             "Changing settings clears the green selection. Logging and status endpoint settings are shared.");
         gtk_label_set_xalign(GTK_LABEL(hint),0);gtk_grid_attach(GTK_GRID(grid),hint,0,0,3,1);
-        for (int i=0;i<6;++i) {
+        for (int i=0;i<PRESET_COUNT;++i) {
             char *number=g_strdup_printf("%d",i+1),*label=preset_label(a,i+1);
             gtk_grid_attach(GTK_GRID(grid),gtk_label_new(number),0,i+1,1,1);g_free(number);
             a->preset_labels[i]=gtk_entry_new();gtk_entry_set_max_length(GTK_ENTRY(a->preset_labels[i]),40);
@@ -5984,7 +5986,7 @@ static void show_presets(GtkWidget *widget,gpointer data) {
         }
         a->preset_message=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(a->preset_message),TRUE);
         gtk_label_set_max_width_chars(GTK_LABEL(a->preset_message),70);
-        gtk_grid_attach(GTK_GRID(grid),a->preset_message,0,7,3,1);
+        gtk_grid_attach(GTK_GRID(grid),a->preset_message,0,PRESET_COUNT+1,3,1);
         g_signal_connect(a->presets_dialog,"response",G_CALLBACK(presets_response),a);
         g_signal_connect(a->presets_dialog,"delete-event",G_CALLBACK(presets_close),a);
     }
@@ -6002,7 +6004,7 @@ static GtkWidget *presets_create(App *a) {
     gtk_grid_set_row_homogeneous(GTK_GRID(grid),TRUE);
     gtk_grid_set_column_spacing(GTK_GRID(grid),4);gtk_grid_set_row_spacing(GTK_GRID(grid),4);
     gtk_widget_set_size_request(grid,220,-1);
-    for (int i=0;i<6;++i) {
+    for (int i=0;i<PRESET_COUNT;++i) {
         a->preset_buttons[i]=gtk_button_new_with_label("");
         GtkWidget *label=gtk_bin_get_child(GTK_BIN(a->preset_buttons[i]));
         gtk_label_set_ellipsize(GTK_LABEL(label),PANGO_ELLIPSIZE_END);
@@ -6192,7 +6194,7 @@ static const char *network_control(gpointer data,const char *command,const char 
         return "200 OK";
     }
     if (g_str_has_prefix(command,"preset/")) {
-        if (!control_number(value,6,&number)) return control_failure(error,bad,"Expected preset slot 1..6");
+        if (!control_number(value,PRESET_COUNT,&number)) return control_failure(error,bad,"Expected preset slot 1.." G_STRINGIFY(PRESET_COUNT));
         char group[16];g_snprintf(group,sizeof(group),"preset%u",(unsigned)number);
         if (!g_key_file_has_key(a->presets,group,"settings",NULL))
             return control_failure(error,"404 Not Found","Empty preset");
@@ -6414,7 +6416,7 @@ static char *network_status(gpointer data) {
     json_object_object_add(root,"selected_program",playing ? json_object_new_int(playing) : NULL);
     NUM(root,"active_preset",a->active_preset);
     json_object *slots=json_object_new_array();
-    for (int i=1;a->presets && i<=6;++i) {
+    for (int i=1;a->presets && i<=PRESET_COUNT;++i) {
         char group[16];g_snprintf(group,sizeof(group),"preset%d",i);
         json_object *slot=json_object_new_object();
         char *label=preset_label(a,i);

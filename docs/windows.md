@@ -36,7 +36,7 @@ nodig om het programma te gebruiken. Gebruik Windows 10/11, 64-bit.
    volledige map verplaatsen. Een nieuwe ZIP bevat alleen de voorbeeldconfiguratie;
    uitpakken over een bestaande installatie overschrijft je eigen INI niet.
 
-Onder het constellatiescherm staan zes presetknoppen (drie kolommen, twee rijen).
+Onder het constellatiescherm staan tien presetknoppen (twee kolommen, vijf rijen).
 Via **Presets** stel je per knop een label in en sla je met **Save current settings**
 de actuele ontvangerinstellingen op. Dit overschrijft de gewone INI niet.
 Sluiten van het venster bewaart de labels. De presets staan in

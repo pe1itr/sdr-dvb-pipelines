@@ -2840,7 +2840,7 @@ static gboolean exercise_presets(gpointer data) {
         g_assert_cmpint(a->active_preset,==,0);
         g_assert_true(hdmi_monitor(a,1));
         g_assert_true(gtk_style_context_has_class(gtk_widget_get_style_context(a->hdmi_power),"receiver-off"));
-        for (int i=0;i<6;++i) {
+        for (int i=0;i<10;++i) {
             g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_preset_rows[i])),==,
                 gtk_button_get_label(GTK_BUTTON(a->preset_buttons[i])));
             g_assert_false(gtk_widget_get_state_flags(a->hdmi_preset_rows[i]) & GTK_STATE_FLAG_SELECTED);
@@ -2867,16 +2867,16 @@ static gboolean exercise_presets(gpointer data) {
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->source_box),2);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->standard_box),4);
         gtk_combo_box_set_active(GTK_COMBO_BOX(a->dab_channel_box),0);
-        gtk_entry_set_text(GTK_ENTRY(a->preset_labels[2]),"DAB 5A");
-        gtk_button_clicked(GTK_BUTTON(gtk_grid_get_child_at(GTK_GRID(grid),2,3)));
+        gtk_entry_set_text(GTK_ENTRY(a->preset_labels[9]),"DAB 5A");
+        gtk_button_clicked(GTK_BUTTON(gtk_grid_get_child_at(GTK_GRID(grid),2,10)));
         gtk_dialog_response(GTK_DIALOG(a->presets_dialog),GTK_RESPONSE_CLOSE);
-        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[2]));
+        gtk_button_clicked(GTK_BUTTON(a->preset_buttons[9]));
         g_assert_cmpint(a->source,==,2);g_assert_cmpint(a->standard,==,4);
         g_assert_cmpint(gtk_combo_box_get_active(GTK_COMBO_BOX(a->dab_channel_box)),==,0);
-        g_assert_cmpint(a->active_preset,==,3);
-        for (int i=0;i<6;++i)
-            g_assert_cmpint(!!(gtk_widget_get_state_flags(a->hdmi_preset_rows[i]) & GTK_STATE_FLAG_SELECTED),==,i==2);
-        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_preset_rows[2])),==,"DAB 5A");
+        g_assert_cmpint(a->active_preset,==,10);
+        for (int i=0;i<10;++i)
+            g_assert_cmpint(!!(gtk_widget_get_state_flags(a->hdmi_preset_rows[i]) & GTK_STATE_FLAG_SELECTED),==,i==9);
+        g_assert_cmpstr(gtk_label_get_text(GTK_LABEL(a->hdmi_preset_rows[9])),==,"DAB 5A");
         char *disk=NULL;g_assert_true(g_file_get_contents(a->config_path,&disk,NULL,NULL));
         g_assert_cmpstr(disk,==,original_ini);g_free(disk);
         gtk_button_clicked(GTK_BUTTON(a->preset_buttons[0]));
@@ -2920,6 +2920,7 @@ static gboolean exercise_presets(gpointer data) {
     char *label=g_key_file_get_string(stored,"preset1","label",NULL);
     g_assert_cmpstr(label,==,"PI6EHV");g_free(label);
     g_assert_true(g_key_file_has_key(stored,"preset2","settings",NULL));
+    g_assert_true(g_key_file_has_key(stored,"preset10","settings",NULL));
     g_key_file_unref(stored);g_free(path);
     char *disk=NULL;g_assert_true(g_file_get_contents(a->config_path,&disk,NULL,NULL));
     g_assert_cmpstr(disk,==,original_ini);g_free(disk);g_free(original_ini);g_free(preset_one);

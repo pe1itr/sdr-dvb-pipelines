@@ -712,7 +712,7 @@ Send an HTTP `PUT` with an empty body to one of these paths.
 | `/control/teletext/on`, `/control/teletext/off` | Show or hide the current page on the active HDMI output, or in the desktop Teletext window when HDMI is off. HDMI keeps playing audio. Closing it preserves the page selection. Read `teletext_visible` in `/status` for the current window state. |
 | `/control/teletext/color/red` | Follow the current page’s red, green, yellow or blue Fastext link. Pages without color links can use the first four distinct page references in a dotted index as local shortcuts. Read `teletext_color_links` in `/status` for available colors and page numbers. |
 | `/control/teletext/101` | Open page 100–899 on HDMI or in the desktop Teletext window during DVB reception. Poll `/status` for `teletext_page` and `teletext_page_received`. |
-| `/control/preset/2` | Recall saved slot 1–6. An active receiver stops before loading the preset. Send start to resume. |
+| `/control/preset/2` | Recall saved slot 1–10. An active receiver stops before loading the preset. Send start to resume. |
 | `/control/mode/dvb-t` | Select DVB-T, DVB-T2, DVB-S, DVB-S2 or DAB while stopped. Mode names are case-insensitive. |
 | `/control/rate/250000` | Set DVB-T bandwidth in Hz or DVB-S/S2 symbol rate in symbols/s while stopped. |
 | `/control/gpu-ldpc/on`, `/control/gpu-ldpc/off` | Set the GPU LDPC preference for the current DVB-S2 or DVB-T2 mode while stopped. It applies at the next start. DVB-S2 GPU requires the Linux embedded soft-decision decoder. Read the preference from `configured_gpu_ldpc` in `/status`. |

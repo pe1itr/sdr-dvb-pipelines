@@ -119,7 +119,7 @@ bediening, de builddatum, sneltoetsen, helpcommando’s en acknowledgements met
 projectlinks voor LeanDVB, LDPC, de acquisitiepatch van Ondřej OK1CDJ en
 OnAir (de basis van de DVB-T2-decoder). Het
 venster is scrollbaar zodat ook op kleinere schermen alle informatie bereikbaar is.
-Onder het constellatiescherm staan zes presetknoppen in drie kolommen en twee
+Onder het constellatiescherm staan tien presetknoppen in twee kolommen en vijf
 rijen. Open **Presets** om per knop een label in te stellen. **Save current
 settings** bewaart de actuele ontvangerinstellingen alleen in die preset;
 de gewone INI blijft ongewijzigd. Sluiten van het venster bewaart de labels.
