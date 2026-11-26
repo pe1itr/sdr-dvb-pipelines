@@ -102,7 +102,7 @@ void fmatv_service_create(FmatvService *service,GtkWidget *frame) {
         gtk_grid_attach(GTK_GRID(grid),lamp,i%3,i/3,1,1);
     }
     gtk_widget_set_tooltip_text(service->lamps[2],"Green after six PAL fields have entered the rolling stack");
-    gtk_widget_set_tooltip_text(service->lamps[6],"NICAM carrier detected at 6.552 MHz");
+    gtk_widget_set_tooltip_text(service->lamps[6],"Green on validated NICAM frame lock at 6.552 MHz");
     const char *names[]={"Video SNR","Line frequency","Raster frequency","Frame count"};
     for (unsigned i=0;i<G_N_ELEMENTS(names);++i) {
         GtkWidget *name=gtk_label_new(names[i]);

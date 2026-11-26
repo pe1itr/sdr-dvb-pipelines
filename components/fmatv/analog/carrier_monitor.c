@@ -2,7 +2,7 @@
 #include "../fmatv.h"
 #include "sound.h"
 #include <SDL.h>
-#include <math.h>
+#include "nicam.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,37 +18,19 @@ struct CarrierMonitor {
     int skip;
 };
 
-/* Monitor-only branch of atv-receiver-analog's nicam_process: compare
- * energy around 6.552 MHz with leakage from the neighbouring FM carrier. */
-static int nicam_carrier(const float *samples,size_t n,double rate,double fm_power) {
-    const double angle=2*3.141592653589793*6552000/rate;
-    const double cs=cos(angle),sn=sin(angle);
-    unsigned stride=(unsigned)floor(rate/3e6);
-    double intermediate=rate/stride;
-    float alpha=1-exp(-2*3.141592653589793*700000/rate);
-    float narrow=1-exp(-2*3.141592653589793*100000/intermediate);
-    double smooth=1-exp(-1/(intermediate*.030));
-    double c=1,s=0,power=0;
-    float re[4]={0},im[4]={0},dr[4]={0},di[4]={0};
-    unsigned phase=0;
-    for (size_t j=0;j<n;++j) {
-        float v=isfinite(samples[j]) ? samples[j] : 0;
-        float r=v*c,i=-v*s;
-        double next=c*cs-s*sn;
-        s=s*cs+c*sn; c=next;
-        for (unsigned k=0;k<4;++k) {
-            re[k]+=alpha*(r-re[k]); im[k]+=alpha*(i-im[k]);
-            r=re[k]; i=im[k];
-        }
-        if (++phase<stride) continue;
-        phase=0;
-        for (unsigned k=0;k<4;++k) {
-            dr[k]+=narrow*(r-dr[k]); di[k]+=narrow*(i-di[k]);
-            r=dr[k]; i=di[k];
-        }
-        power+=smooth*(r*r+i*i-power);
+/* Each scan covers a discontinuous sample window. Acquire fresh frame
+ * lock and drain the entire window before publishing the result. */
+static int nicam_frame_lock(const float *samples,size_t n,double rate) {
+    Nicam *decoder=nicam_create(rate,NULL,NULL);
+    if (!decoder) return 0;
+    int locked=0;
+    if (nicam_select(decoder,1)==0) {
+        nicam_process(decoder,samples,n,0);
+        nicam_finish(decoder);
+        locked=nicam_locked(decoder);
     }
-    return power>fmax(1e-6,.02*fm_power);
+    nicam_destroy(decoder);
+    return locked;
 }
 
 static int scan(void *opaque) {
@@ -59,7 +41,7 @@ static int scan(void *opaque) {
         sound_reset(m->mono);
         sound_monitor(m->mono,m->samples,m->window,0);
         unsigned flags=sound_locked(m->mono) ? FMATV_MONO : 0;
-        if (nicam_carrier(m->samples,m->window,m->rate,sound_power(m->mono))) flags|=FMATV_NICAM;
+        if (nicam_frame_lock(m->samples,m->window,m->rate)) flags|=FMATV_NICAM;
         if (m->stereo) {
             stereo_sound_reset(m->stereo,0,0);
             stereo_sound_monitor(m->stereo,m->samples,m->window,0);

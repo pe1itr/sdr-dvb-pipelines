@@ -51,7 +51,7 @@ def main():
     gui_sources = [f"src/{name}.{'cc' if name in cpp else 'c'}" for name in gui]
     gui_sources += ["third_party/leansdr/src/apps/leandvb.cc"]
     moon_sources = ["components/moon/moon.c", "third_party/astronomy/astronomy.c"]
-    gui_sources += ["src/fmatv_view.c", "components/fmatv/worker.c", *map(str, Path("components/fmatv/analog").glob("*.c"))]
+    gui_sources += ["src/fmatv_view.c", "components/fmatv/worker.c", "components/fmatv/analog/nicam_core/core.c", *map(str, Path("components/fmatv/analog").glob("*.c"))]
     gui_sources += moon_sources
     gui_sources += [str(p) for p in Path("components/bonding/src").glob("*.c")]
     gui_sources += [str(p) for p in Path("components/dvbt/src").glob("*.c") if p.name != "main.c"]
